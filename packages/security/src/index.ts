@@ -41,7 +41,7 @@ export class ClamAvScanner implements MalwareScanner {
         socket.write(Buffer.from("zINSTREAM\0"));
         input.on("data", (chunk: Buffer) => {
           const size = Buffer.allocUnsafe(4); size.writeUInt32BE(chunk.length, 0);
-          if (!socket.write(size) || !socket.write(chunk)) input.pause();
+          if (!socket.write(size) || !socket.write(buffer)) input.pause();
         });
         input.on("end", () => { socket.write(Buffer.alloc(4)); });
         input.on("error", (error) => finish(error));
