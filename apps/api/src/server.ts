@@ -33,6 +33,7 @@ export function buildServer(dependencies: ApiDependencies): FastifyInstance {
   const server = Fastify({ logger: true, bodyLimit: 1_000_000 });
   const clock = dependencies.clock ?? { now: () => new Date().toISOString() };
   const ids = dependencies.ids ?? { next: () => randomUUID() };
+  const metrics = dependencies.metrics ?? new MetricsRegistry();
   const projectService = new ProjectService(dependencies.projects, dependencies.assets, dependencies.revisions, ids, clock);
 
   server.addHook("onRequest", async (request) => {
