@@ -70,6 +70,7 @@ const renderQueue = new Queue("videocraft-render", { connection: redisConnection
 const transcriber = new FasterWhisperWorker({
   workerPath: required("WHISPER_WORKER_PATH"),
   mediaRoot,
+  storage,
   ...(process.env.WHISPER_PYTHON ? { pythonCommand: process.env.WHISPER_PYTHON } : {}),
   ...(process.env.WHISPER_LANGUAGE ? { language: process.env.WHISPER_LANGUAGE } : {}),
 });
