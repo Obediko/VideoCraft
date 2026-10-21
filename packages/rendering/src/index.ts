@@ -33,7 +33,10 @@ export class FfmpegCommandPlanner {
     }
 
     args.push(
-      "-vf", "scale=" + even(settings.width) + ":" + even(settings.height) + ":force_original_aspect_ratio=decrease",
+      "-vf", [
+        "scale=" + even(settings.width) + ":" + even(settings.height) + ":force_original_aspect_ratio=decrease",
+        ...captionFilters(revision.timeline.tracks),
+      ].join(","),
       "-r", String(settings.frameRate),
       "-c:v", settings.videoCodec,
       "-c:a", settings.audioCodec,
@@ -71,4 +74,34 @@ function seconds(microseconds: number): string {
 function even(value: number): number {
   if (!Number.isInteger(value) || value < 2 || value > 16_384) throw new Error("Video dimensions are invalid");
   return value % 2 === 0 ? value : value - 1;
+}
+
+
+function captionFilters(tracks: ProjectRevision["timeline"]["tracks"]): string[] {
+  const filters: string[] = [];
+  for (const track of tracks) {
+    if (track.kind !== "caption") continue;
+    for (const clip of track.clips) {
+      const value = clip.transform?.text;
+      if (typeof value !== "string" || !value.trim()) continue;
+      const start = seconds(clip.timelineStartUs);
+      const end = seconds(clip.timelineEndUs);
+      if (Number(clip.timelineEndUs) <= Number(clip.timelineStartUs)) continue;
+      filters.push(
+        "drawtext=fontcolor=white:fontsize=32:box=1:boxcolor=black@0.60:boxborderw=12:" +
+        "x=(w-text_w)/2:y=h-(text_h*2):enable='between(t," + start + "," + end + ")':" +
+        "expansion=none:text='" + escapeDrawtext(value.slice(0, 1_000)) + "'"
+      );
+    }
+  }
+  return filters;
+}
+
+function escapeDrawtext(value: string): string {
+  return value
+    .replace(/[\\\r\n\t]/g, " ")
+    .replace(/\\/g, "\\\\")
+    .replace(/'/g, "\\'")
+    .replace(/:/g, "\\:")
+    .replace(/,/g, "\\,");
 }
