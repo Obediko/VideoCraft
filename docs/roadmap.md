@@ -13,7 +13,7 @@
 ## Persistent API flow - in progress
 
 - [x] Add database-backed repositories and initial migrations.
-- [x] Add authenticated API contracts for project, asset, revision, transcript, and render commands.
+- [x] Add authenticated API contracts for project, asset, revision, transcript, render, and proposal commands.
 - [ ] Add end-to-end tests against PostgreSQL and Redis.
 - [x] Add a secure local object-storage boundary.
 - [ ] Add production object storage and signed download URLs.
@@ -21,8 +21,9 @@
 ## Editing intelligence - in progress
 
 - [x] Add faster-whisper worker protocol and normalized transcript persistence.
+- [x] Add non-destructive proposal preview with evidence and strategy version.
+- [x] Add proposal persistence and accept/reject decisions as revision events.
 - [ ] Add intent and audience extraction with structured outputs and evidence.
-- [ ] Add proposal preview and explicit accept, reject, and edit commands.
 - [ ] Add fixtures and offline strategy evaluation.
 
 ## Media pipeline - in progress
