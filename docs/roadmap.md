@@ -13,6 +13,7 @@
 ## Persistent API flow - in progress
 
 - [x] Add database-backed repositories and initial migrations.
+- [x] Add a transactional migration runner with an applied-version ledger.
 - [x] Add authenticated API contracts for project, asset, revision, transcript, render, and proposal commands.
 - [x] Add CI integration tests against PostgreSQL and Redis.
 - [x] Add a secure local object-storage boundary.
