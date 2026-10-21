@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import rateLimit from "@fastify/rate-limit";
 import { Queue } from "bullmq";
-import { createPool, PostgresAssetRepository, PostgresProjectRepository, PostgresProposalStore, PostgresRevisionRepository, PostgresTranscriptStore, PostgresRenderJobRepository, PostgresFeedbackRepository, type Database } from "@videocraft/persistence";
+import { createPool, PostgresAssetRepository, PostgresProjectRepository, PostgresProposalStore, PostgresRevisionRepository, PostgresTranscriptStore, PostgresRenderJobRepository, PostgresFeedbackRepository, PostgresAuditRepository, type Database } from "@videocraft/persistence";
 import { BullMqRenderQueue } from "@videocraft/jobs";
 import { ProjectService } from "@videocraft/application";
 import { FasterWhisperWorker } from "@videocraft/transcription";
@@ -62,6 +62,7 @@ const revisions = new PostgresRevisionRepository(db);
 const renderJobs = new PostgresRenderJobRepository(db);
 const timelineService = new ProjectService(projects, assets, revisions, { next: () => randomUUID() }, { now: () => new Date().toISOString() });
 const feedback = new PostgresFeedbackRepository(db);
+const audit = new PostgresAuditRepository(db);
 const intentAnalyzer = process.env.INTENT_PROVIDER_API_KEY
   ? new OpenAiCompatibleIntentAnalyzer({ endpoint: process.env.INTENT_PROVIDER_URL ?? "https://api.openai.com/v1", apiKey: process.env.INTENT_PROVIDER_API_KEY, model: process.env.INTENT_PROVIDER_MODEL ?? "gpt-4o-mini" })
   : new RuleBasedIntentAnalyzer();
