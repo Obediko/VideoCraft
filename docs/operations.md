@@ -40,6 +40,6 @@ The API exposes a Prometheus-compatible `/metrics` endpoint with bounded request
 - Add connection pool limits, timeouts, health probes, distributed tracing, and alerting before public exposure.
 - Restrict outbound provider access from workers and sandbox media processing.
 - Configure retention, deletion, backup verification, and malware signature update monitoring for source assets and derived artifacts.
-- Add S3 integration tests against an emulator or staging bucket before production cutover.
+- Run the MinIO-backed S3-compatible provider contract test in CI; add staging-bucket coverage before production cutover.
 
 The current branch contains a deployable vertical slice, but the operational controls above remain explicit gates for broad public exposure.
