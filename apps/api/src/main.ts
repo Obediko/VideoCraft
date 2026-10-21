@@ -3,7 +3,7 @@ import rateLimit from "@fastify/rate-limit";
 import { Queue } from "bullmq";
 import { Redis } from "ioredis";
 import type { FastifyRequest } from "fastify";
-import { createPool, PostgresAssetRepository, PostgresProjectMemberRepository, PostgresProjectRepository, PostgresProposalStore, PostgresSceneRepository, PostgresRevisionRepository, PostgresTranscriptStore, PostgresRenderJobRepository, PostgresFeedbackRepository, PostgresAuditRepository, type Database } from "@videocraft/persistence";
+import { createDatabase, createPool, PostgresAssetRepository, PostgresProjectMemberRepository, PostgresProjectRepository, PostgresProposalStore, PostgresSceneRepository, PostgresRevisionRepository, PostgresTranscriptStore, PostgresRenderJobRepository, PostgresFeedbackRepository, PostgresAuditRepository, type Database } from "@videocraft/persistence";
 import { BullMqRenderQueue } from "@videocraft/jobs";
 import { ProjectService } from "@videocraft/application";
 import { FasterWhisperWorker } from "@videocraft/transcription";
@@ -72,7 +72,7 @@ const pool = createPool({
   connectionTimeoutMillis: boundedInteger("DB_CONNECTION_TIMEOUT_MS", 5_000, 100, 60_000),
   idleTimeoutMillis: boundedInteger("DB_IDLE_TIMEOUT_MS", 30_000, 1_000, 300_000),
 });
-const db = pool as unknown as Database;
+const db: Database = createDatabase(pool);
 const projects = new PostgresProjectRepository(db);
 const assets = new PostgresAssetRepository(db);
 const members = new PostgresProjectMemberRepository(db);
