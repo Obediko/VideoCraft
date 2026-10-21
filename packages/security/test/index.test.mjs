@@ -46,3 +46,24 @@ test("AWS secrets-manager adapter rejects non-object secret payloads", async () 
   });
   await assert.rejects(() => provider.load(), /only string values/);
 });
+
+
+test("Redis provider quota is atomic and reports exhaustion", async () => {
+  let current = 0;
+  const calls = [];
+  const quota = new (await import("../dist/index.js")).RedisProviderQuota({
+    async eval(script, numberOfKeys, ...args) {
+      calls.push({ script, numberOfKeys, args });
+      current += 1;
+      return current;
+    }
+  });
+  const first = await quota.consume("intent:user-1", 2, 60);
+  const second = await quota.consume("intent:user-1", 2, 60);
+  const third = await quota.consume("intent:user-1", 2, 60);
+  assert.equal(first.allowed, true);
+  assert.equal(second.remaining, 0);
+  assert.equal(third.allowed, false);
+  assert.equal(calls[0].numberOfKeys, 1);
+  assert.match(calls[0].args[0], /intent%3Auser-1/);
+});
