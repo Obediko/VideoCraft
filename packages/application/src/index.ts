@@ -5,6 +5,11 @@ export interface Clock { now(): string; }
 export interface IdFactory { next(): UUID; }
 export interface ProjectRepository { get(id: UUID): Promise<Project | undefined>; listForOwner(ownerId: UUID): Promise<Project[]>; save(project: Project): Promise<void>; }
 export interface AssetRepository { listForProject(projectId: UUID): Promise<Asset[]>; listStorageKeys(): Promise<string[]>; save(asset: Asset): Promise<void>; }
+export interface SceneRecord { id: string; assetId: UUID; startUs: number; endUs: number; createdAt: string; }
+export interface SceneRepository {
+  listForAsset(assetId: UUID): Promise<SceneRecord[]>;
+  replaceForAsset(assetId: UUID, scenes: SceneRecord[]): Promise<void>;
+}
 export type ProjectMemberRole = "editor" | "viewer";
 export interface ProjectMember { projectId: UUID; userId: UUID; role: ProjectMemberRole; createdAt: string; }
 export interface ProjectMemberRepository {
@@ -119,4 +124,20 @@ export class InMemoryProjectMemberRepository implements ProjectMemberRepository 
   }
   async upsert(member: ProjectMember) { this.values.set(member.projectId + ":" + member.userId, member); }
   async remove(projectId: UUID, userId: UUID) { this.values.delete(projectId + ":" + userId); }
+}
+
+
+export class InMemorySceneRepository implements SceneRepository {
+  private readonly values = new Map<string, SceneRecord>();
+  async listForAsset(assetId: UUID) {
+    return [...this.values.values()].filter((scene) => scene.assetId === assetId)
+      .sort((a, b) => a.startUs - b.startUs || a.id.localeCompare(b.id));
+  }
+  async replaceForAsset(assetId: UUID, scenes: SceneRecord[]) {
+    for (const key of [...this.values.keys()]) if (key.startsWith(assetId + ":")) this.values.delete(key);
+    for (const scene of scenes) {
+      if (scene.assetId !== assetId || scene.endUs <= scene.startUs) throw new Error("Invalid scene record");
+      this.values.set(assetId + ":" + scene.id, scene);
+    }
+  }
 }
