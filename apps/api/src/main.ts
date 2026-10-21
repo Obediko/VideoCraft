@@ -91,6 +91,8 @@ const server = buildServer({
   authenticate: authenticator,
   authorize: authorizer,
   audit,
+  metrics,
+  readiness: [{ name: "database", check: async () => { await db.query("SELECT 1"); return true; } }],
 });
 server.register(rateLimit, { max: 120, timeWindow: "1 minute", skipOnError: true, keyGenerator: rateLimitKey });
 registerTimelineRoutes(server, { projects, revisions, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, saveRevision: (input) => timelineService.saveRevision(input) });
