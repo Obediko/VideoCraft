@@ -24,7 +24,7 @@ Set CLAMAV_HOST and optionally CLAMAV_PORT to enable the ClamAV INSTREAM adapter
 
 ## Retention and deletion
 
-The `@videocraft/retention` package provides bounded cleanup over providers that support object listing. Cleanup requires an explicit cutoff, caps each run at 10,000 deletions, and accepts protected object keys; it never assumes that every old object is safe to remove. Production scheduling must obtain protected keys from durable project/render state, run with a least-privilege storage identity, and record a deletion audit before enabling destructive cleanup.
+The `@videocraft/retention` package provides bounded cleanup over providers that support object listing. Cleanup requires an explicit cutoff, caps each run at 10,000 deletions, and accepts protected object keys; it never assumes that every old object is safe to remove. The retention worker reads protected asset and render-output keys from PostgreSQL, requires an explicit RETENTION_CUTOFF, and defaults to RETENTION_DRY_RUN=true. Set RETENTION_DRY_RUN=false only in a reviewed scheduled job; RETENTION_MAX_DELETES bounds each run and RETENTION_PREFIX scopes the object listing. Production scheduling must use a least-privilege storage identity and record a deletion audit before enabling destructive cleanup.
 
 ## Observability
 
