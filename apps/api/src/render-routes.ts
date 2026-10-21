@@ -62,4 +62,7 @@ function verify(value: string, signature: string, secret: string): boolean {
   const expected = Buffer.from(sign(value, secret)); const actual = Buffer.from(signature);
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
-function hasProjectOutput(job: { projectId: string; output?: { storageKey: string } }, projectId: string): boolean {\n  return job.projectId === projectId && Boolean(job.output?.storageKey.startsWith("projects/" + projectId + "/renders/"));\n}\nfunction error(reply: FastifyReply, status: number, code: string, message: string) { return reply.code(status).send({ error: { code, message } }); }
+function hasProjectOutput(job: { projectId: string; output?: { storageKey: string } }, projectId: string): boolean {
+  return job.projectId === projectId && Boolean(job.output?.storageKey.startsWith("projects/" + projectId + "/renders/"));
+}
+function error(reply: FastifyReply, status: number, code: string, message: string) { return reply.code(status).send({ error: { code, message } }); }
