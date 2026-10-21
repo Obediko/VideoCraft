@@ -25,6 +25,10 @@ export class PostgresProjectRepository implements ProjectRepository {
     const row = result.rows[0];
     return row ? mapProject(row) : undefined;
   }
+  async listForOwner(ownerId: UUID): Promise<Project[]> {
+    const result = await this.db.query<ProjectRow>("SELECT id, owner_id, name, revision, created_at, updated_at FROM projects WHERE owner_id = $1 ORDER BY created_at, id", [ownerId]);
+    return result.rows.map(mapProject);
+  }
   async save(project: Project): Promise<void> {
     await this.db.query(
       "INSERT INTO projects (id, owner_id, name, revision, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6) " +
