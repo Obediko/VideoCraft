@@ -10,6 +10,37 @@ export class EnvironmentSecretProvider implements SecretProvider {
   }
 }
 
+
+export class AwsSecretsManagerProvider {
+  private readonly client: SecretsManagerClient;
+  constructor(private readonly secretId: string, region = process.env.AWS_REGION ?? "us-east-1") {
+    if (!secretId.trim()) throw new Error("AWS secret ID is required");
+    this.client = new SecretsManagerClient({ region });
+  }
+
+  async load(): Promise<Record<string, string>> {
+    const response = await this.client.send(new GetSecretValueCommand({ SecretId: this.secretId }));
+    if (!response.SecretString) throw new Error("AWS secret does not contain SecretString");
+    let parsed: unknown;
+    try { parsed = JSON.parse(response.SecretString); } catch { throw new Error("AWS secret must contain a JSON object"); }
+    if (!isSecretRecord(parsed)) throw new Error("AWS secret must contain only string values");
+    return parsed;
+  }
+}
+
+export async function loadSecretEnvironment(environment: Readonly<Record<string, string | undefined>>): Promise<Record<string, string | undefined>> {
+  const provider = environment.SECRET_PROVIDER ?? "env";
+  if (provider === "env") return { ...environment };
+  if (provider !== "aws-secrets-manager") throw new Error("Unsupported SECRET_PROVIDER: " + provider);
+  const values = await new AwsSecretsManagerProvider(environment.SECRET_MANAGER_SECRET_ID ?? "", environment.AWS_REGION).load();
+  return { ...environment, ...values };
+}
+
+function isSecretRecord(value: unknown): value is Record<string, string> {
+  return typeof value === "object" && value !== null && !Array.isArray(value) &&
+    Object.values(value).every((entry) => typeof entry === "string");
+}
+
 export function requireSecret(provider: SecretProvider, name: string, minimumLength = 1): string {
   const value = provider.get(name);
   if (!value) throw new Error(name + " is required");
@@ -18,6 +49,7 @@ export function requireSecret(provider: SecretProvider, name: string, minimumLen
 }
 
 import { createReadStream } from "node:fs";
+import { GetSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 import { connect } from "node:net";
 
 export interface MalwareScanResult {
