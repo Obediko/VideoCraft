@@ -8,6 +8,7 @@ test("feedback endpoint persists a bounded evaluation event", async () => {
   const app = Fastify();
   registerFeedbackRoutes(app, {
     feedback: { append: async (event) => { events.push(event); } },
+    revisions: { get: async () => ({ projectId: "project-1", revision: 1 }) },
     authenticate: async () => ({ userId: "user-1" }),
     authorize: { canAccess: async () => true },
     now: () => "2026-10-21T00:00:00.000Z",
