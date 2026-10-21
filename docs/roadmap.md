@@ -29,7 +29,7 @@
 - [x] Add deterministic intent and audience extraction with structured outputs and evidence.
 - [x] Add an explicit OpenAI-compatible structured-output intent provider adapter.
 - [ ] Add provider credentials management and offline evaluation fixtures before enabling it by default.
-- [ ] Add fixtures and offline strategy evaluation.
+- [x] Add fixtures and offline strategy evaluation metrics.
 
 ## Media pipeline - in progress
 
