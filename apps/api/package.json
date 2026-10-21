@@ -1,0 +1,25 @@
+{
+  "name": "@videocraft/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/server.js",
+  "types": "dist/server.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test test/*.test.mjs",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@videocraft/application": "0.1.0",
+    "@videocraft/domain": "0.1.0",
+    "@videocraft/persistence": "0.1.0",
+    "fastify": "^5.2.1",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}
