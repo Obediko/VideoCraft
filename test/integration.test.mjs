@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { Pool } from "pg";
 import Redis from "ioredis";
-import { PostgresFeedbackRepository, PostgresRenderJobRepository } from "@videocraft/persistence";
+import { PostgresAuditRepository, PostgresFeedbackRepository, PostgresRenderJobRepository } from "@videocraft/persistence";
 
 const databaseUrl = process.env.DATABASE_URL;
 const redisUrl = process.env.REDIS_URL;
@@ -21,6 +21,11 @@ test("PostgreSQL persistence and Redis connectivity are available", { skip }, as
   assert.equal((await renderJobs.get(job.id))?.projectId, projectId);
   const feedback = new PostgresFeedbackRepository(pool);
   await feedback.append({ id: "integration-feedback-" + Date.now(), projectId, revision: 1, type: "accepted", createdAt: new Date().toISOString() });
+  const audit = new PostgresAuditRepository(pool);
+  const auditId = "integration-audit-" + Date.now();
+  await audit.append({ id: auditId, actorId: "integration-user", projectId, action: "/v1/projects/:projectId", method: "GET", route: "/v1/projects/:projectId", statusCode: 200, requestId: auditId, createdAt: new Date().toISOString() });
+  const auditRow = await pool.query("SELECT actor_id, project_id, status_code FROM audit_events WHERE id = $1", [auditId]);
+  assert.deepEqual(auditRow.rows[0], { actor_id: "integration-user", project_id: projectId, status_code: 200 });
   const redis = new Redis(redisUrl);
   const pong = await redis.ping();
   assert.equal(pong, "PONG");
