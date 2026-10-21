@@ -91,7 +91,7 @@ registerIntentRoutes(server, { analyzer: intentAnalyzer, authenticate: (request)
 registerRenderRoutes(server, { jobs: renderJobs, storage, signingSecret: required("DOWNLOAD_SIGNING_SECRET"), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
 registerUploadRoutes(server, {
   assets, storage, authorize: authorizer, authenticate: (request) => authenticator.authenticate(request),
-  clock: () => new Date().toISOString(), scanner: malwareScanner,
+  clock: () => new Date().toISOString(), ...(malwareScanner ? { scanner: malwareScanner } : {}),
 });
 
 const port = Number(process.env.PORT ?? "8080");
