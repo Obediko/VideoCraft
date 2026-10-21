@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
+import { createWriteStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
@@ -58,6 +59,12 @@ export class S3ObjectStorage implements ObjectStorage {
       continuationToken = result.IsTruncated ? result.NextContinuationToken : undefined;
     } while (continuationToken);
     return objects;
+  }
+
+  async downloadToFile(key: string, destinationPath: string): Promise<void> {
+    const response = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
+    if (!response.Body || !("transformToWebStream" in response.Body)) throw new Error("S3 object did not return a stream");
+    await pipeline(response.Body.transformToWebStream(), createWriteStream(destinationPath, { flags: "wx" }));
   }
 
   async remove(key: string): Promise<void> {
