@@ -84,7 +84,7 @@ const worker = new Worker<RenderTask>("videocraft-render", async (job: Job<Rende
   await mkdir(runRoot, { recursive: true });
   try {
     const stagedAssets = await stageInputs(storage, outputRoot, job.data);
-    const outputKey = "renders/" + jobId + "." + outputExtension(job.data.settings.format);
+    const outputKey = "projects/" + job.data.project.id + "/renders/" + jobId + "." + outputExtension(job.data.settings.format);
     const outputPath = safeRunPath(outputRoot, jobId, "output." + outputExtension(job.data.settings.format));
     const assetResolver = { resolve: async (assetId: string) => {
       const path = stagedAssets[assetId];
