@@ -1,12 +1,14 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import type { IntentAnalysisPort, TranscriptSegment, UUID } from "@videocraft/domain";\nimport type { ProviderQuota } from "@videocraft/security";
+import type { IntentAnalysisPort, TranscriptSegment, UUID } from "@videocraft/domain";
+import type { ProviderQuota } from "@videocraft/security";
 
 export interface IntentRouteDependencies {
   analyzer: IntentAnalysisPort;
   authenticate(request: FastifyRequest): Promise<{ userId: UUID } | null>;
   authorize: { canAccess(principal: { userId: UUID }, projectId: UUID, role: "viewer" | "editor"): Promise<boolean> };
   assets?: { listForProject(projectId: UUID): Promise<Array<{ id: UUID }>> };
-  transcripts?: { listForAsset(assetId: UUID): Promise<TranscriptSegment[]> };\n  quota?: ProviderQuota;
+  transcripts?: { listForAsset(assetId: UUID): Promise<TranscriptSegment[]> };
+  quota?: ProviderQuota;
   providerRateLimitMax?: number;
 }
 export function registerIntentRoutes(server: FastifyInstance, dependencies: IntentRouteDependencies): void {
