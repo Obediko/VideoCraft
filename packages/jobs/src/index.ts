@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { AssetRepository } from "@videocraft/application";
 import type { Project, ProjectRevision, RenderJob, RenderSettings, RendererPort } from "@videocraft/domain";
 import type { Queue } from "bullmq";
 
@@ -8,15 +9,18 @@ export interface RenderTask {
   revision: ProjectRevision;
   settings: RenderSettings;
   idempotencyKey: string;
+  assetStorageKeys: Record<string, string>;
 }
-
 export interface RenderQueueLike {
   add(name: string, data: RenderTask, options: { jobId: string; removeOnComplete: number; removeOnFail: number }): Promise<{ id?: string | number }>;
   getJob(jobId: string): Promise<{ id?: string | number; getState(): Promise<string> } | undefined>;
 }
 
 export class BullMqRenderQueue implements RendererPort {
-  constructor(private readonly queue: RenderQueueLike | Queue<RenderTask>) {}
+  constructor(
+    private readonly queue: RenderQueueLike | Queue<RenderTask>,
+    private readonly assets?: AssetRepository,
+  ) {}
 
   async enqueue(input: {
     project: Project;
@@ -28,30 +32,20 @@ export class BullMqRenderQueue implements RendererPort {
     const existing = await this.queue.getJob(jobId);
     if (existing) {
       return {
-        id: String(existing.id ?? jobId),
-        projectId: input.project.id,
-        revision: input.revision.revision,
-        settings: input.settings,
-        idempotencyKey: input.idempotencyKey,
-        status: await mapState(existing.getState()),
+        id: String(existing.id ?? jobId), projectId: input.project.id, revision: input.revision.revision,
+        settings: input.settings, idempotencyKey: input.idempotencyKey, status: await mapState(existing.getState()),
       };
     }
-
+    const projectAssets = this.assets ? await this.assets.listForProject(input.project.id) : [];
+    const assetStorageKeys = Object.fromEntries(projectAssets.map((asset) => [asset.id, asset.storageKey]));
     await this.queue.add("render", {
-      jobId,
-      project: input.project,
-      revision: input.revision,
-      settings: input.settings,
-      idempotencyKey: input.idempotencyKey,
+      jobId, project: input.project, revision: input.revision, settings: input.settings,
+      idempotencyKey: input.idempotencyKey, assetStorageKeys,
     }, { jobId, removeOnComplete: 1000, removeOnFail: 5000 });
 
     return {
-      id: jobId,
-      projectId: input.project.id,
-      revision: input.revision.revision,
-      settings: input.settings,
-      idempotencyKey: input.idempotencyKey,
-      status: "queued",
+      id: jobId, projectId: input.project.id, revision: input.revision.revision,
+      settings: input.settings, idempotencyKey: input.idempotencyKey, status: "queued",
     };
   }
 }
