@@ -1,0 +1,35 @@
+import { readdir, readFile } from "node:fs/promises";
+import { basename } from "node:path";
+import { createPool } from "./index.js";
+
+function required(name: string): string {
+  const value = process.env[name];
+  if (!value?.trim()) throw new Error(name + " is required");
+  return value;
+}
+
+const pool = createPool(required("DATABASE_URL"));
+const client = await pool.connect();
+try {
+  await client.query("BEGIN");
+  await client.query("CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())");
+  const migrationDirectory = new URL("../migrations/", import.meta.url);
+  const files = (await readdir(migrationDirectory)).filter((file) => file.endsWith(".sql")).sort();
+  const applied = new Set((await client.query<{ version: string }>("SELECT version FROM schema_migrations")).rows.map((row) => row.version));
+  const appliedNow: string[] = [];
+  for (const file of files) {
+    const version = basename(file);
+    if (applied.has(version)) continue;
+    await client.query(await readFile(new URL(file, migrationDirectory), "utf8"));
+    await client.query("INSERT INTO schema_migrations (version) VALUES ($1)", [version]);
+    appliedNow.push(version);
+  }
+  await client.query("COMMIT");
+  console.log(JSON.stringify({ event: "database.migrations_applied", applied: appliedNow, available: files.length }));
+} catch (error) {
+  await client.query("ROLLBACK").catch(() => undefined);
+  throw error;
+} finally {
+  client.release();
+  await pool.end();
+}
