@@ -295,3 +295,13 @@ test("nested asset resources cannot cross project boundaries", async () => {
   assert.equal(transcriptCalls, 0);
   await server.close();
 });
+
+
+test("metrics endpoint requires its configured bearer token", async () => {
+  const server = buildServer(dependencies(async () => null, { metricsToken: "metrics-secret" }));
+  const denied = await server.inject({ method: "GET", url: "/metrics" });
+  assert.equal(denied.statusCode, 401);
+  const allowed = await server.inject({ method: "GET", url: "/metrics", headers: { authorization: "Bearer metrics-secret" } });
+  assert.equal(allowed.statusCode, 200);
+  await server.close();
+});
