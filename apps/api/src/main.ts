@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import rateLimit from "@fastify/rate-limit";
 import { Queue } from "bullmq";
+import Redis from "ioredis";
 import type { FastifyRequest } from "fastify";
 import { createPool, PostgresAssetRepository, PostgresProjectMemberRepository, PostgresProjectRepository, PostgresProposalStore, PostgresRevisionRepository, PostgresTranscriptStore, PostgresRenderJobRepository, PostgresFeedbackRepository, PostgresAuditRepository, type Database } from "@videocraft/persistence";
 import { BullMqRenderQueue } from "@videocraft/jobs";
@@ -83,7 +84,9 @@ const mediaRoot = required("MEDIA_ROOT");
 const storage = createStorage();
 const malwareScanner = createMalwareScanner();
 const metrics = new MetricsRegistry();
-const renderQueue = new Queue("videocraft-render", { connection: redisConnection(required("REDIS_URL")) });
+const redisOptions = redisConnection(required("REDIS_URL"));
+const renderQueue = new Queue("videocraft-render", { connection: redisOptions });
+const rateLimitRedis = new Redis(redisOptions);
 const transcriber = new FasterWhisperWorker({
   workerPath: required("WHISPER_WORKER_PATH"),
   mediaRoot,
@@ -121,10 +124,10 @@ const server = buildServer({
     { name: "redis", check: async () => { await renderQueue.getJobCounts(); return true; } },
   ],
 });
-server.register(rateLimit, { max: 120, timeWindow: "1 minute", skipOnError: true, keyGenerator: rateLimitKey });
+server.register(rateLimit, { max: 120, timeWindow: "1 minute", redis: rateLimitRedis, skipOnError: false, keyGenerator: rateLimitKey });
 registerTimelineRoutes(server, { projects, revisions, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, saveRevision: (input) => timelineService.saveRevision(input) });
 registerFeedbackRoutes(server, { feedback, revisions, proposals: new PostgresProposalStore(db), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, now: () => new Date().toISOString() });
-registerIntentRoutes(server, { analyzer: intentAnalyzer, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
+registerIntentRoutes(server, { analyzer: intentAnalyzer, providerRateLimitMax: boundedInteger("INTENT_PROVIDER_MAX_PER_MINUTE", 20, 1, 1_000), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
 registerRenderRoutes(server, { jobs: renderJobs, storage, signingSecret: requiredSecret("DOWNLOAD_SIGNING_SECRET"), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
 registerUploadRoutes(server, {
   assets, storage, authorize: authorizer, authenticate: (request) => authenticator.authenticate(request),
@@ -133,7 +136,7 @@ registerUploadRoutes(server, {
 
 const port = Number(process.env.PORT ?? "8080");
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("PORT must be a valid TCP port");
-const shutdown = async () => { await server.close(); await renderQueue.close(); await pool.end(); };
+const shutdown = async () => { await server.close(); await renderQueue.close(); await rateLimitRedis.quit(); await pool.end(); };
 process.once("SIGTERM", () => void shutdown());
 process.once("SIGINT", () => void shutdown());
 await server.listen({ host: "0.0.0.0", port });
