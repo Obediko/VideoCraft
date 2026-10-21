@@ -27,7 +27,7 @@ export function registerRenderRoutes(server: FastifyInstance, dependencies: Rend
     if (!params.projectId || !params.renderId) return error(reply, 400, "invalid_request", "projectId and renderId are required");
     if (!(await dependencies.authorize.canAccess(principal, params.projectId, "viewer"))) return error(reply, 403, "forbidden", "Project access denied");
     const job = await dependencies.jobs.get(params.renderId);
-    if (!job || job.projectId !== params.projectId || job.status !== "succeeded" || !job.output) return error(reply, 404, "not_found", "Completed render output not found");
+    if (!job || !hasProjectOutput(job, params.projectId) || job.status !== "succeeded") return error(reply, 404, "not_found", "Completed render output not found");
     if (dependencies.storage.createDownloadUrl) return { url: await dependencies.storage.createDownloadUrl(job.output.storageKey, 300), expires: Math.floor(Date.now() / 1000) + 300, providerNative: true };
     const expires = Math.floor(Date.now() / 1000) + 300;
     const signature = sign(params.projectId + ":" + params.renderId + ":" + job.output.storageKey + ":" + expires, dependencies.signingSecret);
@@ -37,7 +37,7 @@ export function registerRenderRoutes(server: FastifyInstance, dependencies: Rend
     const params = request.params as { projectId?: string; renderId?: string };
     if (!params.projectId || !params.renderId) return error(reply, 400, "invalid_request", "projectId and renderId are required");
     const job = await dependencies.jobs.get(params.renderId);
-    if (!job || job.projectId !== params.projectId || job.status !== "succeeded" || !job.output) return error(reply, 404, "not_found", "Completed render output not found");
+    if (!job || !hasProjectOutput(job, params.projectId) || job.status !== "succeeded") return error(reply, 404, "not_found", "Completed render output not found");
     const query = request.query as { expires?: string; signature?: string };
     const signed = typeof query.expires === "string" && typeof query.signature === "string" && Number.isSafeInteger(Number(query.expires)) && Number(query.expires) >= Math.floor(Date.now() / 1000) && verify(params.projectId + ":" + params.renderId + ":" + job.output.storageKey + ":" + query.expires, query.signature, dependencies.signingSecret);
     if (!signed) return error(reply, 401, "invalid_download_signature", "Download URL is missing or expired");
@@ -62,4 +62,4 @@ function verify(value: string, signature: string, secret: string): boolean {
   const expected = Buffer.from(sign(value, secret)); const actual = Buffer.from(signature);
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
-function error(reply: FastifyReply, status: number, code: string, message: string) { return reply.code(status).send({ error: { code, message } }); }
+function hasProjectOutput(job: { projectId: string; output?: { storageKey: string } }, projectId: string): boolean {\n  return job.projectId === projectId && Boolean(job.output?.storageKey.startsWith("projects/" + projectId + "/renders/"));\n}\nfunction error(reply: FastifyReply, status: number, code: string, message: string) { return reply.code(status).send({ error: { code, message } }); }
