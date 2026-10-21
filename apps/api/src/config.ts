@@ -3,6 +3,8 @@ export interface ProductionEnvironment {
   OBJECT_STORAGE_PROVIDER?: string;
   AUTH_ISSUER?: string;
   AUTH_AUDIENCE?: string;
+  AUTH_JWT_SECRET?: string;
+  AUTH_JWT_SECRET_PREVIOUS?: string;
   MALWARE_SCAN_REQUIRED?: string;
   CLAMAV_HOST?: string;
   OTEL_EXPORTER_OTLP_ENDPOINT?: string;
@@ -19,6 +21,9 @@ export function validateProductionConfiguration(env: ProductionEnvironment): voi
   if (env.OBJECT_STORAGE_PROVIDER !== "s3") missing.push("OBJECT_STORAGE_PROVIDER=s3");
   if (!env.AUTH_ISSUER) missing.push("AUTH_ISSUER");
   if (!env.AUTH_AUDIENCE) missing.push("AUTH_AUDIENCE");
+  if (env.AUTH_JWT_SECRET && env.AUTH_JWT_SECRET_PREVIOUS && env.AUTH_JWT_SECRET === env.AUTH_JWT_SECRET_PREVIOUS) {
+    missing.push("AUTH_JWT_SECRET_PREVIOUS must differ from AUTH_JWT_SECRET");
+  }
   if (env.MALWARE_SCAN_REQUIRED !== "true") missing.push("MALWARE_SCAN_REQUIRED=true");
   if (!env.CLAMAV_HOST) missing.push("CLAMAV_HOST");
   if (!env.OTEL_EXPORTER_OTLP_ENDPOINT) missing.push("OTEL_EXPORTER_OTLP_ENDPOINT");
