@@ -19,6 +19,7 @@ export interface ProposalStore {
   get(id: UUID): Promise<EditingProposal | undefined>;
   setStatus(id: UUID, status: EditingProposal["status"]): Promise<void>;
 }
+export interface ReadinessCheck { name: string; check(): Promise<boolean>; }
 export interface AuditWriter {
   append(event: { id: string; actorId?: string; projectId?: string; action: string; method: string; route: string; statusCode: number; requestId: string; metadata?: Record<string, string | number | boolean>; createdAt: string }): Promise<void>;
 }
@@ -26,7 +27,7 @@ export interface ApiDependencies {
   projects: ProjectRepository; assets: AssetRepository; revisions: RevisionRepository; storage?: ObjectStorage;
   authenticate: Authenticator; authorize: ProjectAuthorizer;
   renderer?: RendererPort; transcriber?: TranscriptionPort; transcripts?: TranscriptStore; strategies?: StrategyRegistry; proposals?: ProposalStore;
-  clock?: Clock; ids?: IdFactory; audit?: AuditWriter; metrics?: MetricsRegistry;
+  clock?: Clock; ids?: IdFactory; audit?: AuditWriter; metrics?: MetricsRegistry; readiness?: ReadinessCheck[];
 }
 
 export function buildServer(dependencies: ApiDependencies): FastifyInstance {
@@ -66,6 +67,17 @@ export function buildServer(dependencies: ApiDependencies): FastifyInstance {
   });
 
   server.get("/healthz", async () => ({ status: "ok" }));
+  server.get("/readyz", async (_request, reply) => {
+    for (const dependency of dependencies.readiness ?? []) {
+      try {
+        if (!(await dependency.check())) return reply.code(503).send({ status: "not_ready", dependency: dependency.name });
+      } catch (error) {
+        requestLog(reply, error, `readiness check failed: ${dependency.name}`);
+        return reply.code(503).send({ status: "not_ready", dependency: dependency.name });
+      }
+    }
+    return { status: "ok" };
+  });
   server.get("/metrics", async (_request, reply) => reply.type("text/plain; version=0.0.4").send(metrics.renderPrometheus()));
 
   server.post("/v1/projects", async (request, reply) => {
@@ -285,6 +297,10 @@ async function authenticate(authenticator: Authenticator, request: FastifyReques
 }
 function sendError(reply: FastifyReply, statusCode: number, code: string, message: string) { return reply.code(statusCode).send({ error: { code, message } }); }
 function messageOf(error: unknown): string { return error instanceof Error ? error.message : "Request failed"; }
+function requestLog(reply: FastifyReply, error: unknown, message: string): void {
+  reply.log.error({ error }, message);
+}
+
 function asRecord(value: unknown): Record<string, unknown> { return isJsonObject(value) ? value : {}; }
 function isJsonObject(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
 function isMetadata(value: unknown): value is Record<string, string | number | boolean> {
