@@ -1,6 +1,6 @@
 import { Pool, type PoolConfig } from "pg";
 import type { Asset, EditingProposal, Project, ProjectRevision, TranscriptSegment, UUID } from "@videocraft/domain";
-import type { AssetRepository, ProjectRepository, RevisionRepository } from "@videocraft/application";
+import type { AssetRepository, ProjectMember, ProjectMemberRepository, ProjectRepository, RevisionRepository } from "@videocraft/application";
 
 export interface Database {
   query<T = Record<string, unknown>>(text: string, values?: readonly unknown[]): Promise<{ rows: T[] }>;
@@ -35,6 +35,27 @@ export class PostgresProjectRepository implements ProjectRepository {
       "ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, revision = EXCLUDED.revision, updated_at = EXCLUDED.updated_at",
       [project.id, project.ownerId, project.name, project.revision, project.createdAt, project.updatedAt],
     );
+  }
+}
+
+export class PostgresProjectMemberRepository implements ProjectMemberRepository {
+  constructor(private readonly db: Database) {}
+  async listForProject(projectId: UUID): Promise<ProjectMember[]> {
+    const result = await this.db.query<ProjectMemberRow>(
+      "SELECT project_id, user_id, role, created_at FROM project_members WHERE project_id = $1 AND role <> 'owner' ORDER BY created_at, user_id",
+      [projectId],
+    );
+    return result.rows.map(mapProjectMember);
+  }
+  async upsert(member: ProjectMember): Promise<void> {
+    await this.db.query(
+      "INSERT INTO project_members (project_id, user_id, role, created_at) VALUES ($1, $2, $3, $4) " +
+      "ON CONFLICT (project_id, user_id) DO UPDATE SET role = EXCLUDED.role",
+      [member.projectId, member.userId, member.role, member.createdAt],
+    );
+  }
+  async remove(projectId: UUID, userId: UUID): Promise<void> {
+    await this.db.query("DELETE FROM project_members WHERE project_id = $1 AND user_id = $2 AND role <> 'owner'", [projectId, userId]);
   }
 }
 
@@ -124,12 +145,16 @@ export class PostgresProposalStore implements ProposalStore {
 
 type ProposalRow = { id: string; project_id: string; base_revision: number; strategy_id: string; strategy_version: string; rationale: string; confidence: number; evidence: EditingProposal["evidence"]; operations: EditingProposal["operations"]; status: EditingProposal["status"] };
 type ProjectRow = { id: string; owner_id: string; name: string; revision: number; created_at: string; updated_at: string };
+type ProjectMemberRow = { project_id: string; user_id: string; role: "editor" | "viewer"; created_at: string };
 type AssetRow = { id: string; project_id: string; kind: Asset["kind"]; storage_key: string; checksum_sha256: string; duration_us: string | null; metadata: Record<string, string | number | boolean>; created_at: string };
 type RevisionRow = { project_id: string; revision: number; timeline: ProjectRevision["timeline"]; tailoring: NonNullable<ProjectRevision["tailoring"]> | null; accepted_proposal_ids: UUID[]; created_at: string; created_by: string };
 type TranscriptRow = { id: string; asset_id: string; start_us: string; end_us: string; text: string; words: TranscriptSegment["words"]; provider: string; provider_version: string | null };
 
 function mapProject(row: ProjectRow): Project {
   return { id: row.id, ownerId: row.owner_id, name: row.name, revision: row.revision, createdAt: row.created_at, updatedAt: row.updated_at };
+}
+function mapProjectMember(row: ProjectMemberRow): ProjectMember {
+  return { projectId: row.project_id, userId: row.user_id, role: row.role, createdAt: row.created_at };
 }
 function mapAsset(row: AssetRow): Asset {
   return { id: row.id, projectId: row.project_id, kind: row.kind, storageKey: row.storage_key, checksumSha256: row.checksum_sha256, ...(row.duration_us === null ? {} : { durationUs: Number(row.duration_us) }), metadata: row.metadata, createdAt: row.created_at };
