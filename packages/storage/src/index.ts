@@ -13,6 +13,7 @@ export interface ObjectStorage {
   resolve(key: string): string;
   putFile(sourcePath: string, key: string): Promise<StoredObject>;
   remove(key: string): Promise<void>;
+  createDownloadUrl?(key: string, expiresInSeconds: number): Promise<string>;
 }
 
 export class LocalObjectStorage implements ObjectStorage {
