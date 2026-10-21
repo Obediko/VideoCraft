@@ -53,7 +53,7 @@ export class FasterWhisperWorker implements TranscriptionPort {
 }
 
 export function safeMediaPath(mediaRoot: string, storageKey: string): string {
-  if (!storageKey || isAbsolute(storageKey) || storageKey.includes("\0")) throw new Error("Invalid media storage key");
+  if (!storageKey || isAbsolute(storageKey) || /^[A-Za-z]:[\\/]/.test(storageKey) || storageKey.includes("\0")) throw new Error("Invalid media storage key");
   const root = resolve(mediaRoot);
   const candidate = resolve(root, storageKey);
   const rel = relative(root, candidate);
