@@ -4,8 +4,8 @@ import { ShortFormExplainerStrategy, StaticStrategyRegistry } from "../dist/inde
 
 test("registers a versioned strategy", () => {
   const registry = new StaticStrategyRegistry();
-  assert.deepEqual(registry.list(), [{ id: "short-form-explainer", version: "1.0.0" }]);
-  assert.equal(registry.get("short-form-explainer").version, "1.0.0");
+  assert.deepEqual(registry.list(), [{ id: "short-form-explainer", version: "1.1.0" }]);
+  assert.equal(registry.get("short-form-explainer").version, "1.1.0");
 });
 
 test("returns a safe no-op proposal when no source video exists", async () => {
