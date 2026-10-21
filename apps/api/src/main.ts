@@ -1,11 +1,12 @@
 import { Queue } from "bullmq";
-import { createPool, PostgresAssetRepository, PostgresProjectRepository, PostgresProposalStore, PostgresRevisionRepository, PostgresTranscriptStore, type Database } from "@videocraft/persistence";
+import { createPool, PostgresAssetRepository, PostgresProjectRepository, PostgresProposalStore, PostgresRevisionRepository, PostgresTranscriptStore, PostgresRenderJobRepository, type Database } from "@videocraft/persistence";
 import { BullMqRenderQueue } from "@videocraft/jobs";
 import { FasterWhisperWorker } from "@videocraft/transcription";
 import { LocalObjectStorage } from "@videocraft/storage";
 import { StaticStrategyRegistry } from "@videocraft/strategies";
 import { buildServer } from "./server.js";
 import { registerUploadRoutes } from "./uploads.js";
+import { registerRenderRoutes } from "./render-routes.js";
 import { JwtAuthenticator, PostgresProjectAuthorizer } from "./auth.js";
 
 function required(name: string): string {
@@ -38,16 +39,18 @@ const authenticator = new JwtAuthenticator(required("AUTH_JWT_SECRET"), {
   ...(process.env.AUTH_AUDIENCE ? { audience: process.env.AUTH_AUDIENCE } : {}),
 });
 const authorizer = new PostgresProjectAuthorizer(projects, db);
+const renderJobs = new PostgresRenderJobRepository(db);
 const server = buildServer({
   projects, assets, revisions: new PostgresRevisionRepository(db),
   transcripts: new PostgresTranscriptStore(db),
   proposals: new PostgresProposalStore(db),
   strategies: new StaticStrategyRegistry(),
   transcriber,
-  renderer: new BullMqRenderQueue(renderQueue, assets),
+  renderer: new BullMqRenderQueue(renderQueue, assets, renderJobs),
   authenticate: authenticator,
   authorize: authorizer,
 });
+registerRenderRoutes(server, { jobs: renderJobs, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
 registerUploadRoutes(server, {
   assets, storage, authorize: authorizer, authenticate: (request) => authenticator.authenticate(request),
   clock: () => new Date().toISOString(),
