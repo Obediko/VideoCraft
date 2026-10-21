@@ -27,3 +27,17 @@ test("OpenAI-compatible adapter validates structured provider output", async () 
   assert.equal(result.profile.audience, "Developers");
   assert.equal(result.provider, "openai-compatible");
 });
+
+
+test("OpenAI-compatible adapter fails with a bounded timeout", async () => {
+  const analyzer = new OpenAiCompatibleIntentAnalyzer({
+    endpoint: "https://provider.example/v1",
+    apiKey: "secret",
+    model: "intent-model",
+    timeoutMs: 1_000,
+    fetchImpl: async (_url, init) => await new Promise((_, reject) => {
+      init.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+    })
+  });
+  await assert.rejects(() => analyzer.analyze({ prompt: "Explain it" }), /timed out/);
+});
