@@ -85,7 +85,7 @@ export class PostgresTranscriptStore implements TranscriptStore {
 
 type ProjectRow = { id: string; owner_id: string; name: string; revision: number; created_at: string; updated_at: string };
 type AssetRow = { id: string; project_id: string; kind: Asset["kind"]; storage_key: string; checksum_sha256: string; duration_us: string | null; metadata: Record<string, string | number | boolean>; created_at: string };
-type RevisionRow = { project_id: string; revision: number; timeline: ProjectRevision["timeline"]; tailoring: ProjectRevision["tailoring"] | null; accepted_proposal_ids: UUID[]; created_at: string; created_by: string };
+type RevisionRow = { project_id: string; revision: number; timeline: ProjectRevision["timeline"]; tailoring: NonNullable<ProjectRevision["tailoring"]> | null; accepted_proposal_ids: UUID[]; created_at: string; created_by: string };
 type TranscriptRow = { id: string; asset_id: string; start_us: string; end_us: string; text: string; words: TranscriptSegment["words"]; provider: string; provider_version: string | null };
 
 function mapProject(row: ProjectRow): Project {
