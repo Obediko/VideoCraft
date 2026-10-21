@@ -18,6 +18,7 @@ import { registerIntentRoutes } from "./intent-routes.js";
 import { registerFeedbackRoutes } from "./feedback-routes.js";
 import { registerTimelineRoutes } from "./timeline-routes.js";
 import { JwtAuthenticator, PostgresProjectAuthorizer } from "./auth.js";
+import { validateProductionConfiguration } from "./config.js";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -58,6 +59,7 @@ function createMalwareScanner(): MalwareScanner | undefined {
   return host ? new ClamAvScanner({ host, port: Number(process.env.CLAMAV_PORT ?? "3310") }) : undefined;
 }
 
+validateProductionConfiguration(process.env);
 const pool = createPool(required("DATABASE_URL"));
 const db = pool as unknown as Database;
 const projects = new PostgresProjectRepository(db);
