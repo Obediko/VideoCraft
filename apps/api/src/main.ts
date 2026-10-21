@@ -1,4 +1,4 @@
-import { createPool, PostgresAssetRepository, PostgresProjectRepository, PostgresRevisionRepository } from "@videocraft/persistence";
+import { createPool, PostgresAssetRepository, PostgresProjectRepository, PostgresRevisionRepository, type Database } from "@videocraft/persistence";
 import { buildServer } from "./server.js";
 import { JwtAuthenticator, PostgresProjectAuthorizer } from "./auth.js";
 
@@ -11,17 +11,18 @@ function required(name: string): string {
 const databaseUrl = required("DATABASE_URL");
 const jwtSecret = required("AUTH_JWT_SECRET");
 const pool = createPool(databaseUrl);
-const projects = new PostgresProjectRepository(pool);
+const db = pool as unknown as Database;
+const projects = new PostgresProjectRepository(db);
 
 const server = buildServer({
   projects,
-  assets: new PostgresAssetRepository(pool),
-  revisions: new PostgresRevisionRepository(pool),
+  assets: new PostgresAssetRepository(db),
+  revisions: new PostgresRevisionRepository(db),
   authenticate: new JwtAuthenticator(jwtSecret, {
     ...(process.env.AUTH_ISSUER ? { issuer: process.env.AUTH_ISSUER } : {}),
     ...(process.env.AUTH_AUDIENCE ? { audience: process.env.AUTH_AUDIENCE } : {}),
   }),
-  authorize: new PostgresProjectAuthorizer(projects, pool),
+  authorize: new PostgresProjectAuthorizer(projects, db),
 });
 
 const port = Number(process.env.PORT ?? "8080");
