@@ -44,13 +44,17 @@ const worker = new Worker<RenderTask>("videocraft-render", async (job: Job<Rende
     const plan = await new FfmpegCommandPlanner(assetResolver).plan(job.data.revision, job.data.settings, outputPath);
     await job.updateProgress(25);
     await renderJobs.update({ ...running, progress: 25 });
-    await processRunner.run(plan);
+    const controller = new AbortController();
+    const cancellationWatcher = setInterval(() => { void renderJobs.get(jobId).then((latest) => { if (latest?.status === "cancelled") controller.abort(); }).catch(() => undefined); }, 1000);
+    try { await processRunner.run(plan, controller.signal); } finally { clearInterval(cancellationWatcher); }
     const output = await checksum(outputPath);
     const succeeded: RenderJob = { ...running, status: "succeeded", progress: 100, output: { storageKey: outputKey, ...output, mimeType: job.data.settings.format === "webm" ? "video/webm" : "video/mp4" } };
     await renderJobs.update(succeeded);
     await job.updateProgress(100);
     return succeeded;
   } catch (error) {
+    const latest = await renderJobs.get(jobId);
+    if (latest?.status === "cancelled") return latest;
     const failed: RenderJob = { ...running, status: "failed", progress: running.progress, errorMessage: error instanceof Error ? error.message : "Render failed" };
     await renderJobs.update(failed);
     throw error;
