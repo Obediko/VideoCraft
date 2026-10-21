@@ -129,3 +129,5 @@ function mapAsset(row: AssetRow): Asset {
 function mapRevision(row: RevisionRow): ProjectRevision {
   return { projectId: row.project_id, revision: row.revision, timeline: row.timeline, ...(row.tailoring === null ? {} : { tailoring: row.tailoring }), acceptedProposalIds: row.accepted_proposal_ids, createdAt: row.created_at, createdBy: row.created_by };
 }
+
+export { PostgresRenderJobRepository } from "./render-jobs.js";
