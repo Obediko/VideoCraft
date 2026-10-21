@@ -5,6 +5,7 @@ import { validateProposal } from "@videocraft/domain";
 import type { Asset, EditingProposal, ProjectRevision, RenderSettings, RendererPort, StrategyRegistry, TailoringProfile, Timeline, TimelineClip, TimelineOperation, TranscriptSegment, TranscriptionPort, UUID } from "@videocraft/domain";
 import { ProjectService, type Clock, type IdFactory, type ProjectRepository, type AssetRepository, type RevisionRepository } from "@videocraft/application";
 import type { ObjectStorage } from "@videocraft/storage";
+import { MetricsRegistry } from "@videocraft/observability";
 
 export interface Principal { userId: UUID; }
 export interface Authenticator { authenticate(request: FastifyRequest): Promise<Principal | null>; }
@@ -25,7 +26,7 @@ export interface ApiDependencies {
   projects: ProjectRepository; assets: AssetRepository; revisions: RevisionRepository; storage?: ObjectStorage;
   authenticate: Authenticator; authorize: ProjectAuthorizer;
   renderer?: RendererPort; transcriber?: TranscriptionPort; transcripts?: TranscriptStore; strategies?: StrategyRegistry; proposals?: ProposalStore;
-  clock?: Clock; ids?: IdFactory; audit?: AuditWriter;
+  clock?: Clock; ids?: IdFactory; audit?: AuditWriter; metrics?: MetricsRegistry;
 }
 
 export function buildServer(dependencies: ApiDependencies): FastifyInstance {
@@ -34,7 +35,15 @@ export function buildServer(dependencies: ApiDependencies): FastifyInstance {
   const ids = dependencies.ids ?? { next: () => randomUUID() };
   const projectService = new ProjectService(dependencies.projects, dependencies.assets, dependencies.revisions, ids, clock);
 
+  server.addHook("onRequest", async (request) => {
+    (request as FastifyRequest & { videocraftMetricsStartedAt?: bigint }).videocraftMetricsStartedAt = process.hrtime.bigint();
+  });
+
   server.addHook("onResponse", async (request, reply) => {
+    const route = request.routeOptions.url ?? request.url.split("?")[0] ?? "unknown";
+    metrics.increment("videocraft_http_requests_total", { method: request.method, route, status: String(reply.statusCode) });
+    const started = (request as FastifyRequest & { videocraftMetricsStartedAt?: bigint }).videocraftMetricsStartedAt;
+    if (started !== undefined) metrics.observe("videocraft_http_request_duration_ms", Number(process.hrtime.bigint() - started) / 1_000_000, { method: request.method, route });
     if (!dependencies.audit) return;
     const params = asRecord(request.params);
     const principal = (request as FastifyRequest & { videocraftPrincipal?: Principal }).videocraftPrincipal;
@@ -56,6 +65,7 @@ export function buildServer(dependencies: ApiDependencies): FastifyInstance {
   });
 
   server.get("/healthz", async () => ({ status: "ok" }));
+  server.get("/metrics", async (_request, reply) => reply.type("text/plain; version=0.0.4").send(metrics.renderPrometheus()));
 
   server.post("/v1/projects", async (request, reply) => {
     const principal = await authenticate(dependencies.authenticate, request, reply);
