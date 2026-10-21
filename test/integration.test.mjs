@@ -1,9 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import { Pool } from "pg";
 import Redis from "ioredis";
-import { PostgresAuditRepository, PostgresFeedbackRepository, PostgresRenderJobRepository } from "@videocraft/persistence";
+import { migrateDatabase, PostgresAuditRepository, PostgresFeedbackRepository, PostgresRenderJobRepository } from "@videocraft/persistence";
 
 const databaseUrl = process.env.DATABASE_URL;
 const redisUrl = process.env.REDIS_URL;
@@ -11,10 +10,7 @@ const skip = !databaseUrl || !redisUrl;
 
 test("PostgreSQL persistence and Redis connectivity are available", { skip }, async () => {
   const pool = new Pool({ connectionString: databaseUrl });
-  const migration = await readFile(new URL("../packages/persistence/migrations/001_initial.sql", import.meta.url), "utf8");
-  const idempotencyMigration = await readFile(new URL("../packages/persistence/migrations/002_scope_render_idempotency.sql", import.meta.url), "utf8");
-  await pool.query(migration);
-  await pool.query(idempotencyMigration);
+  await migrateDatabase(pool);
   const projectId = "integration-project-" + Date.now();
   await pool.query("INSERT INTO projects (id, owner_id, name, revision, created_at, updated_at) VALUES ($1,$2,$3,$4,now(),now())", [projectId, "integration-user", "Integration", 0]);
   const renderJobs = new PostgresRenderJobRepository(pool);
