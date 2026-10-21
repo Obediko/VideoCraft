@@ -38,7 +38,7 @@ The API exposes a Prometheus-compatible `/metrics` endpoint with bounded request
 
 - Use a managed PostgreSQL instance with encrypted connections and automated backups.
 - Store authentication, storage, scanner, and intent-provider secrets in a secret manager; never place them in repository files. The API consumes secrets through the `SecretProvider` boundary and currently ships an environment-backed adapter for platform-injected values. Set `INTENT_PROVIDER_MODE=rule-based` to keep intent analysis local, or set `INTENT_PROVIDER_MODE=external` with `INTENT_PROVIDER_URL` (HTTPS without embedded credentials), `INTENT_PROVIDER_MODEL`, and `INTENT_PROVIDER_API_KEY`; production startup rejects incomplete external-provider configuration. Set SECRET_PROVIDER=aws-secrets-manager and SECRET_MANAGER_SECRET_ID to load a JSON secret object from AWS Secrets Manager; the API merges it before validating production configuration and uses that merged environment for storage, scanner, worker, intent-provider, database, and signing configuration. The AWS SDK uses its standard credential chain.
-- Configure AUTH_ISSUER and AUTH_AUDIENCE in production; the API refuses unsafe production startup without them, S3-backed storage, and required malware scanning. For signing-key rotation, deploy the new `AUTH_JWT_SECRET` with the old key in `AUTH_JWT_SECRET_PREVIOUS`, wait at least the maximum token lifetime, then remove the previous key.
+- Configure AUTH_ISSUER and AUTH_AUDIENCE in production; the API refuses unsafe production startup without them, S3-backed storage, and required malware scanning. For signing-key rotation, deploy the new AUTH_JWT_SECRET with the old key in AUTH_JWT_SECRET_PREVIOUS, wait at least the maximum token lifetime, then remove the previous key. The API rejects a rotation where both values are identical.
 - Run database migrations as a controlled release step.
 - Run transcription and rendering as separate worker processes with least-privilege filesystem access.
 - Configure OTEL_EXPORTER_OTLP_ENDPOINT for OTLP traces, keep connection pool limits/timeouts and health probes enabled, and load `ops/prometheus/videocraft-alerts.yml` into the Prometheus deployment. Route critical alerts to the on-call channel and review warning thresholds with real traffic.
@@ -47,3 +47,17 @@ The API exposes a Prometheus-compatible `/metrics` endpoint with bounded request
 - Run the emulator-backed S3-compatible provider contract test in CI; add staging-bucket coverage before production cutover.
 
 The current branch contains a deployable vertical slice, but the operational controls above remain explicit gates for broad public exposure.
+
+
+## Cloud secret-manager rotation
+
+For AWS Secrets Manager, use a staged JSON secret version rather than editing environment variables in place:
+
+1. Generate a new random AUTH_JWT_SECRET of at least 32 characters and preserve the currently active key as AUTH_JWT_SECRET_PREVIOUS.
+2. Publish the JSON as a new secret version and move the AWSCURRENT stage to that version. Keep the old value available only through AUTH_JWT_SECRET_PREVIOUS; do not expose either key in logs or CI output.
+3. Restart or roll the API instances so each instance loads the same AWSCURRENT version. Verify /readyz, authentication with a token signed by the new key, and authentication with a still-valid token signed by the old key.
+4. Wait for the configured identity-provider token maximum lifetime plus clock-skew allowance. During this overlap window, both keys must remain present.
+5. Publish a follow-up version with AUTH_JWT_SECRET_PREVIOUS removed, move AWSCURRENT, and verify that an old token is rejected while a new token remains accepted.
+6. Record the secret-version IDs, timestamps, verification results, and operator in the change record. Never record secret values.
+
+If any verification fails, restore the prior secret version as AWSCURRENT; do not disable authentication or bypass the API startup checks.
