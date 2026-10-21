@@ -23,7 +23,7 @@ export class BullMqRenderQueue implements RendererPort {
     if (persisted) return persisted;
     const existing = await this.queue.getJob(jobId);
     if (existing) {
-      const job: RenderJob = { id: String(existing.id ?? jobId), projectId: input.project.id, revision: input.revision.revision, settings: input.settings, idempotencyKey: input.idempotencyKey, status: await mapState(existing.getState()), progress: 0 };
+      const job: RenderJob = { id: String(existing.id ?? jobId), projectId: input.project.id, revision: input.revision.revision, settings: input.settings, idempotencyKey: input.idempotencyKey, status: await mapState(await existing.getState()), progress: 0 };
       await this.renderJobs?.save(job);
       return job;
     }
