@@ -5,6 +5,13 @@ export interface Clock { now(): string; }
 export interface IdFactory { next(): UUID; }
 export interface ProjectRepository { get(id: UUID): Promise<Project | undefined>; listForOwner(ownerId: UUID): Promise<Project[]>; save(project: Project): Promise<void>; }
 export interface AssetRepository { listForProject(projectId: UUID): Promise<Asset[]>; listStorageKeys(): Promise<string[]>; save(asset: Asset): Promise<void>; }
+export type ProjectMemberRole = "editor" | "viewer";
+export interface ProjectMember { projectId: UUID; userId: UUID; role: ProjectMemberRole; createdAt: string; }
+export interface ProjectMemberRepository {
+  listForProject(projectId: UUID): Promise<ProjectMember[]>;
+  upsert(member: ProjectMember): Promise<void>;
+  remove(projectId: UUID, userId: UUID): Promise<void>;
+}
 export interface RevisionRepository { get(projectId: UUID, revision: number): Promise<ProjectRevision | undefined>; save(revision: ProjectRevision): Promise<void>; }
 
 export interface CreateProjectInput { ownerId: UUID; name: string; }
@@ -101,4 +108,15 @@ export class InMemoryRevisionRepository implements RevisionRepository {
   private readonly values = new Map<string, ProjectRevision>();
   async get(projectId: UUID, revision: number) { return this.values.get(projectId + ":" + revision); }
   async save(value: ProjectRevision) { this.values.set(value.projectId + ":" + value.revision, value); }
+}
+
+
+export class InMemoryProjectMemberRepository implements ProjectMemberRepository {
+  private readonly values = new Map<string, ProjectMember>();
+  async listForProject(projectId: UUID) {
+    return [...this.values.values()].filter((member) => member.projectId === projectId)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.userId.localeCompare(b.userId));
+  }
+  async upsert(member: ProjectMember) { this.values.set(member.projectId + ":" + member.userId, member); }
+  async remove(projectId: UUID, userId: UUID) { this.values.delete(projectId + ":" + userId); }
 }
