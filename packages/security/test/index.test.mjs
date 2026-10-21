@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { EnvironmentSecretProvider, parseClamAvResponse, requireSecret } from "../dist/index.js";
+import { EnvironmentSecretProvider, loadSecretEnvironment, parseClamAvResponse, requireSecret } from "../dist/index.js";
 
 test("recognizes a clean ClamAV stream", () => {
   assert.deepEqual(parseClamAvResponse("stream: OK\n"), { clean: true });
@@ -20,4 +20,14 @@ test("environment secrets are trimmed and required values fail closed", () => {
   assert.equal(requireSecret(provider, "TOKEN", 8), "secret-value");
   assert.throws(() => requireSecret(provider, "EMPTY"), /EMPTY is required/);
   assert.throws(() => requireSecret(provider, "TOKEN", 20), /at least 20/);
+});
+
+
+test("environment secret loading preserves injected values", async () => {
+  const loaded = await loadSecretEnvironment({ SECRET_PROVIDER: "env", AUTH_JWT_SECRET: "value" });
+  assert.equal(loaded.AUTH_JWT_SECRET, "value");
+});
+
+test("unknown secret providers fail closed", async () => {
+  await assert.rejects(() => loadSecretEnvironment({ SECRET_PROVIDER: "unknown" }), /Unsupported SECRET_PROVIDER/);
 });
