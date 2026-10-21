@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, readdir, rename, stat, unlink } from "node:fs/promises";
+import { copyFile, mkdir, readdir, rename, stat, unlink } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 export interface StoredObject {
@@ -14,6 +14,7 @@ export interface ObjectStorage {
   resolve(key: string): string;
   putFile(sourcePath: string, key: string): Promise<StoredObject>;
   remove(key: string): Promise<void>;
+  downloadToFile?(key: string, destinationPath: string): Promise<void>;
   list?(prefix?: string): Promise<ListedObject[]>;
   createDownloadUrl?(key: string, expiresInSeconds: number): Promise<string>;
 }
@@ -48,6 +49,10 @@ export class LocalObjectStorage implements ObjectStorage {
     const results: ListedObject[] = [];
     await walkObjects(this.root, base, results);
     return results.filter((entry) => !prefix || entry.key.startsWith(prefix.endsWith("/") ? prefix : prefix + "/"));
+  }
+
+  async downloadToFile(key: string, destinationPath: string): Promise<void> {
+    await copyFile(this.resolve(key), destinationPath);
   }
 
   async remove(key: string): Promise<void> {
