@@ -16,6 +16,7 @@
     "@videocraft/domain": "0.1.0",
     "@videocraft/jobs": "0.1.0",
     "@videocraft/persistence": "0.1.0",
+    "@videocraft/transcription": "0.1.0",
     "bullmq": "^5.34.10",
     "fastify": "^5.2.1",
     "jose": "^5.10.0",
