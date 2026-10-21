@@ -288,7 +288,7 @@ export function buildServer(dependencies: ApiDependencies): FastifyInstance {
     const params = asRecord(request.params);
     const projectId = params.projectId;
     const revisionValue = params.revision;
-    if (typeof projectId !== "string" || typeof revisionValue !== "string" || !/^\\d+$/.test(revisionValue)) {
+    if (typeof projectId !== "string" || typeof revisionValue !== "string" || !/^\d+$/.test(revisionValue)) {
       return sendError(reply, 400, "invalid_request", "projectId and a positive revision are required");
     }
     const revisionNumber = Number(revisionValue);
