@@ -8,6 +8,7 @@ import { FasterWhisperWorker } from "@videocraft/transcription";
 import { LocalObjectStorage, S3ObjectStorage, type ObjectStorage } from "@videocraft/storage";
 import { StaticStrategyRegistry } from "@videocraft/strategies";
 import { OpenAiCompatibleIntentAnalyzer, RuleBasedIntentAnalyzer } from "@videocraft/intent-analysis";
+import { ClamAvScanner, type MalwareScanner } from "@videocraft/security";
 import { buildServer } from "./server.js";
 import { registerUploadRoutes } from "./uploads.js";
 import { registerRenderRoutes } from "./render-routes.js";
@@ -38,6 +39,11 @@ function createStorage(): ObjectStorage {
   }
   return new LocalObjectStorage(required("MEDIA_ROOT"));
 }
+function createMalwareScanner(): MalwareScanner | undefined {
+  const host = process.env.CLAMAV_HOST;
+  if (!host && process.env.MALWARE_SCAN_REQUIRED === "true") throw new Error("CLAMAV_HOST is required when MALWARE_SCAN_REQUIRED=true");
+  return host ? new ClamAvScanner({ host, port: Number(process.env.CLAMAV_PORT ?? "3310") }) : undefined;
+}
 
 const pool = createPool(required("DATABASE_URL"));
 const db = pool as unknown as Database;
@@ -45,6 +51,7 @@ const projects = new PostgresProjectRepository(db);
 const assets = new PostgresAssetRepository(db);
 const mediaRoot = required("MEDIA_ROOT");
 const storage = createStorage();
+const malwareScanner = createMalwareScanner();
 const renderQueue = new Queue("videocraft-render", { connection: redisConnection(required("REDIS_URL")) });
 const transcriber = new FasterWhisperWorker({
   workerPath: required("WHISPER_WORKER_PATH"),
@@ -84,7 +91,7 @@ registerIntentRoutes(server, { analyzer: intentAnalyzer, authenticate: (request)
 registerRenderRoutes(server, { jobs: renderJobs, storage, signingSecret: required("DOWNLOAD_SIGNING_SECRET"), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
 registerUploadRoutes(server, {
   assets, storage, authorize: authorizer, authenticate: (request) => authenticator.authenticate(request),
-  clock: () => new Date().toISOString(),
+  clock: () => new Date().toISOString(), scanner: malwareScanner,
 });
 
 const port = Number(process.env.PORT ?? "8080");
