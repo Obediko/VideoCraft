@@ -1,6 +1,6 @@
 import { Pool, type PoolConfig } from "pg";
 import type { Asset, EditingProposal, Project, ProjectRevision, TranscriptSegment, UUID } from "@videocraft/domain";
-import type { AssetRepository, ProjectMember, ProjectMemberRepository, ProjectRepository, RevisionRepository } from "@videocraft/application";
+import type { AssetRepository, ProjectMember, ProjectMemberRepository, ProjectRepository, RevisionRepository, SceneRecord, SceneRepository } from "@videocraft/application";
 
 export interface Database {
   query<T = Record<string, unknown>>(text: string, values?: readonly unknown[]): Promise<{ rows: T[] }>;
@@ -35,6 +35,27 @@ export class PostgresProjectRepository implements ProjectRepository {
       "ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, revision = EXCLUDED.revision, updated_at = EXCLUDED.updated_at",
       [project.id, project.ownerId, project.name, project.revision, project.createdAt, project.updatedAt],
     );
+  }
+}
+
+export class PostgresSceneRepository implements SceneRepository {
+  constructor(private readonly db: Database) {}
+  async listForAsset(assetId: UUID): Promise<SceneRecord[]> {
+    const result = await this.db.query<SceneRow>(
+      "SELECT id, asset_id, start_us, end_us, created_at FROM scenes WHERE asset_id = $1 ORDER BY start_us, id",
+      [assetId],
+    );
+    return result.rows.map((row) => ({ id: row.id, assetId: row.asset_id, startUs: Number(row.start_us), endUs: Number(row.end_us), createdAt: row.created_at }));
+  }
+  async replaceForAsset(assetId: UUID, scenes: SceneRecord[]): Promise<void> {
+    await this.db.query("DELETE FROM scenes WHERE asset_id = $1", [assetId]);
+    for (const scene of scenes) {
+      if (scene.assetId !== assetId || scene.endUs <= scene.startUs) throw new Error("Invalid scene record");
+      await this.db.query(
+        "INSERT INTO scenes (id, asset_id, start_us, end_us, created_at) VALUES ($1, $2, $3, $4, $5)",
+        [scene.id, assetId, scene.startUs, scene.endUs, scene.createdAt],
+      );
+    }
   }
 }
 
@@ -146,6 +167,7 @@ export class PostgresProposalStore implements ProposalStore {
 type ProposalRow = { id: string; project_id: string; base_revision: number; strategy_id: string; strategy_version: string; rationale: string; confidence: number; evidence: EditingProposal["evidence"]; operations: EditingProposal["operations"]; status: EditingProposal["status"] };
 type ProjectRow = { id: string; owner_id: string; name: string; revision: number; created_at: string; updated_at: string };
 type ProjectMemberRow = { project_id: string; user_id: string; role: "editor" | "viewer"; created_at: string };
+type SceneRow = { id: string; asset_id: string; start_us: string; end_us: string; created_at: string };
 type AssetRow = { id: string; project_id: string; kind: Asset["kind"]; storage_key: string; checksum_sha256: string; duration_us: string | null; metadata: Record<string, string | number | boolean>; created_at: string };
 type RevisionRow = { project_id: string; revision: number; timeline: ProjectRevision["timeline"]; tailoring: NonNullable<ProjectRevision["tailoring"]> | null; accepted_proposal_ids: UUID[]; created_at: string; created_by: string };
 type TranscriptRow = { id: string; asset_id: string; start_us: string; end_us: string; text: string; words: TranscriptSegment["words"]; provider: string; provider_version: string | null };
