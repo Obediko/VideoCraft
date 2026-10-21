@@ -87,7 +87,7 @@ async function walkObjects(root: string, directory: string, results: ListedObjec
   }
 }
 function safeObjectPrefix(root: string, prefix: string): string {
-  if (prefix.includes("\\0") || isAbsolute(prefix)) throw new Error("Invalid object prefix");
+  if (prefix.includes("\0") || isAbsolute(prefix)) throw new Error("Invalid object prefix");
   const normalizedRoot = resolve(root);
   const candidate = resolve(normalizedRoot, prefix || ".");
   const rel = relative(normalizedRoot, candidate);
