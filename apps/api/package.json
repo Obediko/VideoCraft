@@ -12,10 +12,12 @@
     "start": "node dist/main.js"
   },
   "dependencies": {
+    "@fastify/multipart": "^9.0.3",
     "@videocraft/application": "0.1.0",
     "@videocraft/domain": "0.1.0",
     "@videocraft/jobs": "0.1.0",
     "@videocraft/persistence": "0.1.0",
+    "@videocraft/storage": "0.1.0",
     "@videocraft/strategies": "0.1.0",
     "@videocraft/transcription": "0.1.0",
     "bullmq": "^5.34.10",
