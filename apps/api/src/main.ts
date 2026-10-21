@@ -5,9 +5,11 @@ import { BullMqRenderQueue } from "@videocraft/jobs";
 import { FasterWhisperWorker } from "@videocraft/transcription";
 import { LocalObjectStorage } from "@videocraft/storage";
 import { StaticStrategyRegistry } from "@videocraft/strategies";
+import { RuleBasedIntentAnalyzer } from "@videocraft/intent-analysis";
 import { buildServer } from "./server.js";
 import { registerUploadRoutes } from "./uploads.js";
 import { registerRenderRoutes } from "./render-routes.js";
+import { registerIntentRoutes } from "./intent-routes.js";
 import { JwtAuthenticator, PostgresProjectAuthorizer } from "./auth.js";
 
 function required(name: string): string {
@@ -52,6 +54,7 @@ const server = buildServer({
   authorize: authorizer,
 });
 server.register(rateLimit, { max: 120, timeWindow: "1 minute", skipOnError: true });
+registerIntentRoutes(server, { analyzer: new RuleBasedIntentAnalyzer(), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
 registerRenderRoutes(server, { jobs: renderJobs, storage, signingSecret: required("DOWNLOAD_SIGNING_SECRET"), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
 registerUploadRoutes(server, {
   assets, storage, authorize: authorizer, authenticate: (request) => authenticator.authenticate(request),
