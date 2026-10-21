@@ -1,54 +1,80 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { resolve, relative, isAbsolute, sep } from "node:path";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve, relative, isAbsolute, sep } from "node:path";
 import type { Asset, TranscriptSegment, TranscriptionPort } from "@videocraft/domain";
+import type { ObjectStorage } from "@videocraft/storage";
 
 export interface WhisperWorkerOptions {
   pythonCommand?: string;
   workerPath: string;
-  mediaRoot: string;
+  mediaRoot?: string;
+  storage?: ObjectStorage;
   language?: string;
   timeoutMs?: number;
 }
 
 export class FasterWhisperWorker implements TranscriptionPort {
-  private readonly options: Required<Omit<WhisperWorkerOptions, "language">> & Pick<WhisperWorkerOptions, "language">;
+  private readonly options: {
+    pythonCommand: string;
+    workerPath: string;
+    mediaRoot?: string;
+    storage?: ObjectStorage;
+    language?: string;
+    timeoutMs: number;
+  };
 
   constructor(options: WhisperWorkerOptions) {
+    if (!options.mediaRoot && !options.storage) throw new Error("A mediaRoot or storage adapter is required");
     this.options = {
       pythonCommand: options.pythonCommand ?? "python",
       workerPath: options.workerPath,
-      mediaRoot: resolve(options.mediaRoot),
+      ...(options.mediaRoot ? { mediaRoot: resolve(options.mediaRoot) } : {}),
+      ...(options.storage ? { storage: options.storage } : {}),
       ...(options.language === undefined ? {} : { language: options.language }),
       timeoutMs: options.timeoutMs ?? 15 * 60 * 1000,
     };
   }
 
   async transcribe(asset: Asset): Promise<TranscriptSegment[]> {
-    const assetPath = safeMediaPath(this.options.mediaRoot, asset.storageKey);
-    const child = spawn(this.options.pythonCommand, [this.options.workerPath], {
-      shell: false,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    const output: Buffer[] = [];
-    const errors: Buffer[] = [];
-    child.stdout.on("data", (chunk) => output.push(Buffer.from(chunk)));
-    child.stderr.on("data", (chunk) => errors.push(Buffer.from(chunk)));
+    const stagingDirectory = this.options.storage ? await mkdtemp(join(tmpdir(), "videocraft-transcription-")) : undefined;
+    try {
+      let assetPath: string;
+      if (stagingDirectory) {
+        if (!this.options.storage?.downloadToFile) throw new Error("Configured storage provider cannot stage media for transcription");
+        assetPath = join(stagingDirectory, "input.media");
+        await this.options.storage.downloadToFile(asset.storageKey, assetPath);
+      } else {
+        assetPath = safeMediaPath(this.options.mediaRoot!, asset.storageKey);
+      }
 
-    const timer = setTimeout(() => child.kill("SIGTERM"), this.options.timeoutMs);
-    child.stdin.end(JSON.stringify({
-      assetPath,
-      language: this.options.language,
-      assetId: asset.id,
-    }) + "\n");
+      const child = spawn(this.options.pythonCommand, [this.options.workerPath], {
+        shell: false,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      const output: Buffer[] = [];
+      const errors: Buffer[] = [];
+      child.stdout.on("data", (chunk) => output.push(Buffer.from(chunk)));
+      child.stderr.on("data", (chunk) => errors.push(Buffer.from(chunk)));
 
-    const [code] = await once(child, "close") as [number | null];
-    clearTimeout(timer);
-    if (code !== 0) throw new Error("Transcription worker failed: " + Buffer.concat(errors).toString().slice(-4000));
-    let parsed: unknown;
-    try { parsed = JSON.parse(Buffer.concat(output).toString()); }
-    catch { throw new Error("Transcription worker returned invalid JSON"); }
-    return parseSegments(parsed, asset.id);
+      const timer = setTimeout(() => child.kill("SIGTERM"), this.options.timeoutMs);
+      child.stdin.end(JSON.stringify({
+        assetPath,
+        language: this.options.language,
+        assetId: asset.id,
+      }) + "\n");
+
+      const [code] = await once(child, "close") as [number | null];
+      clearTimeout(timer);
+      if (code !== 0) throw new Error("Transcription worker failed: " + Buffer.concat(errors).toString().slice(-4000));
+      let parsed: unknown;
+      try { parsed = JSON.parse(Buffer.concat(output).toString()); }
+      catch { throw new Error("Transcription worker returned invalid JSON"); }
+      return parseSegments(parsed, asset.id);
+    } finally {
+      if (stagingDirectory) await rm(stagingDirectory, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 }
 
