@@ -17,7 +17,7 @@ function setup() {
     authenticate: async () => ({ userId: "user-1" }),
     authorize: { canAccess: async () => true },
     assets: { listForProject: async () => [{ id: "asset-1" }] },
-    transcripts: {
+    quota: { consume: async () => ({ allowed: true, remaining: 1, resetAt: 0 }) },\n    transcripts: {
       async listForAsset() {
         transcriptReads += 1;
         return [{ id: "segment-1", assetId: "asset-1", startUs: 0, endUs: 1_000_000, text: "private speech", words: [], provider: "test" }];
@@ -42,5 +42,23 @@ test("intent analysis includes persisted transcript only with explicit consent",
   assert.equal(response.statusCode, 200);
   assert.equal(seen[0].transcript[0].text, "private speech");
   assert.equal(getTranscriptReads(), 1);
+  await server.close();
+});
+
+
+test("intent analysis enforces provider quota before external work", async () => {
+  const server = Fastify();
+  let analyzed = false;
+  registerIntentRoutes(server, {
+    analyzer: { async analyze() { analyzed = true; throw new Error("should not analyze"); } },
+    authenticate: async () => ({ userId: "user-1" }),
+    authorize: { canAccess: async () => true },
+    providerRateLimitMax: 1,
+    quota: { consume: async () => ({ allowed: false, remaining: 0, resetAt: Math.floor(Date.now() / 1000) + 30 }) }
+  });
+  const response = await server.inject({ method: "POST", url: "/v1/projects/project-1/intent/analyze", payload: { prompt: "Summarize this" } });
+  assert.equal(response.statusCode, 429);
+  assert.equal(response.json().error.code, "provider_quota_exceeded");
+  assert.equal(analyzed, false);
   await server.close();
 });
