@@ -5,6 +5,7 @@ export interface RetentionOptions {
   olderThan: string;
   protectedKeys?: ReadonlySet<string>;
   maxDeletes?: number;
+  dryRun?: boolean;
 }
 
 export interface RetentionResult {
@@ -13,6 +14,7 @@ export interface RetentionResult {
   deleted: string[];
   skippedProtected: number;
   remainingEligible: number;
+  planned: string[];
 }
 
 export async function pruneExpiredObjects(storage: ObjectStorage, options: RetentionOptions): Promise<RetentionResult> {
@@ -30,12 +32,14 @@ export async function pruneExpiredObjects(storage: ObjectStorage, options: Reten
   });
   const deletable = eligible.filter((object) => !protectedKeys.has(object.key));
   const selected = deletable.slice(0, maxDeletes);
-  for (const object of selected) await storage.remove(object.key);
+  const dryRun = options.dryRun ?? false;
+  if (!dryRun) for (const object of selected) await storage.remove(object.key);
   return {
     examined: objects.length,
     eligible: eligible.length,
-    deleted: selected.map((object) => object.key),
+    deleted: dryRun ? [] : selected.map((object) => object.key),
     skippedProtected: eligible.length - deletable.length,
     remainingEligible: deletable.length - selected.length,
+    planned: selected.map((object) => object.key),
   };
 }
