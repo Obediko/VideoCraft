@@ -1,4 +1,6 @@
+import { Queue } from "bullmq";
 import { createPool, PostgresAssetRepository, PostgresProjectRepository, PostgresRevisionRepository, type Database } from "@videocraft/persistence";
+import { BullMqRenderQueue } from "@videocraft/jobs";
 import { buildServer } from "./server.js";
 import { JwtAuthenticator, PostgresProjectAuthorizer } from "./auth.js";
 
@@ -7,18 +9,29 @@ function required(name: string): string {
   if (!value) throw new Error(name + " is required");
   return value;
 }
+function redisConnection(value: string) {
+  const url = new URL(value);
+  if (url.protocol !== "redis:" && url.protocol !== "rediss:") throw new Error("REDIS_URL must use redis:// or rediss://");
+  return {
+    host: url.hostname,
+    port: Number(url.port || "6379"),
+    ...(url.username ? { username: decodeURIComponent(url.username) } : {}),
+    ...(url.password ? { password: decodeURIComponent(url.password) } : {}),
+    ...(url.protocol === "rediss:" ? { tls: {} } : {}),
+  };
+}
 
-const databaseUrl = required("DATABASE_URL");
-const jwtSecret = required("AUTH_JWT_SECRET");
-const pool = createPool(databaseUrl);
+const pool = createPool(required("DATABASE_URL"));
 const db = pool as unknown as Database;
 const projects = new PostgresProjectRepository(db);
+const renderQueue = new Queue("videocraft-render", { connection: redisConnection(required("REDIS_URL")) });
 
 const server = buildServer({
   projects,
   assets: new PostgresAssetRepository(db),
   revisions: new PostgresRevisionRepository(db),
-  authenticate: new JwtAuthenticator(jwtSecret, {
+  renderer: new BullMqRenderQueue(renderQueue),
+  authenticate: new JwtAuthenticator(required("AUTH_JWT_SECRET"), {
     ...(process.env.AUTH_ISSUER ? { issuer: process.env.AUTH_ISSUER } : {}),
     ...(process.env.AUTH_AUDIENCE ? { audience: process.env.AUTH_AUDIENCE } : {}),
   }),
@@ -30,6 +43,7 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("PORT m
 
 const shutdown = async () => {
   await server.close();
+  await renderQueue.close();
   await pool.end();
 };
 process.once("SIGTERM", () => void shutdown());
