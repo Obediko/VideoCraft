@@ -12,7 +12,7 @@ export interface WhisperWorkerOptions {
 }
 
 export class FasterWhisperWorker implements TranscriptionPort {
-  private readonly options: Required<Omit<WhisperWorkerOptions, "language">> & Pick<WhisperWorkerOptions, "language">;
+  private readonly options: Required<WhisperWorkerOptions>;
 
   constructor(options: WhisperWorkerOptions) {
     this.options = {
