@@ -44,7 +44,7 @@ const authenticator = new JwtAuthenticator(required("AUTH_JWT_SECRET"), {
 const authorizer = new PostgresProjectAuthorizer(projects, db);
 const renderJobs = new PostgresRenderJobRepository(db);
 const server = buildServer({
-  projects, assets, revisions: new PostgresRevisionRepository(db),
+  projects, assets, storage, revisions: new PostgresRevisionRepository(db),
   transcripts: new PostgresTranscriptStore(db),
   proposals: new PostgresProposalStore(db),
   strategies: new StaticStrategyRegistry(),
