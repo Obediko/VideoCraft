@@ -24,11 +24,13 @@ Set CLAMAV_HOST and optionally CLAMAV_PORT to enable the ClamAV INSTREAM adapter
 
 ## Retention and deletion
 
-The `@videocraft/retention` package provides bounded cleanup over providers that support object listing. Cleanup requires an explicit cutoff, caps each run at 10,000 deletions, and accepts protected object keys; it never assumes that every old object is safe to remove. The retention worker reads protected asset and render-output keys from PostgreSQL, requires an explicit RETENTION_CUTOFF, and defaults to RETENTION_DRY_RUN=true. Set RETENTION_DRY_RUN=false only in a reviewed scheduled job; RETENTION_MAX_DELETES bounds each run and RETENTION_PREFIX scopes the object listing. Production scheduling must use a least-privilege storage identity and record a deletion audit before enabling destructive cleanup.
+The `@videocraft/retention` package provides bounded cleanup over providers that support object listing. Cleanup requires an explicit cutoff, caps each run at 10,000 deletions, and accepts protected object keys; it never assumes that every old object is safe to remove. The retention worker reads protected asset and render-output keys from PostgreSQL, requires an explicit RETENTION_CUTOFF, and defaults to RETENTION_DRY_RUN=true. Set RETENTION_DRY_RUN=false only in a reviewed scheduled job; RETENTION_MAX_DELETES bounds each run and RETENTION_PREFIX scopes the object listing. Production scheduling must use a least-privilege storage identity and record a deletion audit before enabling destructive cleanup. Set RETENTION_INTERVAL_MS to 0 for one-shot execution (the default), or to a value between 60 seconds and 24 hours for the built-in non-overlapping scheduler; keep RETENTION_DRY_RUN=true until the schedule is reviewed.
 
 ## Observability
 
-Intent-provider calls are bounded by `INTENT_PROVIDER_MAX_PER_MINUTE` per authenticated principal. API rate limits use Redis so the budget is shared across API instances; keep Redis available and monitor rejected requests.\n\nThe API exposes a Prometheus-compatible `/metrics` endpoint with bounded request counters and latency count/sum metrics labeled only by method, route template, and status. Keep the endpoint inside the deployment network or behind platform access controls; it contains operational data and no request bodies or credentials.
+Intent-provider calls are bounded by `INTENT_PROVIDER_MAX_PER_MINUTE` per authenticated principal. API rate limits use Redis so the budget is shared across API instances; keep Redis available and monitor rejected requests.
+
+The API exposes a Prometheus-compatible `/metrics` endpoint with bounded request counters and latency count/sum metrics labeled only by method, route template, and status. Keep the endpoint inside the deployment network or behind platform access controls; it contains operational data and no request bodies or credentials.
 
 ## Production requirements
 
