@@ -19,6 +19,29 @@ export function createPool(config: PoolConfig | string): Pool {
   return new Pool(typeof config === "string" ? { connectionString: config } : config);
 }
 
+export function createDatabase(pool: Pool): Database {
+  return {
+    query: (text, values) => pool.query(text, values as unknown[] | undefined),
+    transaction: async <T>(work: (database: Database) => Promise<T>): Promise<T> => {
+      const client = await pool.connect();
+      const database: Database = {
+        query: (text, values) => client.query(text, values as unknown[] | undefined),
+      };
+      try {
+        await client.query("BEGIN");
+        const result = await work(database);
+        await client.query("COMMIT");
+        return result;
+      } catch (error) {
+        await client.query("ROLLBACK").catch(() => undefined);
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+  };
+}
+
 export class PostgresProjectRepository implements ProjectRepository {
   constructor(private readonly db: Database) {}
   async get(id: UUID): Promise<Project | undefined> {
