@@ -1,0 +1,17 @@
+{
+  "name": "@videocraft/strategies",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@videocraft/domain": "0.1.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}
