@@ -131,3 +131,5 @@ function mapRevision(row: RevisionRow): ProjectRevision {
 }
 
 export { PostgresRenderJobRepository } from "./render-jobs.js";
+
+export { PostgresFeedbackRepository } from "./feedback.js";
