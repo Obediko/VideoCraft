@@ -5,9 +5,10 @@ export interface IntentRouteDependencies {
   analyzer: IntentAnalysisPort;
   authenticate(request: FastifyRequest): Promise<{ userId: UUID } | null>;
   authorize: { canAccess(principal: { userId: UUID }, projectId: UUID, role: "viewer" | "editor"): Promise<boolean> };
+  providerRateLimitMax?: number;
 }
 export function registerIntentRoutes(server: FastifyInstance, dependencies: IntentRouteDependencies): void {
-  server.post("/v1/projects/:projectId/intent/analyze", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } } as any, async (request: FastifyRequest, reply: FastifyReply) => {
+  server.post("/v1/projects/:projectId/intent/analyze", { config: { rateLimit: { max: dependencies.providerRateLimitMax ?? 20, timeWindow: "1 minute" } } } as any, async (request: FastifyRequest, reply: FastifyReply) => {
     const principal = await dependencies.authenticate(request);
     if (!principal) return error(reply, 401, "unauthorized", "Authentication required");
     const params = request.params as { projectId?: string };
