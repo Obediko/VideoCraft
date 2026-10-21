@@ -38,7 +38,7 @@ The API exposes a Prometheus-compatible `/metrics` endpoint with bounded request
 
 - Use a managed PostgreSQL instance with encrypted connections and automated backups.
 - Store authentication, storage, scanner, and intent-provider secrets in a secret manager; never place them in repository files. The API consumes secrets through the `SecretProvider` boundary and currently ships an environment-backed adapter for platform-injected values. Set SECRET_PROVIDER=aws-secrets-manager and SECRET_MANAGER_SECRET_ID to load a JSON secret object from AWS Secrets Manager; the API merges it before validating production configuration and uses that merged environment for storage, scanner, worker, intent-provider, database, and signing configuration. The AWS SDK uses its standard credential chain.
-- Configure AUTH_ISSUER and AUTH_AUDIENCE in production; the API refuses unsafe production startup without them, S3-backed storage, and required malware scanning.
+- Configure AUTH_ISSUER and AUTH_AUDIENCE in production; the API refuses unsafe production startup without them, S3-backed storage, and required malware scanning. For signing-key rotation, deploy the new `AUTH_JWT_SECRET` with the old key in `AUTH_JWT_SECRET_PREVIOUS`, wait at least the maximum token lifetime, then remove the previous key.
 - Run database migrations as a controlled release step.
 - Run transcription and rendering as separate worker processes with least-privilege filesystem access.
 - Configure OTEL_EXPORTER_OTLP_ENDPOINT for OTLP traces, keep connection pool limits/timeouts and health probes enabled, and load `ops/prometheus/videocraft-alerts.yml` into the Prometheus deployment. Route critical alerts to the on-call channel and review warning thresholds with real traffic.
