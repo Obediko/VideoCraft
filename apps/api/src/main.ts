@@ -7,7 +7,7 @@ import { ProjectService } from "@videocraft/application";
 import { FasterWhisperWorker } from "@videocraft/transcription";
 import { LocalObjectStorage } from "@videocraft/storage";
 import { StaticStrategyRegistry } from "@videocraft/strategies";
-import { RuleBasedIntentAnalyzer } from "@videocraft/intent-analysis";
+import { OpenAiCompatibleIntentAnalyzer, RuleBasedIntentAnalyzer } from "@videocraft/intent-analysis";
 import { buildServer } from "./server.js";
 import { registerUploadRoutes } from "./uploads.js";
 import { registerRenderRoutes } from "./render-routes.js";
@@ -50,6 +50,9 @@ const revisions = new PostgresRevisionRepository(db);
 const renderJobs = new PostgresRenderJobRepository(db);
 const timelineService = new ProjectService(projects, assets, revisions, { next: () => randomUUID() }, { now: () => new Date().toISOString() });
 const feedback = new PostgresFeedbackRepository(db);
+const intentAnalyzer = process.env.INTENT_PROVIDER_API_KEY
+  ? new OpenAiCompatibleIntentAnalyzer({ endpoint: process.env.INTENT_PROVIDER_URL ?? "https://api.openai.com/v1", apiKey: process.env.INTENT_PROVIDER_API_KEY, model: process.env.INTENT_PROVIDER_MODEL ?? "gpt-4o-mini" })
+  : new RuleBasedIntentAnalyzer();
 const server = buildServer({
   projects, assets, storage, revisions,
   transcripts: new PostgresTranscriptStore(db),
@@ -63,7 +66,7 @@ const server = buildServer({
 server.register(rateLimit, { max: 120, timeWindow: "1 minute", skipOnError: true });
 registerTimelineRoutes(server, { projects, revisions, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, saveRevision: (input) => timelineService.saveRevision(input) });
 registerFeedbackRoutes(server, { feedback, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, now: () => new Date().toISOString() });
-registerIntentRoutes(server, { analyzer: new RuleBasedIntentAnalyzer(), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
+registerIntentRoutes(server, { analyzer: intentAnalyzer, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
 registerRenderRoutes(server, { jobs: renderJobs, storage, signingSecret: required("DOWNLOAD_SIGNING_SECRET"), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
 registerUploadRoutes(server, {
   assets, storage, authorize: authorizer, authenticate: (request) => authenticator.authenticate(request),
