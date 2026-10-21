@@ -10,7 +10,7 @@ function dependencies(authenticate) {
     projects: new InMemoryProjectRepository(),
     assets: new InMemoryAssetRepository(),
     revisions: new InMemoryRevisionRepository(),
-    authenticate,
+    authenticate: { authenticate },
     authorize: { canAccess: async () => true },
     strategies: new StaticStrategyRegistry(),
     transcripts: { listForAsset: async () => [], replaceForAsset: async () => {} },
