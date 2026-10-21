@@ -101,7 +101,7 @@ const authorizer = new PostgresProjectAuthorizer(projects, db);
 const revisions = new PostgresRevisionRepository(db);
 const renderJobs = new PostgresRenderJobRepository(db);
 const timelineService = new ProjectService(projects, assets, revisions, { next: () => randomUUID() }, { now: () => new Date().toISOString() });
-const feedback = new PostgresFeedbackRepository(db);
+const transcripts = new PostgresTranscriptStore(db);\nconst feedback = new PostgresFeedbackRepository(db);
 const audit = new PostgresAuditRepository(db);
 const intentAnalyzer = secretEnvironment.INTENT_PROVIDER_API_KEY
   ? new OpenAiCompatibleIntentAnalyzer({ endpoint: secretEnvironment.INTENT_PROVIDER_URL ?? "https://api.openai.com/v1", apiKey: secretEnvironment.INTENT_PROVIDER_API_KEY, model: secretEnvironment.INTENT_PROVIDER_MODEL ?? "gpt-4o-mini" })
@@ -110,7 +110,7 @@ const server = buildServer({
   projects, assets, members, storage, revisions,
   ...(sceneDetector ? { sceneDetector } : {}),
   scenes,
-  transcripts: new PostgresTranscriptStore(db),
+  transcripts,
   proposals: new PostgresProposalStore(db),
   strategies: new StaticStrategyRegistry(),
   transcriber,
@@ -127,7 +127,7 @@ const server = buildServer({
 server.register(rateLimit, { max: 120, timeWindow: "1 minute", redis: rateLimitRedis, skipOnError: false, keyGenerator: rateLimitKey });
 registerTimelineRoutes(server, { projects, revisions, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, saveRevision: (input) => timelineService.saveRevision(input) });
 registerFeedbackRoutes(server, { feedback, revisions, proposals: new PostgresProposalStore(db), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, now: () => new Date().toISOString() });
-registerIntentRoutes(server, { analyzer: intentAnalyzer, providerRateLimitMax: boundedInteger("INTENT_PROVIDER_MAX_PER_MINUTE", 20, 1, 1_000), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
+registerIntentRoutes(server, { analyzer: intentAnalyzer, assets, transcripts, providerRateLimitMax: boundedInteger("INTENT_PROVIDER_MAX_PER_MINUTE", 20, 1, 1_000), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
 registerRenderRoutes(server, { jobs: renderJobs, storage, signingSecret: requiredSecret("DOWNLOAD_SIGNING_SECRET"), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
 registerUploadRoutes(server, {
   assets, storage, authorize: authorizer, authenticate: (request) => authenticator.authenticate(request),
