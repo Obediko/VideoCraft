@@ -2,7 +2,7 @@
 
 ## Local services
 
-The API requires PostgreSQL, Redis, DATABASE_URL, REDIS_URL, MEDIA_ROOT, AUTH_JWT_SECRET, DOWNLOAD_SIGNING_SECRET, and the faster-whisper worker path. Apply packages/persistence/migrations/001_initial.sql before starting the API.
+The API requires PostgreSQL, Redis, DATABASE_URL, REDIS_URL, MEDIA_ROOT, AUTH_JWT_SECRET, DOWNLOAD_SIGNING_SECRET, and the faster-whisper worker path. Apply all packages/persistence/migrations/*.sql files in filename order before starting the API.
 
 The API listens on 0.0.0.0 only inside its deployment network. Put TLS termination, request filtering, and a trusted identity provider in front of it. Local completed renders are served through five-minute HMAC-signed URLs; the signing secret must be at least 32 random characters.
 
