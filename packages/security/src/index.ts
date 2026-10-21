@@ -19,7 +19,7 @@ export class AwsSecretsManagerProvider {
   private readonly client: SecretsManagerClientLike;
   constructor(private readonly secretId: string, region = process.env.AWS_REGION ?? "us-east-1", client?: SecretsManagerClientLike) {
     if (!secretId.trim()) throw new Error("AWS secret ID is required");
-    this.client = client ?? new SecretsManagerClient({ region });
+    this.client = client ?? (new SecretsManagerClient({ region }) as unknown as SecretsManagerClientLike);
   }
 
   async load(): Promise<Record<string, string>> {
