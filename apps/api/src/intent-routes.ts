@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import type { IntentAnalysisPort, UUID } from "@videocraft/domain";
+import type { IntentAnalysisPort, TranscriptSegment, UUID } from "@videocraft/domain";
 
 export interface IntentRouteDependencies {
   analyzer: IntentAnalysisPort;
