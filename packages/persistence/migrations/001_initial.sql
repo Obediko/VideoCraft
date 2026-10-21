@@ -83,3 +83,16 @@ CREATE TABLE IF NOT EXISTS render_jobs (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS render_jobs_project_idx ON render_jobs(project_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS feedback_events (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL CHECK (revision >= 1),
+  strategy_id TEXT,
+  proposal_id TEXT REFERENCES editing_proposals(id) ON DELETE SET NULL,
+  type TEXT NOT NULL CHECK (type IN ('accepted','rejected','edited','exported','shared')),
+  value DOUBLE PRECISION,
+  note TEXT,
+  created_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS feedback_events_project_idx ON feedback_events(project_id, created_at DESC);
