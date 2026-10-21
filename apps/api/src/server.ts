@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { stat } from "node:fs/promises";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { validateProposal } from "@videocraft/domain";
@@ -28,7 +28,7 @@ export interface ApiDependencies {
   projects: ProjectRepository; assets: AssetRepository; revisions: RevisionRepository; members?: ProjectMemberRepository; storage?: ObjectStorage;
   authenticate: Authenticator; authorize: ProjectAuthorizer;
   renderer?: RendererPort; transcriber?: TranscriptionPort; sceneDetector?: SceneDetector; scenes?: SceneRepository; transcripts?: TranscriptStore; strategies?: StrategyRegistry; proposals?: ProposalStore;
-  clock?: Clock; ids?: IdFactory; audit?: AuditWriter; metrics?: MetricsRegistry; readiness?: ReadinessCheck[];
+  clock?: Clock; ids?: IdFactory; audit?: AuditWriter; metrics?: MetricsRegistry; metricsToken?: string; readiness?: ReadinessCheck[];
 }
 
 export function buildServer(dependencies: ApiDependencies): FastifyInstance {
@@ -79,7 +79,12 @@ export function buildServer(dependencies: ApiDependencies): FastifyInstance {
     }
     return { status: "ok" };
   });
-  server.get("/metrics", async (_request, reply) => reply.type("text/plain; version=0.0.4").send(metrics.renderPrometheus()));
+  server.get("/metrics", async (request, reply) => {
+    if (dependencies.metricsToken && !hasBearerToken(request, dependencies.metricsToken)) {
+      return reply.code(401).send({ error: { code: "unauthorized", message: "Metrics authentication required" } });
+    }
+    return reply.type("text/plain; version=0.0.4").send(metrics.renderPrometheus());
+  });
 
   server.get("/v1/projects", async (request, reply) => {
     const principal = await authenticate(dependencies.authenticate, request, reply);
@@ -446,6 +451,13 @@ async function authenticate(authenticator: Authenticator, request: FastifyReques
   if (!principal) { sendError(reply, 401, "unauthorized", "Authentication required"); return null; }
   (request as FastifyRequest & { videocraftPrincipal?: Principal }).videocraftPrincipal = principal;
   return principal;
+}
+function hasBearerToken(request: FastifyRequest, expected: string): boolean {
+  const header = request.headers.authorization;
+  if (!header?.startsWith("Bearer ")) return false;
+  const actual = Buffer.from(header.slice("Bearer ".length));
+  const target = Buffer.from(expected);
+  return actual.length === target.length && timingSafeEqual(actual, target);
 }
 function sendError(reply: FastifyReply, statusCode: number, code: string, message: string) { return reply.code(statusCode).send({ error: { code, message } }); }
 function messageOf(error: unknown): string { return error instanceof Error ? error.message : "Request failed"; }
