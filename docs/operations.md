@@ -16,6 +16,12 @@ Set OBJECT_STORAGE_PROVIDER=local for development. Set OBJECT_STORAGE_PROVIDER=s
 
 Set CLAMAV_HOST and optionally CLAMAV_PORT to enable the ClamAV INSTREAM adapter. Set MALWARE_SCAN_REQUIRED=true in production; the API then refuses to start without CLAMAV_HOST. Files are scanned while still in the temporary upload location and are promoted to object storage only after a clean result. Scanner outages return a 503 and never promote the file.
 
+## Health endpoints
+
+- `GET /healthz` is a liveness check and does not require external dependencies.
+- `GET /readyz` is a readiness check. The production API verifies the database before reporting `{ "status": "ok" }`; dependency failures return HTTP 503 and identify the failed dependency without exposing connection details.
+- Readiness checks must remain fast and bounded. They must not perform migrations or mutate application data.
+
 ## Observability
 
 The API exposes a Prometheus-compatible `/metrics` endpoint with bounded request counters and latency count/sum metrics labeled only by method, route template, and status. Keep the endpoint inside the deployment network or behind platform access controls; it contains operational data and no request bodies or credentials.
