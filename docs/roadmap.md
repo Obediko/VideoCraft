@@ -10,31 +10,32 @@
 - [x] Add repository interfaces and in-memory adapters for deterministic tests.
 - [x] Add a versioned strategy registry and explainable proposal strategy.
 
-## Next vertical slice: persistent API flow
+## Persistent API flow - in progress
 
-- [ ] Add database-backed repositories and migrations.
-- [ ] Add authenticated API contracts for create project, add asset, and save revision.
-- [ ] Add end-to-end tests for the persistent project flow.
-- [ ] Add object-storage upload and signed download boundaries.
+- [x] Add database-backed repositories and initial migrations.
+- [x] Add authenticated API contracts for project, asset, revision, transcript, and render commands.
+- [ ] Add end-to-end tests against PostgreSQL and Redis.
+- [x] Add a secure local object-storage boundary.
+- [ ] Add production object storage and signed download URLs.
 
-## Editing intelligence
+## Editing intelligence - in progress
 
-- [ ] Add transcription ingestion with normalized segments.
+- [x] Add faster-whisper worker protocol and normalized transcript persistence.
 - [ ] Add intent and audience extraction with structured outputs and evidence.
 - [ ] Add proposal preview and explicit accept, reject, and edit commands.
 - [ ] Add fixtures and offline strategy evaluation.
 
-## Media pipeline
+## Media pipeline - in progress
 
-- [ ] Add idempotent render jobs and a worker queue.
-- [ ] Add an FFmpeg adapter behind the renderer port.
-- [ ] Add progress, cancellation, retry, and output manifests.
-- [ ] Add scene-boundary analysis through an optional PySceneDetect adapter.
+- [x] Add idempotent render jobs and a BullMQ queue.
+- [x] Add an FFmpeg adapter and constrained render worker.
+- [ ] Add durable progress/status persistence, cancellation, retries, and output manifests.
+- [ ] Add scene-boundary analysis through a PySceneDetect adapter.
 - [ ] Add OpenTimelineIO import/export after the internal timeline model stabilizes.
 
-## Hardening
+## Hardening - in progress
 
-- [ ] Add authentication, authorization, tenant isolation, and audit logs.
-- [ ] Add upload validation, malware scanning, rate limits, and secret management.
-- [ ] Add observability, retention, backups, and incident runbooks.
+- [x] Add fail-closed JWT authentication and project authorization hooks.
+- [ ] Add complete tenant isolation, audit logs, malware scanning, and rate limits.
+- [ ] Add observability, retention, backups, and secret management.
 - [ ] Add accessible browser timeline editing.
