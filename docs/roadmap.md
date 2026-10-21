@@ -6,7 +6,7 @@
 - [x] Define provider and infrastructure boundaries.
 - [x] Document security and feedback-learning constraints.
 - [x] Add domain-level validation tests.
-- [x] Add application services for project creation, asset registration, and revision creation.
+- [x] Add application services for project creation, validated project rename, asset registration, and revision creation.
 - [x] Add repository interfaces and in-memory adapters for deterministic tests.
 - [x] Add a versioned strategy registry and explainable proposal strategy.
 
