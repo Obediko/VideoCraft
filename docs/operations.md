@@ -22,6 +22,10 @@ Set CLAMAV_HOST and optionally CLAMAV_PORT to enable the ClamAV INSTREAM adapter
 - `GET /readyz` is a readiness check. The production API verifies PostgreSQL and Redis before reporting `{ "status": "ok" }`; dependency failures return HTTP 503 and identify the failed dependency without exposing connection details.
 - Readiness checks must remain fast and bounded. They must not perform migrations or mutate application data.
 
+## Retention and deletion
+
+The `@videocraft/retention` package provides bounded cleanup over providers that support object listing. Cleanup requires an explicit cutoff, caps each run at 10,000 deletions, and accepts protected object keys; it never assumes that every old object is safe to remove. Production scheduling must obtain protected keys from durable project/render state, run with a least-privilege storage identity, and record a deletion audit before enabling destructive cleanup.
+
 ## Observability
 
 The API exposes a Prometheus-compatible `/metrics` endpoint with bounded request counters and latency count/sum metrics labeled only by method, route template, and status. Keep the endpoint inside the deployment network or behind platform access controls; it contains operational data and no request bodies or credentials.
