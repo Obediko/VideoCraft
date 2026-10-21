@@ -64,4 +64,4 @@
 - [x] Add principal-keyed global rate limits and tighter intent/upload route budgets.
 - [x] Add owner-controlled project member management with viewer/editor roles and non-owner denial tests.\n- [ ] Add complete tenant isolation audits and provider quota enforcement.
 - [x] Add bounded request metrics and Prometheus-compatible export.
-- [ ] Add distributed tracing, backup verification, and secret management.
+- [x] Add OTLP-capable distributed tracing with auto-instrumentation and production startup validation.\n- [ ] Add backup verification, alerting, and cloud secret-manager operational rotation.
