@@ -96,3 +96,18 @@ CREATE TABLE IF NOT EXISTS feedback_events (
   created_at TIMESTAMPTZ NOT NULL
 );
 CREATE INDEX IF NOT EXISTS feedback_events_project_idx ON feedback_events(project_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS audit_events (
+  id TEXT PRIMARY KEY,
+  actor_id TEXT,
+  project_id TEXT,
+  action TEXT NOT NULL,
+  method TEXT NOT NULL,
+  route TEXT NOT NULL,
+  status_code INTEGER NOT NULL CHECK (status_code BETWEEN 100 AND 599),
+  request_id TEXT NOT NULL,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS audit_events_actor_idx ON audit_events(actor_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS audit_events_project_idx ON audit_events(project_id, created_at DESC);
