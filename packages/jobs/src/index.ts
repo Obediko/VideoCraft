@@ -18,7 +18,8 @@ export class BullMqRenderQueue implements RendererPort {
     private readonly renderJobs?: RenderJobRepository,
   ) {}
   async enqueue(input: { project: Project; revision: ProjectRevision; settings: RenderSettings; idempotencyKey: string }): Promise<RenderJob> {
-    const jobId = "render-" + createHash("sha256").update(input.idempotencyKey).digest("hex");
+    const scopedIdempotencyKey = input.project.id + ":" + input.idempotencyKey;
+    const jobId = "render-" + createHash("sha256").update(scopedIdempotencyKey).digest("hex");
     const persisted = await this.renderJobs?.get(jobId);
     if (persisted) return persisted;
     const existing = await this.queue.getJob(jobId);
