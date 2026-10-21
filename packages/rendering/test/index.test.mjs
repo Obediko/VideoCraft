@@ -31,3 +31,24 @@ test("planner rejects multiple video clips until the concat worker is implemente
     }]}, acceptedProposalIds: [], createdAt: "", createdBy: "u"
   }, { format: "mp4", videoCodec: "libx264", audioCodec: "aac", width: 1280, height: 720, frameRate: 30 }, "/out.mp4"), /exactly one/);
 });
+
+
+test("FFmpeg plan renders bounded caption tracks", async () => {
+  const planner = new FfmpegCommandPlanner({ resolve: async () => "/media/source.mp4" });
+  const plan = await planner.plan({
+    projectId: "p",
+    revision: 1,
+    timeline: {
+      durationUs: 5_000_000,
+      tracks: [
+        { id: "track", kind: "video", clips: [{ id: "clip", assetId: "asset", sourceStartUs: 0, sourceEndUs: 5_000_000, timelineStartUs: 0, timelineEndUs: 5_000_000 }] },
+        { id: "captions", kind: "caption", clips: [{ id: "caption", assetId: "generated:caption", sourceStartUs: 0, sourceEndUs: 2_000_000, timelineStartUs: 0, timelineEndUs: 2_000_000, transform: { text: "For founders: launch, learn" } }] }
+      ]
+    },
+    acceptedProposalIds: [], createdAt: "", createdBy: "u"
+  }, { format: "mp4", videoCodec: "libx264", audioCodec: "aac", width: 1280, height: 720, frameRate: 30 }, "/renders/output.mp4");
+  const filter = plan.args[plan.args.indexOf("-vf") + 1];
+  assert.match(filter, /drawtext=/);
+  assert.match(filter, /For founders\\: launch\\, learn/);
+  assert.match(filter, /between\(t,0\.000000,2\.000000\)/);
+});
