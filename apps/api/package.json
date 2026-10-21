@@ -24,7 +24,8 @@
     "fastify": "^5.2.1",
     "jose": "^5.10.0",
     "pg": "^8.13.1",
-    "@fastify/rate-limit": "^10.2.1"
+    "@fastify/rate-limit": "^10.2.1",
+    "@videocraft/intent-analysis": "0.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
