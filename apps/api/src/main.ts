@@ -1,3 +1,4 @@
+import rateLimit from "@fastify/rate-limit";
 import { Queue } from "bullmq";
 import { createPool, PostgresAssetRepository, PostgresProjectRepository, PostgresProposalStore, PostgresRevisionRepository, PostgresTranscriptStore, PostgresRenderJobRepository, type Database } from "@videocraft/persistence";
 import { BullMqRenderQueue } from "@videocraft/jobs";
@@ -50,6 +51,7 @@ const server = buildServer({
   authenticate: authenticator,
   authorize: authorizer,
 });
+server.register(rateLimit, { max: 120, timeWindow: "1 minute", skipOnError: true });
 registerRenderRoutes(server, { jobs: renderJobs, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
 registerUploadRoutes(server, {
   assets, storage, authorize: authorizer, authenticate: (request) => authenticator.authenticate(request),
