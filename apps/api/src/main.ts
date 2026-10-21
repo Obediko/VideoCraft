@@ -3,7 +3,7 @@ import rateLimit from "@fastify/rate-limit";
 import { Queue } from "bullmq";
 import { Redis } from "ioredis";
 import type { FastifyRequest } from "fastify";
-import { createPool, PostgresAssetRepository, PostgresProjectMemberRepository, PostgresProjectRepository, PostgresProposalStore, PostgresRevisionRepository, PostgresTranscriptStore, PostgresRenderJobRepository, PostgresFeedbackRepository, PostgresAuditRepository, type Database } from "@videocraft/persistence";
+import { createPool, PostgresAssetRepository, PostgresProjectMemberRepository, PostgresProjectRepository, PostgresProposalStore, PostgresSceneRepository, PostgresRevisionRepository, PostgresTranscriptStore, PostgresRenderJobRepository, PostgresFeedbackRepository, PostgresAuditRepository, type Database } from "@videocraft/persistence";
 import { BullMqRenderQueue } from "@videocraft/jobs";
 import { ProjectService } from "@videocraft/application";
 import { FasterWhisperWorker } from "@videocraft/transcription";
@@ -76,6 +76,7 @@ const db = pool as unknown as Database;
 const projects = new PostgresProjectRepository(db);
 const assets = new PostgresAssetRepository(db);
 const members = new PostgresProjectMemberRepository(db);
+const scenes = new PostgresSceneRepository(db);
 const mediaRoot = required("MEDIA_ROOT");
 const storage = createStorage();
 const malwareScanner = createMalwareScanner();
@@ -108,6 +109,7 @@ const intentAnalyzer = process.env.INTENT_PROVIDER_API_KEY
 const server = buildServer({
   projects, assets, members, storage, revisions,
   ...(sceneDetector ? { sceneDetector } : {}),
+  scenes,
   transcripts: new PostgresTranscriptStore(db),
   proposals: new PostgresProposalStore(db),
   strategies: new StaticStrategyRegistry(),
