@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
-import type { Asset, ProjectRevision, Timeline, UUID } from "@videocraft/domain";
+import type { Asset, ProjectRevision, RenderSettings, RendererPort, Timeline, UUID } from "@videocraft/domain";
 import { ProjectService, type Clock, type IdFactory, type ProjectRepository, type AssetRepository, type RevisionRepository } from "@videocraft/application";
 
 export interface Principal { userId: UUID; }
@@ -8,7 +8,7 @@ export interface Authenticator { authenticate(request: FastifyRequest): Promise<
 export interface ProjectAuthorizer { canAccess(principal: Principal, projectId: UUID, minimumRole: "viewer" | "editor"): Promise<boolean>; }
 export interface ApiDependencies {
   projects: ProjectRepository; assets: AssetRepository; revisions: RevisionRepository;
-  authenticate: Authenticator; authorize: ProjectAuthorizer; clock?: Clock; ids?: IdFactory;
+  authenticate: Authenticator; authorize: ProjectAuthorizer; renderer?: RendererPort; clock?: Clock; ids?: IdFactory;
 }
 
 export function buildServer(dependencies: ApiDependencies): FastifyInstance {
@@ -82,6 +82,39 @@ export function buildServer(dependencies: ApiDependencies): FastifyInstance {
     }
   });
 
+  server.post("/v1/projects/:projectId/renders", async (request, reply) => {
+    const principal = await authenticate(dependencies.authenticate, request, reply);
+    if (!principal) return;
+    if (!dependencies.renderer) return sendError(reply, 503, "renderer_unavailable", "Render service is not configured");
+
+    const { projectId } = asRecord(request.params);
+    if (typeof projectId !== "string") return sendError(reply, 400, "invalid_request", "projectId is required");
+    if (!(await dependencies.authorize.canAccess(principal, projectId, "editor"))) return sendError(reply, 403, "forbidden", "Project access denied");
+
+    const body = asRecord(request.body);
+    if (!Number.isSafeInteger(body.revision) || (body.revision as number) < 1) {
+      return sendError(reply, 400, "invalid_request", "revision must be a positive integer");
+    }
+    if (!isRenderSettings(body.settings) || typeof body.idempotencyKey !== "string" || !/^[a-zA-Z0-9._:-]{8,200}$/.test(body.idempotencyKey)) {
+      return sendError(reply, 400, "invalid_request", "settings and a valid idempotencyKey are required");
+    }
+
+    const [project, revision] = await Promise.all([
+      dependencies.projects.get(projectId),
+      dependencies.revisions.get(projectId, body.revision as number),
+    ]);
+    if (!project || !revision) return sendError(reply, 404, "not_found", "Project revision not found");
+
+    try {
+      const job = await dependencies.renderer.enqueue({
+        project, revision, settings: body.settings, idempotencyKey: body.idempotencyKey,
+      });
+      return reply.code(202).send({ job });
+    } catch (error) {
+      return sendError(reply, 503, "render_unavailable", messageOf(error));
+    }
+  });
+
   return server;
 }
 
@@ -99,8 +132,7 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isMetadata(value: unknown): value is Record<string, string | number | boolean> {
-  return isJsonObject(value) && Object.values(value).every((entry) =>
-    typeof entry === "string" || typeof entry === "number" || typeof entry === "boolean");
+  return isJsonObject(value) && Object.values(value).every((entry) => typeof entry === "string" || typeof entry === "number" || typeof entry === "boolean");
 }
 function isMediaKind(value: unknown): value is Asset["kind"] {
   return value === "video" || value === "audio" || value === "image" || value === "caption";
@@ -108,4 +140,14 @@ function isMediaKind(value: unknown): value is Asset["kind"] {
 function isTimeline(value: unknown): value is Timeline {
   if (!isJsonObject(value) || typeof value.durationUs !== "number" || !Array.isArray(value.tracks)) return false;
   return value.tracks.every((track) => isJsonObject(track) && typeof track.id === "string" && typeof track.kind === "string" && Array.isArray(track.clips));
+}
+function isRenderSettings(value: unknown): value is RenderSettings {
+  if (!isJsonObject(value)) return false;
+  const formats = value.format === "mp4" || value.format === "webm";
+  const codecs = (value.videoCodec === "libx264" || value.videoCodec === "libvpx-vp9") &&
+    (value.audioCodec === "aac" || value.audioCodec === "libopus");
+  return formats && codecs &&
+    Number.isInteger(value.width) && Number.isInteger(value.height) &&
+    Number.isInteger(value.frameRate) && (value.width as number) >= 2 &&
+    (value.height as number) >= 2 && (value.frameRate as number) > 0 && (value.frameRate as number) <= 120;
 }
