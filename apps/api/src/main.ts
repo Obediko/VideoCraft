@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import rateLimit from "@fastify/rate-limit";
 import { Queue } from "bullmq";
 import type { FastifyRequest } from "fastify";
-import { createPool, PostgresAssetRepository, PostgresProjectRepository, PostgresProposalStore, PostgresRevisionRepository, PostgresTranscriptStore, PostgresRenderJobRepository, PostgresFeedbackRepository, PostgresAuditRepository, type Database } from "@videocraft/persistence";
+import { createPool, PostgresAssetRepository, PostgresProjectMemberRepository, PostgresProjectRepository, PostgresProposalStore, PostgresRevisionRepository, PostgresTranscriptStore, PostgresRenderJobRepository, PostgresFeedbackRepository, PostgresAuditRepository, type Database } from "@videocraft/persistence";
 import { BullMqRenderQueue } from "@videocraft/jobs";
 import { ProjectService } from "@videocraft/application";
 import { FasterWhisperWorker } from "@videocraft/transcription";
@@ -62,6 +62,7 @@ const pool = createPool(required("DATABASE_URL"));
 const db = pool as unknown as Database;
 const projects = new PostgresProjectRepository(db);
 const assets = new PostgresAssetRepository(db);
+const members = new PostgresProjectMemberRepository(db);
 const mediaRoot = required("MEDIA_ROOT");
 const storage = createStorage();
 const malwareScanner = createMalwareScanner();
@@ -89,7 +90,7 @@ const intentAnalyzer = process.env.INTENT_PROVIDER_API_KEY
   ? new OpenAiCompatibleIntentAnalyzer({ endpoint: process.env.INTENT_PROVIDER_URL ?? "https://api.openai.com/v1", apiKey: process.env.INTENT_PROVIDER_API_KEY, model: process.env.INTENT_PROVIDER_MODEL ?? "gpt-4o-mini" })
   : new RuleBasedIntentAnalyzer();
 const server = buildServer({
-  projects, assets, storage, revisions,
+  projects, assets, members, storage, revisions,
   transcripts: new PostgresTranscriptStore(db),
   proposals: new PostgresProposalStore(db),
   strategies: new StaticStrategyRegistry(),
