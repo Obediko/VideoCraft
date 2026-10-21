@@ -24,6 +24,7 @@
 - [x] Add faster-whisper worker protocol and normalized transcript persistence.
 - [x] Add non-destructive proposal preview with evidence and strategy version.
 - [x] Add proposal persistence and accept/reject decisions as revision events.
+- [x] Add durable feedback events for evaluation and future supervised improvement.
 - [x] Add deterministic intent and audience extraction with structured outputs and evidence.
 - [ ] Add a model-backed intent provider after provider credentials and evaluation fixtures are available.
 - [ ] Add fixtures and offline strategy evaluation.
