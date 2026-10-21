@@ -6,7 +6,7 @@ The API requires PostgreSQL, Redis, DATABASE_URL, REDIS_URL, MEDIA_ROOT, AUTH_JW
 
 The API listens on 0.0.0.0 only inside its deployment network. Put TLS termination, request filtering, and a trusted identity provider in front of it. Local completed renders are served through five-minute HMAC-signed URLs; the signing secret must be at least 32 random characters.
 
-The render worker requires DATABASE_URL and REDIS_URL plus the configured object-storage settings. It stages referenced inputs into an isolated RENDER_WORK_ROOT (falling back to RENDER_ROOT), runs constrained FFmpeg work, and uploads the output through the same storage adapter used by the API. It persists lifecycle progress and output checksums, and can abort active FFmpeg work when a queued job is cancelled.
+The scene-detection worker is configured with SCENE_WORKER_PATH and runs as a bounded child process. Scene inputs are staged through the configured object-storage adapter, so S3 deployments do not expose object keys as filesystem paths.\n\nThe render worker requires DATABASE_URL and REDIS_URL plus the configured object-storage settings. It stages referenced inputs into an isolated RENDER_WORK_ROOT (falling back to RENDER_ROOT), runs constrained FFmpeg work, and uploads the output through the same storage adapter used by the API. It persists lifecycle progress and output checksums, and can abort active FFmpeg work when a queued job is cancelled.
 
 ## Storage providers
 
