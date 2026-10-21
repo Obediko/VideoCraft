@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type KeyboardEvent } from "react";
 
 type TimelineClip = {
   id: string;
@@ -29,7 +29,7 @@ export function App() {
   const [renderJobId, setRenderJobId] = useState("");
   const [renderJobStatus, setRenderJobStatus] = useState("");
   const [renderUrl, setRenderUrl] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(false);\n  const [selectedClipId, setSelectedClipId] = useState("");
 
   const videoTrack = useMemo(() => timeline.tracks.find((track) => track.kind === "video"), [timeline]);
 
@@ -89,13 +89,43 @@ export function App() {
       timelineStartUs: 0,
       timelineEndUs: 10_000_000,
     };
-    setTimeline((current) => ({
+    setSelectedClipId(clip.id);\n    setTimeline((current) => ({
       ...current,
       tracks: current.tracks.some((track) => track.kind === "video")
         ? current.tracks.map((track) => track.kind === "video" ? { ...track, clips: [...track.clips, clip] } : track)
         : [...current.tracks, { id: "video-1", kind: "video", clips: [clip] }],
     }));
     setStatus("Clip added to the non-destructive timeline");
+  }
+
+  function nudgeSelectedClip(deltaUs: number) {
+    if (!selectedClipId) { setStatus("Select a clip first"); return; }
+    setTimeline((current) => ({
+      ...current,
+      tracks: current.tracks.map((track) => ({
+        ...track,
+        clips: track.clips.map((clip) => {
+          if (clip.id !== selectedClipId) return clip;
+          const duration = clip.timelineEndUs - clip.timelineStartUs;
+          const nextStart = Math.max(0, Math.min(current.durationUs - duration, clip.timelineStartUs + deltaUs));
+          return { ...clip, timelineStartUs: nextStart, timelineEndUs: nextStart + duration };
+        }),
+      })),
+    }));
+    setStatus(deltaUs < 0 ? "Clip moved earlier" : "Clip moved later");
+  }
+
+  function removeSelectedClip() {
+    if (!selectedClipId) { setStatus("Select a clip first"); return; }
+    setTimeline((current) => ({ ...current, tracks: current.tracks.map((track) => ({ ...track, clips: track.clips.filter((clip) => clip.id !== selectedClipId) })) }));
+    setSelectedClipId("");
+    setStatus("Clip removed from the non-destructive timeline");
+  }
+
+  function handleClipKeyDown(event: KeyboardEvent<HTMLButtonElement>, clip: TimelineClip) {
+    if (event.key === "ArrowLeft") { event.preventDefault(); setSelectedClipId(clip.id); nudgeSelectedClip(-500_000); }
+    if (event.key === "ArrowRight") { event.preventDefault(); setSelectedClipId(clip.id); nudgeSelectedClip(500_000); }
+    if (event.key === "Delete" || event.key === "Backspace") { event.preventDefault(); setSelectedClipId(clip.id); removeSelectedClip(); }
   }
 
   async function saveRevision() {
@@ -165,7 +195,7 @@ export function App() {
   return <div className="app-shell">
     <header className="topbar">
       <div><span className="eyebrow">AI VIDEO WORKSPACE</span><h1>VideoCraft</h1></div>
-      <div className="status-pill"><span className="status-dot" />{status}</div>
+      <div className="status-pill" role="status" aria-live="polite"><span className="status-dot" />{status}</div>
     </header>
     <main className="workspace">
       <aside className="sidebar">
@@ -196,7 +226,7 @@ export function App() {
           <div className="ruler"><span>00:00</span><span>00:10</span><span>00:20</span><span>00:30</span></div>
           <div className="track-list">
             {timeline.tracks.length === 0 && <div className="empty-state">Your non-destructive timeline is empty. Add a registered asset to begin.</div>}
-            {timeline.tracks.map((track) => <div className="track" key={track.id}><div className="track-label">{track.kind}</div><div className="track-lane">{track.clips.map((clip) => <div className="clip" key={clip.id} style={{ width: Math.max(16, ((clip.timelineEndUs - clip.timelineStartUs) / timeline.durationUs) * 100) + "%" }}><strong>{clip.assetId.slice(0, 12)}</strong><small>{formatSeconds(clip.sourceEndUs - clip.sourceStartUs)}</small></div>)}</div></div>)}
+            {timeline.tracks.map((track) => <div className="track" key={track.id}><div className="track-label">{track.kind}</div><div className="track-lane">{track.clips.map((clip) => <button type="button" className={"clip" + (selectedClipId === clip.id ? " selected" : "")} key={clip.id} style={{ width: Math.max(16, ((clip.timelineEndUs - clip.timelineStartUs) / timeline.durationUs) * 100) + "%" }} aria-label={"Clip " + clip.assetId.slice(0, 12) + ", " + formatSeconds(clip.sourceEndUs - clip.sourceStartUs)} aria-pressed={selectedClipId === clip.id} onClick={() => setSelectedClipId(clip.id)} onKeyDown={(event) => handleClipKeyDown(event, clip)}><strong>{clip.assetId.slice(0, 12)}</strong><small>{formatSeconds(clip.sourceEndUs - clip.sourceStartUs)}</small></button>)}</div></div>)}
           </div>
         </div>
         <div className="lower-grid">
