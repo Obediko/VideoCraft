@@ -108,6 +108,22 @@ export function buildServer(dependencies: ApiDependencies): FastifyInstance {
     return { assets: await dependencies.assets.listForProject(projectId) };
   });
 
+  server.patch("/v1/projects/:projectId", async (request, reply) => {
+    const principal = await authenticate(dependencies.authenticate, request, reply);
+    if (!principal) return;
+    const { projectId } = asRecord(request.params);
+    if (typeof projectId !== "string") return sendError(reply, 400, "invalid_request", "projectId is required");
+    if (!(await dependencies.authorize.canAccess(principal, projectId, "editor"))) return sendError(reply, 403, "forbidden", "Project access denied");
+    const body = asRecord(request.body);
+    if (typeof body.name !== "string") return sendError(reply, 400, "invalid_request", "name is required");
+    try {
+      const project = await projectService.renameProject(projectId, body.name);
+      return { project };
+    } catch (error) {
+      return sendError(reply, 400, "invalid_request", messageOf(error));
+    }
+  });
+
   server.post("/v1/projects", async (request, reply) => {
     const principal = await authenticate(dependencies.authenticate, request, reply);
     if (!principal) return;
