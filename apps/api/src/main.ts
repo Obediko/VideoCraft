@@ -9,6 +9,7 @@ import { ProjectService } from "@videocraft/application";
 import { FasterWhisperWorker } from "@videocraft/transcription";
 import { LocalObjectStorage, S3ObjectStorage, type ObjectStorage } from "@videocraft/storage";
 import { StaticStrategyRegistry } from "@videocraft/strategies";
+import { PySceneDetectWorker } from "@videocraft/scene-detection";
 import { OpenAiCompatibleIntentAnalyzer, RuleBasedIntentAnalyzer } from "@videocraft/intent-analysis";
 import { ClamAvScanner, EnvironmentSecretProvider, loadSecretEnvironment, requireSecret, type MalwareScanner } from "@videocraft/security";
 import { configureTracing, MetricsRegistry } from "@videocraft/observability";
@@ -78,6 +79,7 @@ const members = new PostgresProjectMemberRepository(db);
 const mediaRoot = required("MEDIA_ROOT");
 const storage = createStorage();
 const malwareScanner = createMalwareScanner();
+const sceneDetector = process.env.SCENE_WORKER_PATH ? new PySceneDetectWorker({ workerPath: process.env.SCENE_WORKER_PATH, storage, ...(process.env.SCENE_PYTHON ? { pythonCommand: process.env.SCENE_PYTHON } : {}) }) : undefined;
 const metrics = new MetricsRegistry();
 const redisOptions = redisConnection(required("REDIS_URL"));
 const renderQueue = new Queue("videocraft-render", { connection: redisOptions });
@@ -105,6 +107,7 @@ const intentAnalyzer = process.env.INTENT_PROVIDER_API_KEY
   : new RuleBasedIntentAnalyzer();
 const server = buildServer({
   projects, assets, members, storage, revisions,
+  ...(sceneDetector ? { sceneDetector } : {}),
   transcripts: new PostgresTranscriptStore(db),
   proposals: new PostgresProposalStore(db),
   strategies: new StaticStrategyRegistry(),
