@@ -4,6 +4,7 @@ import type { AssetRepository, ProjectMember, ProjectMemberRepository, ProjectRe
 
 export interface Database {
   query<T = Record<string, unknown>>(text: string, values?: readonly unknown[]): Promise<{ rows: T[] }>;
+  transaction?<T>(work: (database: Database) => Promise<T>): Promise<T>;
 }
 export interface TranscriptStore {
   listForAsset(assetId: UUID): Promise<TranscriptSegment[]>;
@@ -48,14 +49,20 @@ export class PostgresSceneRepository implements SceneRepository {
     return result.rows.map((row) => ({ id: row.id, assetId: row.asset_id, startUs: Number(row.start_us), endUs: Number(row.end_us), createdAt: row.created_at }));
   }
   async replaceForAsset(assetId: UUID, scenes: SceneRecord[]): Promise<void> {
-    await this.db.query("DELETE FROM scenes WHERE asset_id = $1", [assetId]);
-    for (const scene of scenes) {
-      if (scene.assetId !== assetId || scene.endUs <= scene.startUs) throw new Error("Invalid scene record");
-      await this.db.query(
-        "INSERT INTO scenes (id, asset_id, start_us, end_us, created_at) VALUES ($1, $2, $3, $4, $5)",
-        [scene.id, assetId, scene.startUs, scene.endUs, scene.createdAt],
-      );
-    }
+    const replace = async (database: Database): Promise<void> => {
+      for (const scene of scenes) {
+        if (scene.assetId !== assetId || scene.endUs <= scene.startUs) throw new Error("Invalid scene record");
+      }
+      await database.query("DELETE FROM scenes WHERE asset_id = $1", [assetId]);
+      for (const scene of scenes) {
+        await database.query(
+          "INSERT INTO scenes (id, asset_id, start_us, end_us, created_at) VALUES ($1, $2, $3, $4, $5)",
+          [scene.id, assetId, scene.startUs, scene.endUs, scene.createdAt],
+        );
+      }
+    };
+    if (this.db.transaction) return this.db.transaction(replace);
+    return replace(this.db);
   }
 }
 
