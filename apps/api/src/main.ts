@@ -30,6 +30,15 @@ function requiredSecret(name: string): string {
   if (value.length < 32) throw new Error(name + " must be at least 32 characters");
   return value;
 }
+function boundedInteger(name: string, fallback: number, minimum: number, maximum: number): number {
+  const value = process.env[name];
+  if (value === undefined || value === "") return fallback;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new Error(name + " must be an integer between " + minimum + " and " + maximum);
+  }
+  return parsed;
+}
 function rateLimitKey(request: FastifyRequest): string {
   const authorization = request.headers.authorization;
   return authorization?.startsWith("Bearer ")
@@ -39,7 +48,7 @@ function rateLimitKey(request: FastifyRequest): string {
 function redisConnection(value: string) {
   const url = new URL(value);
   if (url.protocol !== "redis:" && url.protocol !== "rediss:") throw new Error("REDIS_URL must use redis:// or rediss://");
-  return { host: url.hostname, port: Number(url.port || "6379"), ...(url.username ? { username: decodeURIComponent(url.username) } : {}), ...(url.password ? { password: decodeURIComponent(url.password) } : {}), ...(url.protocol === "rediss:" ? { tls: {} } : {}) };
+  return { host: url.hostname, port: Number(url.port || "6379"), connectTimeout: boundedInteger("REDIS_CONNECT_TIMEOUT_MS", 5_000, 100, 60_000), ...(url.username ? { username: decodeURIComponent(url.username) } : {}), ...(url.password ? { password: decodeURIComponent(url.password) } : {}), ...(url.protocol === "rediss:" ? { tls: {} } : {}) };
 }
 function createStorage(): ObjectStorage {
   if ((process.env.OBJECT_STORAGE_PROVIDER ?? "local") === "s3") {
@@ -60,7 +69,12 @@ function createMalwareScanner(): MalwareScanner | undefined {
 }
 
 validateProductionConfiguration(process.env);
-const pool = createPool(required("DATABASE_URL"));
+const pool = createPool({
+  connectionString: required("DATABASE_URL"),
+  max: boundedInteger("DB_POOL_MAX", 20, 1, 100),
+  connectionTimeoutMillis: boundedInteger("DB_CONNECTION_TIMEOUT_MS", 5_000, 100, 60_000),
+  idleTimeoutMillis: boundedInteger("DB_IDLE_TIMEOUT_MS", 30_000, 1_000, 300_000),
+});
 const db = pool as unknown as Database;
 const projects = new PostgresProjectRepository(db);
 const assets = new PostgresAssetRepository(db);
