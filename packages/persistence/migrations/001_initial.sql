@@ -71,7 +71,7 @@ CREATE INDEX IF NOT EXISTS proposals_project_idx ON editing_proposals(project_id
 
 CREATE TABLE IF NOT EXISTS render_jobs (
   id TEXT PRIMARY KEY,
-  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   revision INTEGER NOT NULL,
   settings JSONB NOT NULL,
   idempotency_key TEXT NOT NULL UNIQUE,
