@@ -57,3 +57,6 @@ export function safeObjectPath(root: string, key: string): string {
   if (basename(candidate).startsWith(".") || candidate.endsWith(".uploading")) throw new Error("Reserved object key");
   return candidate;
 }
+
+export { S3ObjectStorage } from "./s3.js";
+export type { S3ObjectStorageOptions } from "./s3.js";
