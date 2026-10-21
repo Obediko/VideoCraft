@@ -12,14 +12,14 @@ export interface WhisperWorkerOptions {
 }
 
 export class FasterWhisperWorker implements TranscriptionPort {
-  private readonly options: Required<WhisperWorkerOptions>;
+  private readonly options: Required<Omit<WhisperWorkerOptions, "language">> & Pick<WhisperWorkerOptions, "language">;
 
   constructor(options: WhisperWorkerOptions) {
     this.options = {
       pythonCommand: options.pythonCommand ?? "python",
       workerPath: options.workerPath,
       mediaRoot: resolve(options.mediaRoot),
-      language: options.language,
+      ...(options.language === undefined ? {} : { language: options.language }),
       timeoutMs: options.timeoutMs ?? 15 * 60 * 1000,
     };
   }
