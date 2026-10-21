@@ -11,7 +11,8 @@
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@videocraft/domain": "0.1.0"
+    "@videocraft/domain": "0.1.0",
+    "@videocraft/storage": "0.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
