@@ -129,3 +129,21 @@ test("authenticated users can list and retrieve their projects", async () => {
   assert.equal(retrieved.json().project.id, projectId);
   await server.close();
 });
+
+
+test("authorized users can retrieve a saved revision", async () => {
+  const server = buildServer(dependencies(async () => ({ userId: "user-1" })));
+  const created = await server.inject({ method: "POST", url: "/v1/projects", payload: { name: "Revision project" } });
+  const projectId = created.json().project.id;
+  const saved = await server.inject({
+    method: "POST",
+    url: "/v1/projects/" + projectId + "/revisions",
+    payload: { timeline: { durationUs: 100, tracks: [] } }
+  });
+  assert.equal(saved.statusCode, 201);
+  const response = await server.inject({ method: "GET", url: "/v1/projects/" + projectId + "/revisions/1" });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().revision.projectId, projectId);
+  assert.equal(response.json().revision.revision, 1);
+  await server.close();
+});
