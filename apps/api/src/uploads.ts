@@ -44,8 +44,8 @@ export function registerUploadRoutes(server: FastifyInstance, dependencies: Uplo
       if (dependencies.scanner) {
         let scan;
         try { scan = await dependencies.scanner.scan(temporaryPath); }
-        catch (error) { return error(reply, 503, "malware_scanner_unavailable", error instanceof Error ? error.message : "Malware scanner unavailable"); }
-        if (!scan.clean) return errorResponse(reply, 422, "malware_detected", "The uploaded file was rejected by malware scanning");
+        catch (caught) { return error(reply, 503, "malware_scanner_unavailable", caught instanceof Error ? caught.message : "Malware scanner unavailable"); }
+        if (!scan.clean) return error(reply, 422, "malware_detected", "The uploaded file was rejected by malware scanning");
       }
       const stored = await dependencies.storage.putFile(temporaryPath, storageKey);
       const asset: Asset = {
