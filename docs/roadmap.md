@@ -22,7 +22,7 @@
 - [x] Add provider-neutral object listing and a bounded protected-object cleanup primitive.
 - [x] Add a PostgreSQL-protected retention worker with dry-run default and bounded deletion.
 - [x] Add an emulator-backed S3-compatible provider contract test in CI.
-- [ ] Add production credential/retention policy and external-provider integration tests.
+- [x] Add a dry-run-first, bounded retention worker with protected-key audit records and opt-in non-overlapping scheduling.\n- [ ] Add production credential policy and external-provider integration tests.
 
 ## Editing intelligence - in progress
 
@@ -64,4 +64,4 @@
 - [x] Add principal-keyed global rate limits and tighter intent/upload route budgets.
 - [x] Add owner-controlled project member management with viewer/editor roles and non-owner denial tests.\n- [ ] Add complete tenant isolation audits and provider quota enforcement.
 - [x] Add bounded request metrics and Prometheus-compatible export.
-- [ ] Add distributed tracing, retention, backups, and secret management.
+- [ ] Add distributed tracing, backup verification, and secret management.
