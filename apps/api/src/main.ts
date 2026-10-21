@@ -9,6 +9,7 @@ import { LocalObjectStorage, S3ObjectStorage, type ObjectStorage } from "@videoc
 import { StaticStrategyRegistry } from "@videocraft/strategies";
 import { OpenAiCompatibleIntentAnalyzer, RuleBasedIntentAnalyzer } from "@videocraft/intent-analysis";
 import { ClamAvScanner, type MalwareScanner } from "@videocraft/security";
+import { MetricsRegistry } from "@videocraft/observability";
 import { buildServer } from "./server.js";
 import { registerUploadRoutes } from "./uploads.js";
 import { registerRenderRoutes } from "./render-routes.js";
@@ -58,6 +59,7 @@ const assets = new PostgresAssetRepository(db);
 const mediaRoot = required("MEDIA_ROOT");
 const storage = createStorage();
 const malwareScanner = createMalwareScanner();
+const metrics = new MetricsRegistry();
 const renderQueue = new Queue("videocraft-render", { connection: redisConnection(required("REDIS_URL")) });
 const transcriber = new FasterWhisperWorker({
   workerPath: required("WHISPER_WORKER_PATH"),
