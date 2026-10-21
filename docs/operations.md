@@ -19,7 +19,7 @@ Set CLAMAV_HOST and optionally CLAMAV_PORT to enable the ClamAV INSTREAM adapter
 ## Health endpoints
 
 - `GET /healthz` is a liveness check and does not require external dependencies.
-- `GET /readyz` is a readiness check. The production API verifies the database before reporting `{ "status": "ok" }`; dependency failures return HTTP 503 and identify the failed dependency without exposing connection details.
+- `GET /readyz` is a readiness check. The production API verifies PostgreSQL and Redis before reporting `{ "status": "ok" }`; dependency failures return HTTP 503 and identify the failed dependency without exposing connection details.
 - Readiness checks must remain fast and bounded. They must not perform migrations or mutate application data.
 
 ## Observability
