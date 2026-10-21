@@ -58,3 +58,19 @@ test("renames a project with the same validation as creation", async () => {
   assert.equal((await projects.get(project.id)).name, "After");
   await assert.rejects(() => app.renameProject(project.id, "   "), /required/);
 });
+
+
+test("rejects assets whose storage key belongs to another project", async () => {
+  const projects = new InMemoryProjectRepository();
+  const app = new ProjectService(projects, new InMemoryAssetRepository(), new InMemoryRevisionRepository(), ids, clock);
+  const project = await app.createProject({ ownerId: "owner-scope", name: "Scoped" });
+  await assert.rejects(() => app.addAsset({
+    id: "asset-cross-project",
+    projectId: project.id,
+    kind: "video",
+    storageKey: "projects/other-project/assets/source.media",
+    checksumSha256: "b".repeat(64),
+    metadata: {},
+    createdAt: clock.now()
+  }), /scoped to the project/);
+});
