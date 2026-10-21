@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { EnvironmentSecretProvider, loadSecretEnvironment, parseClamAvResponse, requireSecret } from "../dist/index.js";
+import { AwsSecretsManagerProvider, EnvironmentSecretProvider, loadSecretEnvironment, parseClamAvResponse, requireSecret } from "../dist/index.js";
 
 test("recognizes a clean ClamAV stream", () => {
   assert.deepEqual(parseClamAvResponse("stream: OK\n"), { clean: true });
@@ -30,4 +30,19 @@ test("environment secret loading preserves injected values", async () => {
 
 test("unknown secret providers fail closed", async () => {
   await assert.rejects(() => loadSecretEnvironment({ SECRET_PROVIDER: "unknown" }), /Unsupported SECRET_PROVIDER/);
+});
+
+
+test("AWS secrets-manager adapter parses a JSON secret object", async () => {
+  const provider = new AwsSecretsManagerProvider("videocraft/test", "us-east-1", {
+    async send() { return { SecretString: JSON.stringify({ INTENT_PROVIDER_API_KEY: "test-key", S3_BUCKET: "media" }) }; }
+  });
+  assert.deepEqual(await provider.load(), { INTENT_PROVIDER_API_KEY: "test-key", S3_BUCKET: "media" });
+});
+
+test("AWS secrets-manager adapter rejects non-object secret payloads", async () => {
+  const provider = new AwsSecretsManagerProvider("videocraft/test", "us-east-1", {
+    async send() { return { SecretString: JSON.stringify({ INVALID: 123 }) }; }
+  });
+  await assert.rejects(() => provider.load(), /only string values/);
 });
