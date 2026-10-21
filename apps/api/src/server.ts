@@ -3,7 +3,7 @@ import { stat } from "node:fs/promises";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { validateProposal } from "@videocraft/domain";
 import type { Asset, EditingProposal, ProjectRevision, RenderSettings, RendererPort, StrategyRegistry, TailoringProfile, Timeline, TimelineClip, TimelineOperation, TranscriptSegment, TranscriptionPort, UUID } from "@videocraft/domain";
-import { ProjectService, type Clock, type IdFactory, type ProjectRepository, type AssetRepository, type RevisionRepository } from "@videocraft/application";
+import { ProjectService, type Clock, type IdFactory, type ProjectMemberRepository, type ProjectRepository, type AssetRepository, type RevisionRepository } from "@videocraft/application";
 import type { ObjectStorage } from "@videocraft/storage";
 import { MetricsRegistry } from "@videocraft/observability";
 
@@ -24,7 +24,7 @@ export interface AuditWriter {
   append(event: { id: string; actorId?: string; projectId?: string; action: string; method: string; route: string; statusCode: number; requestId: string; metadata?: Record<string, string | number | boolean>; createdAt: string }): Promise<void>;
 }
 export interface ApiDependencies {
-  projects: ProjectRepository; assets: AssetRepository; revisions: RevisionRepository; storage?: ObjectStorage;
+  projects: ProjectRepository; assets: AssetRepository; revisions: RevisionRepository; members?: ProjectMemberRepository; storage?: ObjectStorage;
   authenticate: Authenticator; authorize: ProjectAuthorizer;
   renderer?: RendererPort; transcriber?: TranscriptionPort; transcripts?: TranscriptStore; strategies?: StrategyRegistry; proposals?: ProposalStore;
   clock?: Clock; ids?: IdFactory; audit?: AuditWriter; metrics?: MetricsRegistry; readiness?: ReadinessCheck[];
@@ -106,6 +106,52 @@ export function buildServer(dependencies: ApiDependencies): FastifyInstance {
     const project = await dependencies.projects.get(projectId);
     if (!project) return sendError(reply, 404, "not_found", "Project not found");
     return { assets: await dependencies.assets.listForProject(projectId) };
+  });
+
+  server.get("/v1/projects/:projectId/members", async (request, reply) => {
+    const principal = await authenticate(dependencies.authenticate, request, reply);
+    if (!principal) return;
+    if (!dependencies.members) return sendError(reply, 503, "members_unavailable", "Project member management is not configured");
+    const { projectId } = asRecord(request.params);
+    if (typeof projectId !== "string") return sendError(reply, 400, "invalid_request", "projectId is required");
+    if (!(await dependencies.authorize.canAccess(principal, projectId, "viewer"))) return sendError(reply, 403, "forbidden", "Project access denied");
+    const project = await dependencies.projects.get(projectId);
+    if (!project) return sendError(reply, 404, "not_found", "Project not found");
+    return { members: await dependencies.members.listForProject(projectId) };
+  });
+
+  server.put("/v1/projects/:projectId/members/:userId", async (request, reply) => {
+    const principal = await authenticate(dependencies.authenticate, request, reply);
+    if (!principal) return;
+    if (!dependencies.members) return sendError(reply, 503, "members_unavailable", "Project member management is not configured");
+    const params = asRecord(request.params);
+    const projectId = params.projectId;
+    const userId = params.userId;
+    if (typeof projectId !== "string" || typeof userId !== "string" || !userId.trim()) return sendError(reply, 400, "invalid_request", "projectId and userId are required");
+    const project = await dependencies.projects.get(projectId);
+    if (!project) return sendError(reply, 404, "not_found", "Project not found");
+    if (project.ownerId !== principal.userId) return sendError(reply, 403, "forbidden", "Only the project owner can manage members");
+    if (userId === project.ownerId) return sendError(reply, 400, "invalid_request", "The project owner is implicit and cannot be added as a member");
+    const body = asRecord(request.body);
+    if (body.role !== "editor" && body.role !== "viewer") return sendError(reply, 400, "invalid_request", "role must be editor or viewer");
+    const member = { projectId, userId, role: body.role, createdAt: clock.now() } as const;
+    await dependencies.members.upsert(member);
+    return reply.code(200).send({ member });
+  });
+
+  server.delete("/v1/projects/:projectId/members/:userId", async (request, reply) => {
+    const principal = await authenticate(dependencies.authenticate, request, reply);
+    if (!principal) return;
+    if (!dependencies.members) return sendError(reply, 503, "members_unavailable", "Project member management is not configured");
+    const params = asRecord(request.params);
+    const projectId = params.projectId;
+    const userId = params.userId;
+    if (typeof projectId !== "string" || typeof userId !== "string" || !userId.trim()) return sendError(reply, 400, "invalid_request", "projectId and userId are required");
+    const project = await dependencies.projects.get(projectId);
+    if (!project) return sendError(reply, 404, "not_found", "Project not found");
+    if (project.ownerId !== principal.userId) return sendError(reply, 403, "forbidden", "Only the project owner can manage members");
+    await dependencies.members.remove(projectId, userId);
+    return reply.code(204).send();
   });
 
   server.patch("/v1/projects/:projectId", async (request, reply) => {
