@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { buildServer } from "../dist/server.js";
 import { StaticStrategyRegistry } from "@videocraft/strategies";
-import { InMemoryAssetRepository, InMemoryProjectRepository, InMemoryRevisionRepository } from "@videocraft/application";
+import { InMemoryAssetRepository, InMemoryProjectMemberRepository, InMemoryProjectRepository, InMemoryRevisionRepository } from "@videocraft/application";
 import { MetricsRegistry } from "@videocraft/observability";
 
 function dependencies(authenticate, overrides = {}) {
@@ -11,6 +11,7 @@ function dependencies(authenticate, overrides = {}) {
     projects: new InMemoryProjectRepository(),
     assets: new InMemoryAssetRepository(),
     revisions: new InMemoryRevisionRepository(),
+    members: new InMemoryProjectMemberRepository(),
     authenticate: { authenticate },
     authorize: { canAccess: async () => true },
     strategies: new StaticStrategyRegistry(),
@@ -166,5 +167,40 @@ test("authorized users can list project assets", async () => {
   const response = await server.inject({ method: "GET", url: "/v1/projects/" + projectId + "/assets" });
   assert.equal(response.statusCode, 200);
   assert.equal(response.json().assets[0].id, "asset-1");
+  await server.close();
+});
+
+
+test("project owners can manage members and members can be listed", async () => {
+  const deps = dependencies(async () => ({ userId: "owner-1" }));
+  const server = buildServer(deps);
+  const created = await server.inject({ method: "POST", url: "/v1/projects", payload: { name: "Shared" } });
+  const projectId = created.json().project.id;
+  const added = await server.inject({
+    method: "PUT",
+    url: "/v1/projects/" + projectId + "/members/user-2",
+    payload: { role: "editor" }
+  });
+  assert.equal(added.statusCode, 200);
+  assert.equal(added.json().member.userId, "user-2");
+  const listed = await server.inject({ method: "GET", url: "/v1/projects/" + projectId + "/members" });
+  assert.equal(listed.statusCode, 200);
+  assert.deepEqual(listed.json().members.map((member) => member.userId), ["user-2"]);
+  const removed = await server.inject({ method: "DELETE", url: "/v1/projects/" + projectId + "/members/user-2" });
+  assert.equal(removed.statusCode, 204);
+  await server.close();
+});
+
+test("non-owners cannot manage project members", async () => {
+  const deps = dependencies(async () => ({ userId: "not-owner" }));
+  const server = buildServer(deps);
+  const created = await server.inject({ method: "POST", url: "/v1/projects", payload: { name: "Private" } });
+  const projectId = created.json().project.id;
+  const response = await server.inject({
+    method: "PUT",
+    url: "/v1/projects/" + projectId + "/members/user-2",
+    payload: { role: "viewer" }
+  });
+  assert.equal(response.statusCode, 403);
   await server.close();
 });
