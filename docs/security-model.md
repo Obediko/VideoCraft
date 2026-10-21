@@ -6,4 +6,6 @@ Project-scoped writes derive the project ID from the route and the user ID from 
 
 JSON requests are limited to one megabyte. Multipart uploads are separately bounded at two gigabytes, written to a temporary file, checksummed, and moved atomically into a project-scoped storage key before the asset record is created. Render playback uses five-minute HMAC-signed URLs so browser media elements do not receive bearer tokens.
 
-Production integration must still provide provider-native object storage, malware scanning, request IDs, structured audit events, CSRF protection where cookie authentication is used, per-user/provider rate limits, and database transactions around revision and transcript replacement. The current branch makes those requirements explicit without presenting local adapters as production infrastructure.
+Every API response can produce an append-only audit event containing the authenticated actor when available, project route parameter, action route, method, status code, request ID, and timestamp. Request bodies, authorization headers, and media contents are intentionally excluded. Audit persistence failures are logged and do not mutate the response already being sent.
+
+Production integration must still provide malware scanning, CSRF protection where cookie authentication is used, per-user/provider rate limits, and database transactions around revision and transcript replacement. The current branch makes those requirements explicit without presenting local adapters as production infrastructure.
