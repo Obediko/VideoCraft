@@ -32,7 +32,7 @@
 - [x] Add durable feedback events for evaluation and future supervised improvement.
 - [x] Add deterministic intent and audience extraction with structured outputs and evidence.
 - [x] Add an explicit OpenAI-compatible structured-output intent provider adapter.
-- [ ] Add provider credentials management and offline evaluation fixtures before enabling it by default.
+- [x] Add explicit provider mode, secure production credential validation, and offline evaluation fixtures before enabling external providers by default.
 - [x] Add fixtures and offline strategy evaluation metrics.
 
 ## Media pipeline - in progress
