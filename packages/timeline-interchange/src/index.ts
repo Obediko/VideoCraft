@@ -31,3 +31,6 @@ export function importOtio(document: unknown): Timeline {
   return { durationUs: document.durationUs, tracks };
 }
 function isObject(value: unknown): value is Record<string, any> { return typeof value === "object" && value !== null && !Array.isArray(value); }
+
+export { PythonOpenTimelineIOAdapter } from "./python.js";
+export type { PythonOpenTimelineIOOptions, PythonOtioRunner } from "./python.js";
