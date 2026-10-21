@@ -57,4 +57,5 @@
 - [x] Add ClamAV upload scanning before storage promotion.
 - [x] Add principal-keyed global rate limits and tighter intent/upload route budgets.
 - [ ] Add complete tenant isolation audits and provider quota enforcement.
-- [ ] Add observability, retention, backups, and secret management.
+- [x] Add bounded request metrics and Prometheus-compatible export.
+- [ ] Add distributed tracing, retention, backups, and secret management.
