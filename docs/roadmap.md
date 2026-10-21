@@ -54,5 +54,6 @@
 - [x] Add fail-closed JWT authentication and project authorization hooks.
 - [x] Add project-scoped authorization hooks and a global API rate limit.
 - [x] Add append-only audit event persistence and request lifecycle coverage.
-- [ ] Add complete tenant isolation audits, malware scanning, and per-user/provider rate limits.
+- [x] Add ClamAV upload scanning before storage promotion.
+- [ ] Add complete tenant isolation audits and per-user/provider rate limits.
 - [ ] Add observability, retention, backups, and secret management.
