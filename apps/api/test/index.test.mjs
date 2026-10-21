@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import { buildServer } from "../dist/server.js";
 import { StaticStrategyRegistry } from "@videocraft/strategies";
 import { InMemoryAssetRepository, InMemoryProjectRepository, InMemoryRevisionRepository } from "@videocraft/application";
+import { MetricsRegistry } from "@videocraft/observability";
 
-function dependencies(authenticate) {
+function dependencies(authenticate, overrides = {}) {
   const proposalValues = new Map();
   return {
     projects: new InMemoryProjectRepository(),
@@ -68,5 +69,30 @@ test("proposal preview persists and can be rejected", async () => {
   });
   assert.equal(decision.statusCode, 200);
   assert.equal(decision.json().proposal.status, "rejected");
+  await server.close();
+});
+
+
+test("readiness reports dependency failures without affecting liveness", async () => {
+  const server = buildServer(dependencies(async () => null, {
+    readiness: [{ name: "database", check: async () => false }]
+  }));
+  const live = await server.inject({ method: "GET", url: "/healthz" });
+  const ready = await server.inject({ method: "GET", url: "/readyz" });
+  assert.equal(live.statusCode, 200);
+  assert.equal(ready.statusCode, 503);
+  assert.deepEqual(ready.json(), { status: "not_ready", dependency: "database" });
+  await server.close();
+});
+
+test("metrics endpoint exposes bounded request counters", async () => {
+  const metrics = new MetricsRegistry();
+  const server = buildServer(dependencies(async () => null, { metrics }));
+  await server.inject({ method: "GET", url: "/healthz" });
+  const response = await server.inject({ method: "GET", url: "/metrics" });
+  assert.equal(response.statusCode, 200);
+  assert.match(response.headers["content-type"], /text\/plain/);
+  assert.match(response.body, /videocraft_http_requests_total/);
+  assert.match(response.body, /route="\/healthz"/);
   await server.close();
 });
