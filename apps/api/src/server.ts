@@ -18,11 +18,14 @@ export interface ProposalStore {
   get(id: UUID): Promise<EditingProposal | undefined>;
   setStatus(id: UUID, status: EditingProposal["status"]): Promise<void>;
 }
+export interface AuditWriter {
+  append(event: { id: string; actorId?: string; projectId?: string; action: string; method: string; route: string; statusCode: number; requestId: string; metadata?: Record<string, string | number | boolean>; createdAt: string }): Promise<void>;
+}
 export interface ApiDependencies {
   projects: ProjectRepository; assets: AssetRepository; revisions: RevisionRepository; storage?: ObjectStorage;
   authenticate: Authenticator; authorize: ProjectAuthorizer;
   renderer?: RendererPort; transcriber?: TranscriptionPort; transcripts?: TranscriptStore; strategies?: StrategyRegistry; proposals?: ProposalStore;
-  clock?: Clock; ids?: IdFactory;
+  clock?: Clock; ids?: IdFactory; audit?: AuditWriter;
 }
 
 export function buildServer(dependencies: ApiDependencies): FastifyInstance {
@@ -30,6 +33,27 @@ export function buildServer(dependencies: ApiDependencies): FastifyInstance {
   const clock = dependencies.clock ?? { now: () => new Date().toISOString() };
   const ids = dependencies.ids ?? { next: () => randomUUID() };
   const projectService = new ProjectService(dependencies.projects, dependencies.assets, dependencies.revisions, ids, clock);
+
+  server.addHook("onResponse", async (request, reply) => {
+    if (!dependencies.audit) return;
+    const params = asRecord(request.params);
+    const principal = (request as FastifyRequest & { videocraftPrincipal?: Principal }).videocraftPrincipal;
+    try {
+      await dependencies.audit.append({
+        id: ids.next(),
+        ...(principal ? { actorId: principal.userId } : {}),
+        ...(typeof params.projectId === "string" ? { projectId: params.projectId } : {}),
+        action: request.routeOptions.url ?? request.url.split("?")[0] ?? "unknown",
+        method: request.method,
+        route: request.routeOptions.url ?? request.url.split("?")[0] ?? "unknown",
+        statusCode: reply.statusCode,
+        requestId: request.id,
+        createdAt: clock.now(),
+      });
+    } catch (error) {
+      request.log.error({ error }, "audit event persistence failed");
+    }
+  });
 
   server.get("/healthz", async () => ({ status: "ok" }));
 
@@ -245,6 +269,7 @@ export function buildServer(dependencies: ApiDependencies): FastifyInstance {
 async function authenticate(authenticator: Authenticator, request: FastifyRequest, reply: FastifyReply): Promise<Principal | null> {
   const principal = await authenticator.authenticate(request);
   if (!principal) { sendError(reply, 401, "unauthorized", "Authentication required"); return null; }
+  (request as FastifyRequest & { videocraftPrincipal?: Principal }).videocraftPrincipal = principal;
   return principal;
 }
 function sendError(reply: FastifyReply, statusCode: number, code: string, message: string) { return reply.code(statusCode).send({ error: { code, message } }); }
