@@ -41,7 +41,7 @@ The API exposes a Prometheus-compatible `/metrics` endpoint with bounded request
 - Run transcription and rendering as separate worker processes with least-privilege filesystem access.
 - Configure OTEL_EXPORTER_OTLP_ENDPOINT for OTLP traces, keep connection pool limits/timeouts and health probes enabled, and add alerting before public exposure.
 - Restrict outbound provider access from workers and sandbox media processing.
-- Configure retention, deletion, backup verification, and malware signature update monitoring for source assets and derived artifacts.
+- Configure retention, deletion, and malware signature update monitoring for source assets and derived artifacts. Run `@videocraft/backup-verifier-worker` against a known PostgreSQL custom-format backup; it verifies the manifest size and SHA-256, runs `pg_restore --list` without a shell, and records an audit event. Schedule it independently and alert on non-zero exit.
 - Run the emulator-backed S3-compatible provider contract test in CI; add staging-bucket coverage before production cutover.
 
 The current branch contains a deployable vertical slice, but the operational controls above remain explicit gates for broad public exposure.
