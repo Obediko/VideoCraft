@@ -15,8 +15,8 @@
 - [x] Add database-backed repositories and initial migrations.
 - [x] Add authenticated API contracts for project, asset, revision, transcript, render, and proposal commands.
 - [ ] Add end-to-end tests against PostgreSQL and Redis.
-- [x] Add a secure local object-storage boundary.
-- [ ] Add production object storage and signed download URLs.
+- [x] Add a secure local object-storage boundary.\n- [x] Add bounded multipart asset ingestion with project-scoped keys and checksums.
+- [ ] Add production object storage and signed download URLs (local authenticated download remains the development adapter).
 
 ## Editing intelligence - in progress
 
@@ -30,14 +30,14 @@
 
 - [x] Add idempotent render jobs and a BullMQ queue.
 - [x] Add an FFmpeg adapter and constrained render worker.
-- [ ] Add durable progress/status persistence, cancellation, retries, and output manifests.
+- [x] Add durable progress/status persistence, cancellation state, retries through BullMQ, and output manifests.
 - [x] Add a typed PySceneDetect adapter and standalone scene worker.
 - [ ] Add OpenTimelineIO import/export after the internal timeline model stabilizes.
 
 ## Product surface - in progress
 
 - [x] Add a web editor surface for projects, revisions, tailoring, proposal review, and render submission.
-- [ ] Add multipart uploads, signed object-storage URLs, browser playback, and render-status polling.
+- [x] Add multipart uploads and render-status polling.\n- [ ] Add production signed object-storage URLs and browser playback.
 - [ ] Add keyboard-accessible timeline editing and browser end-to-end tests.
 
 ## Hardening - in progress
