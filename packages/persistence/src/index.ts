@@ -1,14 +1,14 @@
 import { Pool, type PoolConfig } from "pg";
-import type { Asset, Project, ProjectRevision, UUID } from "@videocraft/domain";
+import type { Asset, Project, ProjectRevision, TranscriptSegment, UUID } from "@videocraft/domain";
 import type { AssetRepository, ProjectRepository, RevisionRepository } from "@videocraft/application";
 
 export interface Database {
-  query<T = Record<string, unknown>>(
-    text: string,
-    values?: readonly unknown[],
-  ): Promise<{ rows: T[] }>;
+  query<T = Record<string, unknown>>(text: string, values?: readonly unknown[]): Promise<{ rows: T[] }>;
 }
-
+export interface TranscriptStore {
+  listForAsset(assetId: UUID): Promise<TranscriptSegment[]>;
+  replaceForAsset(assetId: UUID, segments: TranscriptSegment[]): Promise<void>;
+}
 export function createPool(config: PoolConfig | string): Pool {
   return new Pool(typeof config === "string" ? { connectionString: config } : config);
 }
@@ -16,9 +16,7 @@ export function createPool(config: PoolConfig | string): Pool {
 export class PostgresProjectRepository implements ProjectRepository {
   constructor(private readonly db: Database) {}
   async get(id: UUID): Promise<Project | undefined> {
-    const result = await this.db.query<ProjectRow>(
-      "SELECT id, owner_id, name, revision, created_at, updated_at FROM projects WHERE id = $1", [id],
-    );
+    const result = await this.db.query<ProjectRow>("SELECT id, owner_id, name, revision, created_at, updated_at FROM projects WHERE id = $1", [id]);
     const row = result.rows[0];
     return row ? mapProject(row) : undefined;
   }
@@ -34,10 +32,7 @@ export class PostgresProjectRepository implements ProjectRepository {
 export class PostgresAssetRepository implements AssetRepository {
   constructor(private readonly db: Database) {}
   async listForProject(projectId: UUID): Promise<Asset[]> {
-    const result = await this.db.query<AssetRow>(
-      "SELECT id, project_id, kind, storage_key, checksum_sha256, duration_us, metadata, created_at FROM assets WHERE project_id = $1 ORDER BY created_at, id",
-      [projectId],
-    );
+    const result = await this.db.query<AssetRow>("SELECT id, project_id, kind, storage_key, checksum_sha256, duration_us, metadata, created_at FROM assets WHERE project_id = $1 ORDER BY created_at, id", [projectId]);
     return result.rows.map(mapAsset);
   }
   async save(asset: Asset): Promise<void> {
@@ -51,10 +46,7 @@ export class PostgresAssetRepository implements AssetRepository {
 export class PostgresRevisionRepository implements RevisionRepository {
   constructor(private readonly db: Database) {}
   async get(projectId: UUID, revision: number): Promise<ProjectRevision | undefined> {
-    const result = await this.db.query<RevisionRow>(
-      "SELECT project_id, revision, timeline, tailoring, accepted_proposal_ids, created_at, created_by FROM project_revisions WHERE project_id = $1 AND revision = $2",
-      [projectId, revision],
-    );
+    const result = await this.db.query<RevisionRow>("SELECT project_id, revision, timeline, tailoring, accepted_proposal_ids, created_at, created_by FROM project_revisions WHERE project_id = $1 AND revision = $2", [projectId, revision]);
     const row = result.rows[0];
     return row ? mapRevision(row) : undefined;
   }
@@ -66,9 +58,35 @@ export class PostgresRevisionRepository implements RevisionRepository {
   }
 }
 
+export class PostgresTranscriptStore implements TranscriptStore {
+  constructor(private readonly db: Database) {}
+  async listForAsset(assetId: UUID): Promise<TranscriptSegment[]> {
+    const result = await this.db.query<TranscriptRow>(
+      "SELECT id, asset_id, start_us, end_us, text, words, provider, provider_version FROM transcript_segments WHERE asset_id = $1 ORDER BY start_us, id",
+      [assetId],
+    );
+    return result.rows.map((row) => ({
+      id: row.id, assetId: row.asset_id, startUs: Number(row.start_us), endUs: Number(row.end_us),
+      text: row.text, words: row.words, provider: row.provider,
+      ...(row.provider_version === null ? {} : { providerVersion: row.provider_version }),
+    }));
+  }
+  async replaceForAsset(assetId: UUID, segments: TranscriptSegment[]): Promise<void> {
+    await this.db.query("DELETE FROM transcript_segments WHERE asset_id = $1", [assetId]);
+    for (const segment of segments) {
+      if (segment.assetId !== assetId) throw new Error("Transcript asset mismatch");
+      await this.db.query(
+        "INSERT INTO transcript_segments (id, asset_id, start_us, end_us, text, words, provider, provider_version) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        [segment.id, assetId, segment.startUs, segment.endUs, segment.text, JSON.stringify(segment.words), segment.provider, segment.providerVersion ?? null],
+      );
+    }
+  }
+}
+
 type ProjectRow = { id: string; owner_id: string; name: string; revision: number; created_at: string; updated_at: string };
 type AssetRow = { id: string; project_id: string; kind: Asset["kind"]; storage_key: string; checksum_sha256: string; duration_us: string | null; metadata: Record<string, string | number | boolean>; created_at: string };
 type RevisionRow = { project_id: string; revision: number; timeline: ProjectRevision["timeline"]; tailoring: ProjectRevision["tailoring"] | null; accepted_proposal_ids: UUID[]; created_at: string; created_by: string };
+type TranscriptRow = { id: string; asset_id: string; start_us: string; end_us: string; text: string; words: TranscriptSegment["words"]; provider: string; provider_version: string | null };
 
 function mapProject(row: ProjectRow): Project {
   return { id: row.id, ownerId: row.owner_id, name: row.name, revision: row.revision, createdAt: row.created_at, updatedAt: row.updated_at };
