@@ -114,7 +114,7 @@ export function buildServer(dependencies: ApiDependencies): FastifyInstance {
     try {
       const revision = await projectService.saveRevision({
         projectId, createdBy: principal.userId, timeline: body.timeline,
-        ...(isJsonObject(body.tailoring) ? { tailoring: body.tailoring as ProjectRevision["tailoring"] } : {}),
+        ...(isJsonObject(body.tailoring) ? { tailoring: body.tailoring as NonNullable<ProjectRevision["tailoring"]> } : {}),
         acceptedProposalIds: Array.isArray(body.acceptedProposalIds) ? body.acceptedProposalIds.filter((value): value is string => typeof value === "string") : [],
       });
       return reply.code(201).send({ revision });
