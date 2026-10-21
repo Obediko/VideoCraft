@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { buildServer } from "../dist/server.js";
 import { StaticStrategyRegistry } from "@videocraft/strategies";
-import { InMemoryAssetRepository, InMemoryProjectMemberRepository, InMemoryProjectRepository, InMemoryRevisionRepository } from "@videocraft/application";
+import { InMemoryAssetRepository, InMemoryProjectMemberRepository, InMemoryProjectRepository, InMemoryRevisionRepository, InMemorySceneRepository } from "@videocraft/application";
 import { MetricsRegistry } from "@videocraft/observability";
 
 function dependencies(authenticate, overrides = {}) {
@@ -12,6 +12,7 @@ function dependencies(authenticate, overrides = {}) {
     assets: new InMemoryAssetRepository(),
     revisions: new InMemoryRevisionRepository(),
     members: new InMemoryProjectMemberRepository(),
+    scenes: new InMemorySceneRepository(),
     authenticate: { authenticate },
     authorize: { canAccess: async () => true },
     strategies: new StaticStrategyRegistry(),
@@ -229,6 +230,9 @@ test("authorized editors can request project-scoped scene detection", async () =
   });
   const response = await server.inject({ method: "POST", url: "/v1/projects/" + projectId + "/assets/asset-1/scenes" });
   assert.equal(response.statusCode, 201);
-  assert.deepEqual(response.json().scenes, [{ id: "scene-1", startUs: 0, endUs: 1_000_000 }]);
+  assert.deepEqual(response.json().scenes, [{ id: "scene-1", assetId: projectId, startUs: 0, endUs: 1_000_000, createdAt: "2026-10-21T00:00:00.000Z" }]);
+  const listed = await server.inject({ method: "GET", url: "/v1/projects/" + projectId + "/assets/asset-1/scenes" });
+  assert.equal(listed.statusCode, 200);
+  assert.equal(listed.json().scenes[0].id, "scene-1");
   await server.close();
 });
