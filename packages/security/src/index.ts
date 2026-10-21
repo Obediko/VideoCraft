@@ -1,3 +1,22 @@
+export interface SecretProvider {
+  get(name: string): string | undefined;
+}
+
+export class EnvironmentSecretProvider implements SecretProvider {
+  constructor(private readonly environment: Readonly<Record<string, string | undefined>>) {}
+  get(name: string): string | undefined {
+    const value = this.environment[name];
+    return value?.trim() || undefined;
+  }
+}
+
+export function requireSecret(provider: SecretProvider, name: string, minimumLength = 1): string {
+  const value = provider.get(name);
+  if (!value) throw new Error(name + " is required");
+  if (value.length < minimumLength) throw new Error(name + " must be at least " + minimumLength + " characters");
+  return value;
+}
+
 import { createReadStream } from "node:fs";
 import { connect } from "node:net";
 
