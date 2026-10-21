@@ -143,3 +143,5 @@ export { PostgresRenderJobRepository } from "./render-jobs.js";
 export { PostgresFeedbackRepository } from "./feedback.js";
 
 export { PostgresAuditRepository, type AuditEventRecord } from "./audit.js";
+
+export { migrateDatabase } from "./migration-runner.js";
