@@ -10,7 +10,7 @@ import { FasterWhisperWorker } from "@videocraft/transcription";
 import { LocalObjectStorage, S3ObjectStorage, type ObjectStorage } from "@videocraft/storage";
 import { StaticStrategyRegistry } from "@videocraft/strategies";
 import { OpenAiCompatibleIntentAnalyzer, RuleBasedIntentAnalyzer } from "@videocraft/intent-analysis";
-import { ClamAvScanner, EnvironmentSecretProvider, requireSecret, type MalwareScanner } from "@videocraft/security";
+import { ClamAvScanner, EnvironmentSecretProvider, loadSecretEnvironment, requireSecret, type MalwareScanner } from "@videocraft/security";
 import { MetricsRegistry } from "@videocraft/observability";
 import { buildServer } from "./server.js";
 import { registerUploadRoutes } from "./uploads.js";
@@ -21,7 +21,8 @@ import { registerTimelineRoutes } from "./timeline-routes.js";
 import { JwtAuthenticator, PostgresProjectAuthorizer } from "./auth.js";
 import { validateProductionConfiguration } from "./config.js";
 
-const secrets = new EnvironmentSecretProvider(process.env);
+const secretEnvironment = await loadSecretEnvironment(process.env);
+const secrets = new EnvironmentSecretProvider(secretEnvironment);
 function required(name: string): string { return requireSecret(secrets, name); }
 function requiredSecret(name: string): string { return requireSecret(secrets, name, 32); }
 function boundedInteger(name: string, fallback: number, minimum: number, maximum: number): number {
@@ -62,7 +63,7 @@ function createMalwareScanner(): MalwareScanner | undefined {
   return host ? new ClamAvScanner({ host, port: Number(process.env.CLAMAV_PORT ?? "3310") }) : undefined;
 }
 
-validateProductionConfiguration(process.env);
+validateProductionConfiguration(secretEnvironment);
 const pool = createPool({
   connectionString: required("DATABASE_URL"),
   max: boundedInteger("DB_POOL_MAX", 20, 1, 100),
