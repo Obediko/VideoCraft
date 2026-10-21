@@ -39,7 +39,7 @@
 - [x] Add a typed PySceneDetect adapter and standalone scene worker.
 - [x] Add a typed OTIO-shaped import/export adapter and authenticated API endpoints.
 - [x] Add a Python OpenTimelineIO provider bridge with a fail-closed worker protocol and mocked round-trip tests.
-- [ ] Validate against the real OpenTimelineIO package in a pinned worker image.
+- [x] Validate against the real OpenTimelineIO package in CI with a pinned worker dependency.
 
 ## Product surface - in progress
 
