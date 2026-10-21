@@ -40,9 +40,9 @@ function formatMetric(key: string, value: string): string {
   if (separator < 0) return key + " " + value;
   const name = key.slice(0, separator);
   const labels = JSON.parse(key.slice(separator + 1)) as Array<[string, string]>;
-  return name + "{" + labels.map(([label, content]) => label + "="" + escapeLabel(content) + """).join(",") + "} " + value;
+  return name + "{" + labels.map(([label, content]) => label + "=\"" + escapeLabel(content) + "\"").join(",") + "} " + value;
 }
 
 function escapeLabel(value: string): string {
-  return value.replaceAll("\\", "\\\\").replaceAll(""", "\\"").replaceAll("\n", "\\n");
+  return value.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"").replaceAll("\n", "\\n");
 }
