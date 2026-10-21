@@ -35,7 +35,7 @@ The API exposes a Prometheus-compatible `/metrics` endpoint with bounded request
 ## Production requirements
 
 - Use a managed PostgreSQL instance with encrypted connections and automated backups.
-- Store authentication, storage, scanner, and intent-provider secrets in a secret manager; never place them in repository files. The API consumes secrets through the `SecretProvider` boundary and currently ships an environment-backed adapter for platform-injected values. Set SECRET_PROVIDER=aws-secrets-manager and SECRET_MANAGER_SECRET_ID to load a JSON secret object from AWS Secrets Manager; the API merges it before validating production configuration. The AWS SDK uses its standard credential chain.
+- Store authentication, storage, scanner, and intent-provider secrets in a secret manager; never place them in repository files. The API consumes secrets through the `SecretProvider` boundary and currently ships an environment-backed adapter for platform-injected values. Set SECRET_PROVIDER=aws-secrets-manager and SECRET_MANAGER_SECRET_ID to load a JSON secret object from AWS Secrets Manager; the API merges it before validating production configuration and uses that merged environment for storage, scanner, worker, intent-provider, database, and signing configuration. The AWS SDK uses its standard credential chain.
 - Configure AUTH_ISSUER and AUTH_AUDIENCE in production; the API refuses unsafe production startup without them, S3-backed storage, and required malware scanning.
 - Run database migrations as a controlled release step.
 - Run transcription and rendering as separate worker processes with least-privilege filesystem access.
