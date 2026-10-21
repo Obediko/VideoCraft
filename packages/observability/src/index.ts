@@ -38,8 +38,10 @@ function metricKey(name: string, labels: MetricLabels): string {
 function formatMetric(key: string, value: string): string {
   const separator = key.indexOf("|");
   if (separator < 0) return key + " " + value;
-  const name = key.slice(0, separator);
-  const labels = JSON.parse(key.slice(separator + 1)) as Array<[string, string]>;
+  const labelsEnd = key.lastIndexOf("]");
+  if (labelsEnd < separator) throw new Error("Invalid metric labels");
+  const name = key.slice(0, separator) + key.slice(labelsEnd + 1);
+  const labels = JSON.parse(key.slice(separator + 1, labelsEnd + 1)) as Array<[string, string]>;
   return name + "{" + labels.map(([label, content]) => label + "=\"" + escapeLabel(content) + "\"").join(",") + "} " + value;
 }
 
