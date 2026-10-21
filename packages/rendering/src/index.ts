@@ -1,14 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import type { ProjectRevision, RenderSettings, TimelineClip, TimelineTrack } from "@videocraft/domain";
+import type { ProjectRevision, RenderSettings } from "@videocraft/domain";
 
-export interface AssetPathResolver {
-  resolve(assetId: string): Promise<string>;
-}
-
-export interface RenderPlan {
-  args: string[];
-  outputPath: string;
-}
+export interface AssetPathResolver { resolve(assetId: string): Promise<string>; }
+export interface RenderPlan { args: string[]; outputPath: string; }
 
 export class FfmpegCommandPlanner {
   constructor(private readonly assets: AssetPathResolver) {}
@@ -17,19 +11,15 @@ export class FfmpegCommandPlanner {
     if (!outputPath || outputPath.includes("\0")) throw new Error("Output path is required");
     const videoTrack = revision.timeline.tracks.find((track) => track.kind === "video");
     const audioTrack = revision.timeline.tracks.find((track) => track.kind === "audio");
-    if (!videoTrack || videoTrack.clips.length !== 1) {
-      throw new Error("Initial renderer supports exactly one video clip");
-    }
-    if (audioTrack && audioTrack.clips.length > 1) {
-      throw new Error("Initial renderer supports at most one audio clip");
-    }
+    if (!videoTrack || videoTrack.clips.length !== 1) throw new Error("Initial renderer supports exactly one video clip");
+    if (audioTrack && audioTrack.clips.length > 1) throw new Error("Initial renderer supports at most one audio clip");
 
     const video = videoTrack.clips[0];
     const videoPath = await this.assets.resolve(video.assetId);
     const args = [
       "-hide_banner", "-loglevel", "error", "-y",
       "-ss", seconds(video.sourceStartUs),
-      "-to", seconds(video.sourceEndUs),
+      "-t", seconds(video.sourceEndUs - video.sourceStartUs),
       "-i", videoPath,
     ];
 
@@ -55,7 +45,6 @@ export class FfmpegCommandPlanner {
 
 export class FfmpegProcess {
   constructor(private readonly executable = "ffmpeg") {}
-
   run(plan: RenderPlan, signal?: AbortSignal): Promise<void> {
     return new Promise((resolve, reject) => {
       const child: ChildProcessWithoutNullStreams = spawn(this.executable, plan.args, { shell: false, stdio: ["ignore", "pipe", "pipe"] });
