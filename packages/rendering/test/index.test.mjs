@@ -16,7 +16,7 @@ test("FFmpeg plan uses argv without a shell", async () => {
     createdAt: "",
     createdBy: "u"
   }, { format: "mp4", videoCodec: "libx264", audioCodec: "aac", width: 1281, height: 721, frameRate: 30 }, "/renders/output.mp4");
-  assert.equal(plan.args.includes("1280:720:force_original_aspect_ratio=decrease"), true);
+  assert.equal(plan.args.includes("scale=1280:720:force_original_aspect_ratio=decrease"), true);
   assert.equal(plan.args.includes("/media/source.mp4"), true);
 });
 
