@@ -93,7 +93,10 @@ const server = buildServer({
   authorize: authorizer,
   audit,
   metrics,
-  readiness: [{ name: "database", check: async () => { await db.query("SELECT 1"); return true; } }],
+  readiness: [
+    { name: "database", check: async () => { await db.query("SELECT 1"); return true; } },
+    { name: "redis", check: async () => { await renderQueue.getJobCounts(); return true; } },
+  ],
 });
 server.register(rateLimit, { max: 120, timeWindow: "1 minute", skipOnError: true, keyGenerator: rateLimitKey });
 registerTimelineRoutes(server, { projects, revisions, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, saveRevision: (input) => timelineService.saveRevision(input) });
