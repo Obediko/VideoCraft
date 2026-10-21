@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { stat } from "node:fs/promises";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { validateProposal } from "@videocraft/domain";
 import type { Asset, EditingProposal, ProjectRevision, RenderSettings, RendererPort, StrategyRegistry, TailoringProfile, Timeline, TimelineClip, TimelineOperation, TranscriptSegment, TranscriptionPort, UUID } from "@videocraft/domain";
 import { ProjectService, type Clock, type IdFactory, type ProjectRepository, type AssetRepository, type RevisionRepository } from "@videocraft/application";
+import type { ObjectStorage } from "@videocraft/storage";
 
 export interface Principal { userId: UUID; }
 export interface Authenticator { authenticate(request: FastifyRequest): Promise<Principal | null>; }
@@ -17,7 +19,7 @@ export interface ProposalStore {
   setStatus(id: UUID, status: EditingProposal["status"]): Promise<void>;
 }
 export interface ApiDependencies {
-  projects: ProjectRepository; assets: AssetRepository; revisions: RevisionRepository;
+  projects: ProjectRepository; assets: AssetRepository; revisions: RevisionRepository; storage?: ObjectStorage;
   authenticate: Authenticator; authorize: ProjectAuthorizer;
   renderer?: RendererPort; transcriber?: TranscriptionPort; transcripts?: TranscriptStore; strategies?: StrategyRegistry; proposals?: ProposalStore;
   clock?: Clock; ids?: IdFactory;
