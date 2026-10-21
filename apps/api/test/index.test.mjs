@@ -305,3 +305,56 @@ test("metrics endpoint requires its configured bearer token", async () => {
   assert.equal(allowed.statusCode, 200);
   await server.close();
 });
+
+
+test("accepted tailoring proposal applies bounded edits to a new revision", async () => {
+  const deps = dependencies(async () => ({ userId: "user-1" }));
+  const server = buildServer(deps);
+  const created = await server.inject({ method: "POST", url: "/v1/projects", payload: { name: "Tailored edit" } });
+  const projectId = created.json().project.id;
+  await deps.assets.save({
+    id: "asset-tailor",
+    projectId,
+    kind: "video",
+    storageKey: "projects/" + projectId + "/assets/asset-tailor.media",
+    checksumSha256: "d".repeat(64),
+    metadata: {},
+    createdAt: "2026-10-21T00:00:00.000Z"
+  });
+  const saved = await server.inject({
+    method: "POST",
+    url: "/v1/projects/" + projectId + "/revisions",
+    payload: {
+      timeline: {
+        durationUs: 60_000_000,
+        tracks: [{
+          id: "video-track",
+          kind: "video",
+          clips: [{ id: "clip-tailor", assetId: "asset-tailor", sourceStartUs: 0, sourceEndUs: 60_000_000, timelineStartUs: 0, timelineEndUs: 60_000_000 }]
+        }]
+      }
+    }
+  });
+  assert.equal(saved.statusCode, 201);
+  const preview = await server.inject({
+    method: "POST",
+    url: "/v1/projects/" + projectId + "/proposals",
+    payload: {
+      revision: 1,
+      strategyId: "short-form-explainer",
+      profile: { intent: "Explain the product", audience: "New founders", channel: "short-form", targetDurationUs: 30_000_000, constraints: [] }
+    }
+  });
+  assert.equal(preview.statusCode, 200);
+  assert.equal(preview.json().proposal.operations.length, 2);
+  const decision = await server.inject({
+    method: "POST",
+    url: "/v1/projects/" + projectId + "/proposals/" + preview.json().proposal.id + "/decision",
+    payload: { decision: "accepted" }
+  });
+  assert.equal(decision.statusCode, 201);
+  const accepted = decision.json().revision;
+  assert.equal(accepted.timeline.tracks[0].clips[0].sourceEndUs, 30_000_000);
+  assert.equal(accepted.timeline.tracks.some((track) => track.kind === "caption"), true);
+  await server.close();
+});
