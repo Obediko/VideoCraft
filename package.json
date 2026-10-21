@@ -10,7 +10,7 @@
     "workers/*"
   ],
   "scripts": {
-    "build": "npm run build --workspace=@videocraft/domain && npm run build --workspaces --if-present",
+    "build": "npm run build --workspace=@videocraft/domain && npm run build --workspace=@videocraft/storage && npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "check": "npm run build && npm test && npm run typecheck"
