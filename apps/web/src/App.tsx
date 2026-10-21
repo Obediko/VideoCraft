@@ -119,7 +119,7 @@ export function App() {
 
   function removeSelectedClip(clipId = selectedClipId) {
     if (!clipId) { setStatus("Select a clip first"); return; }
-    setTimeline((current) => ({ ...current, tracks: current.tracks.map((track) => ({ ...track, clips: track.clips.filter((clip) => clip.id !== clipId) })) }));
+    setTimeline((current) => ({ ...current, tracks: current.tracks.map((track) => ({ ...track, clips: track.clips.filter((clip) => clip.id !== clipId) })).filter((track) => track.clips.length > 0) }));
     setSelectedClipId("");
     setStatus("Clip removed from the non-destructive timeline");
   }
