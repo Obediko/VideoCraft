@@ -44,10 +44,20 @@ export class S3ObjectStorage implements ObjectStorage {
   }
 
   async list(prefix = ""): Promise<ListedObject[]> {
-    const result = await this.client.send(new ListObjectsV2Command({ Bucket: this.bucket, ...(prefix ? { Prefix: prefix } : {}) }));
-    return (result.Contents ?? []).flatMap((entry) => entry.Key && entry.LastModified
-      ? [{ key: entry.Key, size: entry.Size ?? 0, lastModified: entry.LastModified.toISOString() }]
-      : []);
+    const objects: ListedObject[] = [];
+    let continuationToken: string | undefined;
+    do {
+      const result = await this.client.send(new ListObjectsV2Command({
+        Bucket: this.bucket,
+        ...(prefix ? { Prefix: prefix } : {}),
+        ...(continuationToken ? { ContinuationToken: continuationToken } : {}),
+      }));
+      objects.push(...(result.Contents ?? []).flatMap((entry) => entry.Key && entry.LastModified
+        ? [{ key: entry.Key, size: entry.Size ?? 0, lastModified: entry.LastModified.toISOString() }]
+        : []));
+      continuationToken = result.IsTruncated ? result.NextContinuationToken : undefined;
+    } while (continuationToken);
+    return objects;
   }
 
   async remove(key: string): Promise<void> {
