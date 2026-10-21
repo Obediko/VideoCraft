@@ -84,7 +84,8 @@ const sceneDetector = secretEnvironment.SCENE_WORKER_PATH ? new PySceneDetectWor
 const metrics = new MetricsRegistry();
 const redisOptions = redisConnection(required("REDIS_URL"));
 const renderQueue = new Queue("videocraft-render", { connection: redisOptions });
-const rateLimitRedis = new Redis(redisOptions);\nconst providerQuota = new RedisProviderQuota(rateLimitRedis);
+const rateLimitRedis = new Redis(redisOptions);
+const providerQuota = new RedisProviderQuota(rateLimitRedis);
 const transcriber = new FasterWhisperWorker({
   workerPath: required("WHISPER_WORKER_PATH"),
   mediaRoot,
@@ -101,7 +102,8 @@ const authorizer = new PostgresProjectAuthorizer(projects, db);
 const revisions = new PostgresRevisionRepository(db);
 const renderJobs = new PostgresRenderJobRepository(db);
 const timelineService = new ProjectService(projects, assets, revisions, { next: () => randomUUID() }, { now: () => new Date().toISOString() });
-const transcripts = new PostgresTranscriptStore(db);\nconst feedback = new PostgresFeedbackRepository(db);
+const transcripts = new PostgresTranscriptStore(db);
+const feedback = new PostgresFeedbackRepository(db);
 const audit = new PostgresAuditRepository(db);
 const intentAnalyzer = secretEnvironment.INTENT_PROVIDER_API_KEY
   ? new OpenAiCompatibleIntentAnalyzer({ endpoint: secretEnvironment.INTENT_PROVIDER_URL ?? "https://api.openai.com/v1", apiKey: secretEnvironment.INTENT_PROVIDER_API_KEY, model: secretEnvironment.INTENT_PROVIDER_MODEL ?? "gpt-4o-mini" })
