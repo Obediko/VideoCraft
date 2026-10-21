@@ -22,7 +22,7 @@ export interface UploadDependencies {
 
 export function registerUploadRoutes(server: FastifyInstance, dependencies: UploadDependencies): void {
   server.register(multipart, { limits: { fileSize: 2_000_000_000, files: 1, fields: 8 } });
-  server.post({ url: "/v1/projects/:projectId/assets/upload", config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (request, reply) => {
+  server.post("/v1/projects/:projectId/assets/upload", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } } as any, async (request: FastifyRequest, reply: FastifyReply) => {
     const principal = await dependencies.authenticate(request);
     if (!principal) return error(reply, 401, "unauthorized", "Authentication required");
     const params = request.params as { projectId?: string };
