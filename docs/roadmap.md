@@ -46,5 +46,5 @@
 ## Hardening - in progress
 
 - [x] Add fail-closed JWT authentication and project authorization hooks.
-- [ ] Add complete tenant isolation, audit logs, malware scanning, and rate limits.
+- [x] Add project-scoped authorization hooks and a global API rate limit.\n- [ ] Add complete tenant isolation audits, audit logs, malware scanning, and per-user/provider rate limits.
 - [ ] Add observability, retention, backups, and secret management.
