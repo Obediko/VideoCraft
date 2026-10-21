@@ -11,6 +11,7 @@ type TimelineClip = {
 type Timeline = { durationUs: number; tracks: Array<{ id: string; kind: string; clips: TimelineClip[] }> };
 type Proposal = { id: string; rationale: string; confidence: number; evidence: Array<{ source: string; reference: string; excerpt?: string }>; operations: unknown[]; status: string };
 type Project = { id: string; name: string; revision: number; createdAt: string; updatedAt: string };
+type Asset = { id: string; kind: string; storageKey: string; metadata: Record<string, string | number | boolean> };
 
 const API = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
 
@@ -19,6 +20,7 @@ export function App() {
   const [projectId, setProjectId] = useState("");
   const [projectName, setProjectName] = useState("My first cut");
   const [projects, setProjects] = useState<Project[]>([]);
+  const [assets, setAssets] = useState<Asset[]>([]);
   const [intent, setIntent] = useState("Create a clear short-form explainer");
   const [audience, setAudience] = useState("People discovering the product");
   const [channel, setChannel] = useState("short-form");
@@ -78,9 +80,13 @@ export function App() {
       setRenderJobId("");
       setRenderJobStatus("");
       setRenderUrl("");
-      if (project.revision > 0) {
-        const result = await request("/v1/projects/" + project.id + "/revisions/" + project.revision);
-        setTimeline(result.revision.timeline);
+      const [assetResult, revisionResult] = await Promise.all([
+        request("/v1/projects/" + project.id + "/assets"),
+        project.revision > 0 ? request("/v1/projects/" + project.id + "/revisions/" + project.revision) : Promise.resolve(null),
+      ]);
+      setAssets(assetResult.assets);
+      if (revisionResult) {
+        setTimeline(revisionResult.revision.timeline);
       } else {
         setTimeline({ durationUs: 30_000_000, tracks: [] });
       }
@@ -98,6 +104,7 @@ export function App() {
       const response = await fetch(API + "/v1/projects/" + projectId + "/assets/upload?kind=" + encodeURIComponent(uploadKind), { method: "POST", body: form, headers: token ? { authorization: "Bearer " + token } : {} });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error?.message ?? "Upload failed");
+      setAssets((current) => [...current.filter((asset) => asset.id !== body.asset.id), body.asset]);
       setAssetId(body.asset.id); setStatus("Uploaded asset " + body.asset.id.slice(0, 8));
     } catch (error) { setStatus(errorMessage(error)); }
     finally { setBusy(false); event.currentTarget.value = ""; }
@@ -254,9 +261,10 @@ export function App() {
         </section>
         <section className="panel">
           <h2>Asset reference</h2>
-          <p className="muted">Upload and signed storage are handled by the API boundary. Paste a registered asset ID to place it on the timeline.</p>
-          <input value={assetId} onChange={(event) => setAssetId(event.target.value)} placeholder="asset ID" />
-          <button className="secondary" onClick={addClip}>Add video clip</button>
+          <p className="muted">Upload media, choose it from the project library, then place a non-destructive clip on the timeline.</p>
+          <label>Upload media<select value={uploadKind} onChange={(event) => setUploadKind(event.target.value)}><option value="video">Video</option><option value="audio">Audio</option><option value="image">Image</option><option value="caption">Caption</option></select><input type="file" accept="video/*,audio/*,image/*" onChange={uploadAsset} disabled={busy || !projectId} /></label>
+          <label>Project library<select value={assetId} onChange={(event) => setAssetId(event.target.value)}><option value="">Choose an asset</option>{assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.kind} · {String(asset.metadata.filename ?? asset.id.slice(0, 8))}</option>)}</select></label>
+          <button className="secondary" onClick={addClip} disabled={!assetId}>Add video clip</button>
         </section>
       </aside>
       <section className="editor">
