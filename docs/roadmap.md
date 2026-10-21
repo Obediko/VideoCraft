@@ -38,7 +38,7 @@
 - [x] Add durable progress/status persistence, cancellation state, retries through BullMQ, and output manifests.
 - [x] Add a typed PySceneDetect adapter and standalone scene worker.
 - [x] Add a typed OTIO-shaped import/export adapter and authenticated API endpoints.
-- [ ] Add a Python OpenTimelineIO provider adapter for interchange with external editorial tools.
+- [x] Add a Python OpenTimelineIO provider bridge with a fail-closed worker protocol and mocked round-trip tests.\n- [ ] Validate against the real OpenTimelineIO package in a pinned worker image.
 
 ## Product surface - in progress
 
