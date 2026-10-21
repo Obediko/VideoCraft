@@ -17,7 +17,8 @@ function setup() {
     authenticate: async () => ({ userId: "user-1" }),
     authorize: { canAccess: async () => true },
     assets: { listForProject: async () => [{ id: "asset-1" }] },
-    quota: { consume: async () => ({ allowed: true, remaining: 1, resetAt: 0 }) },\n    transcripts: {
+    quota: { consume: async () => ({ allowed: true, remaining: 1, resetAt: 0 }) },
+    transcripts: {
       async listForAsset() {
         transcriptReads += 1;
         return [{ id: "segment-1", assetId: "asset-1", startUs: 0, endUs: 1_000_000, text: "private speech", words: [], provider: "test" }];
