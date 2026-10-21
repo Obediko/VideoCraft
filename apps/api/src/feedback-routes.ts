@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import type { FeedbackEvent, FeedbackRepository, RevisionRepository, UUID } from "@videocraft/domain";
+import type { FeedbackEvent, FeedbackRepository, UUID } from "@videocraft/domain";
+import type { RevisionRepository } from "@videocraft/application";
 
 export interface FeedbackRouteDependencies {
   feedback: FeedbackRepository;
