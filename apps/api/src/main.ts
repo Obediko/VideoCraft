@@ -75,6 +75,7 @@ const server = buildServer({
   renderer: new BullMqRenderQueue(renderQueue, assets, renderJobs),
   authenticate: authenticator,
   authorize: authorizer,
+  audit,
 });
 server.register(rateLimit, { max: 120, timeWindow: "1 minute", skipOnError: true });
 registerTimelineRoutes(server, { projects, revisions, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, saveRevision: (input) => timelineService.saveRevision(input) });
