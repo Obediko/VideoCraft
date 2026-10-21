@@ -44,6 +44,10 @@ export class PostgresAssetRepository implements AssetRepository {
     const result = await this.db.query<AssetRow>("SELECT id, project_id, kind, storage_key, checksum_sha256, duration_us, metadata, created_at FROM assets WHERE project_id = $1 ORDER BY created_at, id", [projectId]);
     return result.rows.map(mapAsset);
   }
+  async listStorageKeys(): Promise<string[]> {
+    const result = await this.db.query<{ storage_key: string }>("SELECT storage_key FROM assets");
+    return result.rows.map((row) => row.storage_key);
+  }
   async save(asset: Asset): Promise<void> {
     await this.db.query(
       "INSERT INTO assets (id, project_id, kind, storage_key, checksum_sha256, duration_us, metadata, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
