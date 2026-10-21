@@ -42,3 +42,24 @@ test("S3 listing follows continuation tokens", async () => {
   assert.deepEqual(objects.map((object) => object.key), ["renders/a.mp4", "renders/b.mp4"]);
   assert.equal(commands[1].input.ContinuationToken, "page-2");
 });
+
+
+test("S3 adapter can stage a streamed object for workers", async () => {
+  const commands = [];
+  const client = {
+    send: async (command) => {
+      commands.push(command);
+      return { Body: { transformToWebStream: () => new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode("hello")); controller.close(); } }) } };
+    }
+  };
+  const directory = await mkdtemp(join(tmpdir(), "videocraft-s3-download-"));
+  const destination = join(directory, "staged.bin");
+  try {
+    const storage = new S3ObjectStorage({ bucket: "videocraft-test", region: "us-east-1", client });
+    await storage.downloadToFile("projects/p1/source.bin", destination);
+    assert.equal(await (await import("node:fs/promises")).readFile(destination, "utf8"), "hello");
+    assert.equal(commands[0].input.Key, "projects/p1/source.bin");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
