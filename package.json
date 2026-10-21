@@ -4,12 +4,18 @@
   "version": "0.1.0",
   "description": "AI-assisted, explainable video editing platform",
   "packageManager": "npm@11",
-  "workspaces": ["packages/*", "apps/*", "workers/*"],
+  "workspaces": [
+    "packages/*",
+    "apps/*",
+    "workers/*"
+  ],
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
+    "build": "npm run build --workspace=@videocraft/domain && npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "check": "npm run build && npm test && npm run typecheck"
   },
-  "engines": {"node": ">=22"}
+  "engines": {
+    "node": ">=22"
+  }
 }
