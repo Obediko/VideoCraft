@@ -97,6 +97,17 @@ export function buildServer(dependencies: ApiDependencies): FastifyInstance {
     return { project };
   });
 
+  server.get("/v1/projects/:projectId/assets", async (request, reply) => {
+    const principal = await authenticate(dependencies.authenticate, request, reply);
+    if (!principal) return;
+    const { projectId } = asRecord(request.params);
+    if (typeof projectId !== "string") return sendError(reply, 400, "invalid_request", "projectId is required");
+    if (!(await dependencies.authorize.canAccess(principal, projectId, "viewer"))) return sendError(reply, 403, "forbidden", "Project access denied");
+    const project = await dependencies.projects.get(projectId);
+    if (!project) return sendError(reply, 404, "not_found", "Project not found");
+    return { assets: await dependencies.assets.listForProject(projectId) };
+  });
+
   server.post("/v1/projects", async (request, reply) => {
     const principal = await authenticate(dependencies.authenticate, request, reply);
     if (!principal) return;
