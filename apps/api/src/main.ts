@@ -114,7 +114,7 @@ const intentAnalyzer = intentProviderMode === "external"
   ? new OpenAiCompatibleIntentAnalyzer({ endpoint: required("INTENT_PROVIDER_URL"), apiKey: required("INTENT_PROVIDER_API_KEY"), model: required("INTENT_PROVIDER_MODEL") })
   : new RuleBasedIntentAnalyzer();
 const server = buildServer({
-  projects, assets, members, storage, revisions, metricsToken: secretEnvironment.METRICS_AUTH_TOKEN,
+  projects, assets, members, storage, revisions, ...(secretEnvironment.METRICS_AUTH_TOKEN ? { metricsToken: secretEnvironment.METRICS_AUTH_TOKEN } : {}),
   ...(sceneDetector ? { sceneDetector } : {}),
   scenes,
   transcripts,
