@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
-import type { Asset, ProjectRevision, RenderSettings, RendererPort, Timeline, TranscriptSegment, TranscriptionPort, UUID } from "@videocraft/domain";
+import { validateProposal } from "@videocraft/domain";
+import type { Asset, EditingProposal, ProjectRevision, RenderSettings, RendererPort, StrategyRegistry, TailoringProfile, Timeline, TranscriptSegment, TranscriptionPort, UUID } from "@videocraft/domain";
 import { ProjectService, type Clock, type IdFactory, type ProjectRepository, type AssetRepository, type RevisionRepository } from "@videocraft/application";
 
 export interface Principal { userId: UUID; }
@@ -13,7 +14,7 @@ export interface TranscriptStore {
 export interface ApiDependencies {
   projects: ProjectRepository; assets: AssetRepository; revisions: RevisionRepository;
   authenticate: Authenticator; authorize: ProjectAuthorizer;
-  renderer?: RendererPort; transcriber?: TranscriptionPort; transcripts?: TranscriptStore;
+  renderer?: RendererPort; transcriber?: TranscriptionPort; transcripts?: TranscriptStore; strategies?: StrategyRegistry;
   clock?: Clock; ids?: IdFactory;
 }
 
@@ -103,6 +104,52 @@ export function buildServer(dependencies: ApiDependencies): FastifyInstance {
     return { assetId, segments: await dependencies.transcripts.listForAsset(assetId) };
   });
 
+  server.post("/v1/projects/:projectId/proposals", async (request, reply) => {
+    const principal = await authenticate(dependencies.authenticate, request, reply);
+    if (!principal) return;
+    if (!dependencies.strategies || !dependencies.transcripts) return sendError(reply, 503, "strategy_unavailable", "Strategy or transcript service is not configured");
+    const { projectId } = asRecord(request.params);
+    if (typeof projectId !== "string") return sendError(reply, 400, "invalid_request", "projectId is required");
+    if (!(await dependencies.authorize.canAccess(principal, projectId, "viewer"))) return sendError(reply, 403, "forbidden", "Project access denied");
+
+    const body = asRecord(request.body);
+    if (typeof body.strategyId !== "string" || !Number.isSafeInteger(body.revision) || (body.revision as number) < 1 || !isTailoringProfile(body.profile)) {
+      return sendError(reply, 400, "invalid_request", "strategyId, revision, and a valid tailoring profile are required");
+    }
+    const [project, revision] = await Promise.all([
+      dependencies.projects.get(projectId),
+      dependencies.revisions.get(projectId, body.revision as number),
+    ]);
+    if (!project || !revision) return sendError(reply, 404, "not_found", "Project revision not found");
+
+    try {
+      const strategy = dependencies.strategies.get(
+        body.strategyId,
+        typeof body.strategyVersion === "string" ? body.strategyVersion : undefined,
+      );
+      const assetIds = new Set(revision.timeline.tracks.flatMap((track) => track.clips.map((clip) => clip.assetId)));
+      const transcriptLists = await Promise.all([...assetIds].map((assetId) => dependencies.transcripts!.listForAsset(assetId)));
+      const result = await strategy.propose({
+        project,
+        revision,
+        profile: body.profile,
+        transcript: transcriptLists.flat(),
+      });
+      const proposal: EditingProposal = {
+        id: ids.next(),
+        projectId,
+        baseRevision: revision.revision,
+        strategyId: strategy.id,
+        strategyVersion: strategy.version,
+        ...result,
+      };
+      validateProposal(proposal);
+      return reply.code(200).send({ proposal });
+    } catch (error) {
+      return sendError(reply, 400, "invalid_request", messageOf(error));
+    }
+  });
+
   server.post("/v1/projects/:projectId/revisions", async (request, reply) => {
     const principal = await authenticate(dependencies.authenticate, request, reply);
     if (!principal) return;
@@ -163,6 +210,13 @@ function isMediaKind(value: unknown): value is Asset["kind"] { return value === 
 function isTimeline(value: unknown): value is Timeline {
   if (!isJsonObject(value) || typeof value.durationUs !== "number" || !Array.isArray(value.tracks)) return false;
   return value.tracks.every((track) => isJsonObject(track) && typeof track.id === "string" && typeof track.kind === "string" && Array.isArray(track.clips));
+}
+function isTailoringProfile(value: unknown): value is TailoringProfile {
+  if (!isJsonObject(value) || typeof value.intent !== "string" || typeof value.audience !== "string" || typeof value.channel !== "string" || !Array.isArray(value.constraints)) return false;
+  if (!value.constraints.every((entry) => typeof entry === "string")) return false;
+  if (value.targetDurationUs !== undefined && typeof value.targetDurationUs !== "number") return false;
+  if (value.tone !== undefined && typeof value.tone !== "string") return false;
+  return true;
 }
 function isRenderSettings(value: unknown): value is RenderSettings {
   if (!isJsonObject(value)) return false;
