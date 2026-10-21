@@ -19,7 +19,7 @@ export interface PySceneDetectOptions {
 }
 
 export class PySceneDetectWorker implements SceneDetector {
-  private readonly options: Required<Omit<PySceneDetectOptions, "pythonCommand">> & Pick<PySceneDetectOptions, "pythonCommand">;
+  private readonly options: Required<PySceneDetectOptions>;
   constructor(options: PySceneDetectOptions) {
     this.options = {
       ...options,
