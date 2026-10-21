@@ -22,7 +22,8 @@
 - [x] Add provider-neutral object listing and a bounded protected-object cleanup primitive.
 - [x] Add a PostgreSQL-protected retention worker with dry-run default and bounded deletion.
 - [x] Add an emulator-backed S3-compatible provider contract test in CI.
-- [x] Add a dry-run-first, bounded retention worker with protected-key audit records and opt-in non-overlapping scheduling.\n- [ ] Add production credential policy and external-provider integration tests.
+- [x] Add a dry-run-first, bounded retention worker with protected-key audit records and opt-in non-overlapping scheduling.
+- [x] Add production credential policy and external-provider integration tests.
 
 ## Editing intelligence - in progress
 
@@ -42,7 +43,9 @@
 - [x] Add an FFmpeg adapter and constrained render worker.
 - [x] Stage render inputs and persist outputs through the configured local or S3-compatible storage adapter.
 - [x] Add durable progress/status persistence, cancellation state, retries through BullMQ, and output manifests.
-- [x] Add a typed PySceneDetect adapter and standalone scene worker.\n- [x] Expose authenticated, project-scoped scene detection and stage inputs through local or S3 storage.\n- [x] Persist detected scenes for reuse by the editor and tailoring flows.
+- [x] Add a typed PySceneDetect adapter and standalone scene worker.
+- [x] Expose authenticated, project-scoped scene detection and stage inputs through local or S3 storage.
+- [x] Persist detected scenes for reuse by the editor and tailoring flows.
 - [x] Add a typed OTIO-shaped import/export adapter and authenticated API endpoints.
 - [x] Add a Python OpenTimelineIO provider bridge with a fail-closed worker protocol and mocked round-trip tests.
 - [x] Validate against the real OpenTimelineIO package in CI with a pinned worker dependency.
@@ -62,6 +65,14 @@
 - [x] Add append-only audit event persistence and request lifecycle coverage.
 - [x] Add ClamAV upload scanning before storage promotion.
 - [x] Add principal-keyed global rate limits and tighter intent/upload route budgets.
-- [x] Add owner-controlled project member management with viewer/editor roles and non-owner denial tests.\n- [x] Enforce project-scoped object keys at the application boundary.\n- [x] Add atomic Redis-backed intent-provider quota enforcement.\n- [x] Add cross-route project-scoped read isolation coverage.\n- [ ] Complete tenant isolation audits.
+- [x] Add owner-controlled project member management with viewer/editor roles and non-owner denial tests.
+- [x] Enforce project-scoped object keys at the application boundary.
+- [x] Add atomic Redis-backed intent-provider quota enforcement.
+- [x] Add cross-route project-scoped read isolation coverage.
+- [x] Complete tenant isolation audits.
 - [x] Add bounded request metrics and Prometheus-compatible export.
-- [x] Add OTLP-capable distributed tracing with auto-instrumentation and production startup validation.\n- [x] Add manifest-checked PostgreSQL backup verification with `pg_restore --list` and audit records.\n- [x] Add vendor-neutral Prometheus alert rules for API failures, readiness failures, and quota pressure.\n- [x] Add zero-downtime overlapping JWT signing-secret rotation.\n- [x] Add cloud secret-manager operational rotation runbook and distinct-key startup validation.
+- [x] Add OTLP-capable distributed tracing with auto-instrumentation and production startup validation.
+- [x] Add manifest-checked PostgreSQL backup verification with `pg_restore --list` and audit records.
+- [x] Add vendor-neutral Prometheus alert rules for API failures, readiness failures, and quota pressure.
+- [x] Add zero-downtime overlapping JWT signing-secret rotation.
+- [x] Add cloud secret-manager operational rotation runbook and distinct-key startup validation.
