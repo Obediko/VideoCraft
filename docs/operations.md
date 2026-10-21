@@ -8,6 +8,8 @@ The API listens on 0.0.0.0 only inside its deployment network. Put TLS terminati
 
 The scene-detection worker is configured with SCENE_WORKER_PATH and runs as a bounded child process. Scene inputs are staged through the configured object-storage adapter, so S3 deployments do not expose object keys as filesystem paths.\n\nThe render worker requires DATABASE_URL and REDIS_URL plus the configured object-storage settings. It stages referenced inputs into an isolated RENDER_WORK_ROOT (falling back to RENDER_ROOT), runs constrained FFmpeg work, and uploads the output through the same storage adapter used by the API. It persists lifecycle progress and output checksums, and can abort active FFmpeg work when a queued job is cancelled.
 
+Asset records must use keys under `projects/<project-id>/assets/`; the application rejects cross-project keys before persistence.
+
 ## Storage providers
 
 Set OBJECT_STORAGE_PROVIDER=local for development. Set OBJECT_STORAGE_PROVIDER=s3 for S3-compatible storage and provide S3_BUCKET, S3_REGION, and credentials through the runtime environment or secret manager. S3_ENDPOINT supports compatible providers such as MinIO; S3_FORCE_PATH_STYLE=true is useful for local emulators. In S3 mode, completed render download endpoints return provider-native presigned URLs and do not stream through the API.
