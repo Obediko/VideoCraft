@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
+import { pipeline } from "node:stream/promises";
 import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import type { ObjectStorage, StoredObject } from "./index.js";
@@ -37,9 +38,8 @@ export class S3ObjectStorage implements ObjectStorage {
   async putFile(sourcePath: string, key: string): Promise<StoredObject> {
     const metadata = await stat(sourcePath);
     const digest = createHash("sha256");
-    const input = createReadStream(sourcePath);
-    input.on("data", (chunk) => digest.update(chunk));
-    await this.client.send(new PutObjectCommand({ Bucket: this.bucket, Key: key, Body: input }));
+    await pipeline(createReadStream(sourcePath), digest);
+    await this.client.send(new PutObjectCommand({ Bucket: this.bucket, Key: key, Body: createReadStream(sourcePath) }));
     return { key, path: this.publicUrl ? this.publicUrl + "/" + encodeObjectKey(key) : "s3://" + this.bucket + "/" + key, size: metadata.size, checksumSha256: digest.digest("hex") };
   }
 
