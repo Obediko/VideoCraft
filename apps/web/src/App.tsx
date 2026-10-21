@@ -29,7 +29,8 @@ export function App() {
   const [renderJobId, setRenderJobId] = useState("");
   const [renderJobStatus, setRenderJobStatus] = useState("");
   const [renderUrl, setRenderUrl] = useState("");
-  const [busy, setBusy] = useState(false);\n  const [selectedClipId, setSelectedClipId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [selectedClipId, setSelectedClipId] = useState("");
 
   const videoTrack = useMemo(() => timeline.tracks.find((track) => track.kind === "video"), [timeline]);
 
