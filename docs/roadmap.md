@@ -21,7 +21,8 @@
 - [x] Add an S3-compatible object-storage adapter with provider-native signed download URLs.
 - [x] Add provider-neutral object listing and a bounded protected-object cleanup primitive.
 - [x] Add a PostgreSQL-protected retention worker with dry-run default and bounded deletion.
-- [ ] Add production credential/retention policy and provider integration tests.
+- [x] Add a MinIO-backed S3-compatible provider contract test in CI.
+- [ ] Add production credential/retention policy and external-provider integration tests.
 
 ## Editing intelligence - in progress
 
