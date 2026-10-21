@@ -1,0 +1,136 @@
+import type {
+  Asset,
+  Project,
+  ProjectRevision,
+  Timeline,
+  UUID,
+} from "@videocraft/domain";
+import { validateTimeline } from "@videocraft/domain";
+
+export interface Clock {
+  now(): string;
+}
+
+export interface IdFactory {
+  next(): UUID;
+}
+
+export interface ProjectRepository {
+  get(id: UUID): Promise<Project | undefined>;
+  save(project: Project): Promise<void>;
+}
+
+export interface AssetRepository {
+  listForProject(projectId: UUID): Promise<Asset[]>;
+  save(asset: Asset): Promise<void>;
+}
+
+export interface RevisionRepository {
+  get(projectId: UUID, revision: number): Promise<ProjectRevision | undefined>;
+  save(revision: ProjectRevision): Promise<void>;
+}
+
+export interface CreateProjectInput {
+  ownerId: UUID;
+  name: string;
+}
+
+export interface SaveRevisionInput {
+  projectId: UUID;
+  createdBy: UUID;
+  timeline: Timeline;
+  tailoring?: ProjectRevision["tailoring"];
+  acceptedProposalIds?: UUID[];
+}
+
+export class ProjectService {
+  constructor(
+    private readonly projects: ProjectRepository,
+    private readonly assets: AssetRepository,
+    private readonly revisions: RevisionRepository,
+    private readonly ids: IdFactory,
+    private readonly clock: Clock,
+  ) {}
+
+  async createProject(input: CreateProjectInput): Promise<Project> {
+    const name = input.name.trim();
+    if (!name) throw new Error("Project name is required");
+    if (name.length > 120) throw new Error("Project name is too long");
+
+    const timestamp = this.clock.now();
+    const project: Project = {
+      id: this.ids.next(),
+      ownerId: input.ownerId,
+      name,
+      revision: 0,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    await this.projects.save(project);
+    return project;
+  }
+
+  async addAsset(asset: Asset): Promise<void> {
+    const project = await this.requireProject(asset.projectId);
+    if (!/^[a-f0-9]{64}$/i.test(asset.checksumSha256)) {
+      throw new Error("Asset checksum must be a SHA-256 hex digest");
+    }
+    if (!asset.storageKey.trim()) throw new Error("Asset storage key is required");
+    await this.assets.save(asset);
+    await this.projects.save({ ...project, updatedAt: this.clock.now() });
+  }
+
+  async saveRevision(input: SaveRevisionInput): Promise<ProjectRevision> {
+    const project = await this.requireProject(input.projectId);
+    validateTimeline(input.timeline);
+
+    const nextRevision = project.revision + 1;
+    const revision: ProjectRevision = {
+      projectId: project.id,
+      revision: nextRevision,
+      timeline: input.timeline,
+      ...(input.tailoring === undefined ? {} : { tailoring: input.tailoring }),
+      acceptedProposalIds: input.acceptedProposalIds ?? [],
+      createdAt: this.clock.now(),
+      createdBy: input.createdBy,
+    };
+
+    await this.revisions.save(revision);
+    await this.projects.save({
+      ...project,
+      revision: nextRevision,
+      updatedAt: revision.createdAt,
+    });
+    return revision;
+  }
+
+  private async requireProject(id: UUID): Promise<Project> {
+    const project = await this.projects.get(id);
+    if (!project) throw new Error("Project not found");
+    return project;
+  }
+}
+
+export class InMemoryProjectRepository implements ProjectRepository {
+  private readonly values = new Map<UUID, Project>();
+  async get(id: UUID) { return this.values.get(id); }
+  async save(project: Project) { this.values.set(project.id, project); }
+}
+
+export class InMemoryAssetRepository implements AssetRepository {
+  private readonly values = new Map<UUID, Asset>();
+  async listForProject(projectId: UUID) {
+    return [...this.values.values()].filter((asset) => asset.projectId === projectId);
+  }
+  async save(asset: Asset) { this.values.set(asset.id, asset); }
+}
+
+export class InMemoryRevisionRepository implements RevisionRepository {
+  private readonly values = new Map<string, ProjectRevision>();
+  async get(projectId: UUID, revision: number) {
+    return this.values.get(projectId + ":" + revision);
+  }
+  async save(value: ProjectRevision) {
+    this.values.set(value.projectId + ":" + value.revision, value);
+  }
+}
