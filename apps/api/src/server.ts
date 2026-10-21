@@ -59,6 +59,9 @@ export function buildServer(dependencies: ApiDependencies): FastifyInstance {
     if (!isMediaKind(kind) || typeof storageKey !== "string" || typeof checksumSha256 !== "string") {
       return sendError(reply, 400, "invalid_request", "kind, storageKey, and checksumSha256 are required");
     }
+    if (!dependencies.storage) return sendError(reply, 503, "storage_unavailable", "Asset storage is not configured");
+    try { await stat(dependencies.storage.resolve(storageKey)); }
+    catch (error) { return sendError(reply, 400, "invalid_request", messageOf(error)); }
     const asset: Asset = {
       id: ids.next(), projectId, kind, storageKey, checksumSha256,
       ...(typeof body.durationUs === "number" ? { durationUs: body.durationUs } : {}),
