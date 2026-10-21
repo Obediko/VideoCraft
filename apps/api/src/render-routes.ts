@@ -28,9 +28,10 @@ export function registerRenderRoutes(server: FastifyInstance, dependencies: Rend
     if (!(await dependencies.authorize.canAccess(principal, params.projectId, "viewer"))) return error(reply, 403, "forbidden", "Project access denied");
     const job = await dependencies.jobs.get(params.renderId);
     if (!job || job.projectId !== params.projectId || job.status !== "succeeded" || !job.output) return error(reply, 404, "not_found", "Completed render output not found");
+    if (dependencies.storage.createDownloadUrl) return { url: await dependencies.storage.createDownloadUrl(job.output.storageKey, 300), expires: Math.floor(Date.now() / 1000) + 300, providerNative: true };
     const expires = Math.floor(Date.now() / 1000) + 300;
     const signature = sign(params.projectId + ":" + params.renderId + ":" + job.output.storageKey + ":" + expires, dependencies.signingSecret);
-    return { url: "/v1/projects/" + params.projectId + "/renders/" + params.renderId + "/download?expires=" + expires + "&signature=" + signature, expires };
+    return { url: "/v1/projects/" + params.projectId + "/renders/" + params.renderId + "/download?expires=" + expires + "&signature=" + signature, expires, providerNative: false };
   });
   server.get("/v1/projects/:projectId/renders/:renderId/download", async (request, reply) => {
     const params = request.params as { projectId?: string; renderId?: string };
