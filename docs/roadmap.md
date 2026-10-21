@@ -55,5 +55,6 @@
 - [x] Add project-scoped authorization hooks and a global API rate limit.
 - [x] Add append-only audit event persistence and request lifecycle coverage.
 - [x] Add ClamAV upload scanning before storage promotion.
-- [ ] Add complete tenant isolation audits and per-user/provider rate limits.
+- [x] Add principal-keyed global rate limits and tighter intent/upload route budgets.
+- [ ] Add complete tenant isolation audits and provider quota enforcement.
 - [ ] Add observability, retention, backups, and secret management.
