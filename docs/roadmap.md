@@ -14,7 +14,7 @@
 
 - [x] Add database-backed repositories and initial migrations.
 - [x] Add a transactional migration runner with an applied-version ledger.
-- [x] Add authenticated API contracts for project, asset, revision, transcript, render, and proposal commands.
+- [x] Add authenticated API contracts for project, asset, revision, transcript, render, proposal, and project-member commands.
 - [x] Add CI integration tests against PostgreSQL and Redis.
 - [x] Add a secure local object-storage boundary.
 - [x] Add bounded multipart asset ingestion with project-scoped keys and checksums.
@@ -62,6 +62,6 @@
 - [x] Add append-only audit event persistence and request lifecycle coverage.
 - [x] Add ClamAV upload scanning before storage promotion.
 - [x] Add principal-keyed global rate limits and tighter intent/upload route budgets.
-- [ ] Add complete tenant isolation audits and provider quota enforcement.
+- [x] Add owner-controlled project member management with viewer/editor roles and non-owner denial tests.\n- [ ] Add complete tenant isolation audits and provider quota enforcement.
 - [x] Add bounded request metrics and Prometheus-compatible export.
 - [ ] Add distributed tracing, retention, backups, and secret management.
