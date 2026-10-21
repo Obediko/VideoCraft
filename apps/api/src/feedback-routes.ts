@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import type { FeedbackEvent, FeedbackRepository, UUID } from "@videocraft/domain";
+import type { FeedbackEvent, FeedbackRepository, RevisionRepository, UUID } from "@videocraft/domain";
 
 export interface FeedbackRouteDependencies {
   feedback: FeedbackRepository;
+  revisions: RevisionRepository;
   authenticate(request: FastifyRequest): Promise<{ userId: UUID } | null>;
   authorize: { canAccess(principal: { userId: UUID }, projectId: UUID, role: "viewer" | "editor"): Promise<boolean> };
   now(): string;
@@ -19,6 +20,7 @@ export function registerFeedbackRoutes(server: FastifyInstance, dependencies: Fe
     if (!Number.isSafeInteger(body?.revision) || (body.revision as number) < 1 || !isType(body?.type)) {
       return error(reply, 400, "invalid_request", "revision and a valid feedback type are required");
     }
+    if (!(await dependencies.revisions.get(params.projectId, body.revision as number))) return error(reply, 404, "not_found", "Project revision not found");
     if (body.value !== undefined && (typeof body.value !== "number" || !Number.isFinite(body.value))) return error(reply, 400, "invalid_request", "value must be finite");
     if (body.note !== undefined && (typeof body.note !== "string" || body.note.length > 2_000)) return error(reply, 400, "invalid_request", "note must be at most 2,000 characters");
     const event: FeedbackEvent = {
