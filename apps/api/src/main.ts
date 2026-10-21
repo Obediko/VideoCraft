@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import rateLimit from "@fastify/rate-limit";
 import { Queue } from "bullmq";
 import { createPool, PostgresAssetRepository, PostgresProjectRepository, PostgresProposalStore, PostgresRevisionRepository, PostgresTranscriptStore, PostgresRenderJobRepository, PostgresFeedbackRepository, PostgresAuditRepository, type Database } from "@videocraft/persistence";
@@ -21,6 +21,12 @@ function required(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(name + " is required");
   return value;
+}
+function rateLimitKey(request: { headers: { authorization?: string }; ip: string }): string {
+  const authorization = request.headers.authorization;
+  return authorization?.startsWith("Bearer ")
+    ? "principal:" + createHash("sha256").update(authorization).digest("hex")
+    : "ip:" + request.ip;
 }
 function redisConnection(value: string) {
   const url = new URL(value);
@@ -84,7 +90,7 @@ const server = buildServer({
   authorize: authorizer,
   audit,
 });
-server.register(rateLimit, { max: 120, timeWindow: "1 minute", skipOnError: true });
+server.register(rateLimit, { max: 120, timeWindow: "1 minute", skipOnError: true, keyGenerator: rateLimitKey });
 registerTimelineRoutes(server, { projects, revisions, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, saveRevision: (input) => timelineService.saveRevision(input) });
 registerFeedbackRoutes(server, { feedback, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, now: () => new Date().toISOString() });
 registerIntentRoutes(server, { analyzer: intentAnalyzer, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
