@@ -42,7 +42,8 @@
 
 - [x] Add a web editor surface for projects, revisions, tailoring, proposal review, and render submission.
 - [x] Add multipart uploads and render-status polling.
-- [ ] Add production signed object-storage URLs and browser playback.
+- [x] Add local HMAC-signed playback URLs and browser playback.
+- [ ] Add provider-native signed object-storage URLs.
 - [ ] Add keyboard-accessible timeline editing and browser end-to-end tests.
 
 ## Hardening - in progress
