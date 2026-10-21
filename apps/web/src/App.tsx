@@ -28,6 +28,7 @@ export function App() {
   const [uploadKind, setUploadKind] = useState("video");
   const [renderJobId, setRenderJobId] = useState("");
   const [renderJobStatus, setRenderJobStatus] = useState("");
+  const [renderUrl, setRenderUrl] = useState("");
   const [busy, setBusy] = useState(false);
 
   const videoTrack = useMemo(() => timeline.tracks.find((track) => track.kind === "video"), [timeline]);
@@ -145,7 +146,7 @@ export function App() {
           settings: { format: "mp4", videoCodec: "libx264", audioCodec: "aac", width: 1280, height: 720, frameRate: 30 },
         }),
       });
-      setRenderJobId(result.job.id); setRenderJobStatus("queued 0%"); setStatus("Render queued: " + result.job.id); void pollRender(result.job.id);
+      setRenderJobId(result.job.id); setRenderUrl(""); setRenderJobStatus("queued 0%"); setStatus("Render queued: " + result.job.id); void pollRender(result.job.id);
     } catch (error) { setStatus(errorMessage(error)); }
     finally { setBusy(false); }
   }
@@ -187,7 +188,7 @@ export function App() {
           </div>
         </div>
         <div className="lower-grid">
-          <section className="panel preview-panel"><div className="panel-heading"><h2>Preview</h2><span className="badge">Non-destructive</span></div><div className="preview-screen">{renderJobStatus.startsWith("succeeded") && renderJobId ? <video controls src={API + "/v1/projects/" + projectId + "/renders/" + renderJobId + "/download"} /> : <span>{renderJobId ? "Render " + renderJobStatus : "Playback preview connects to the selected revision"}</span>}</div></section>
+          <section className="panel preview-panel"><div className="panel-heading"><h2>Preview</h2><span className="badge">Non-destructive</span></div><div className="preview-screen">{renderUrl ? <video controls src={renderUrl} /> : <span>{renderJobId ? "Render " + renderJobStatus : "Playback preview connects to the selected revision"}</span>}</div></section>
           <section className="panel proposal-panel"><div className="panel-heading"><h2>AI proposal</h2>{proposal && <span className="badge">{Math.round(proposal.confidence * 100)}% confidence</span>}</div>{proposal ? <><p>{proposal.rationale}</p><div className="evidence">{proposal.evidence.map((item) => <div key={item.reference}><span>{item.source}</span><code>{item.reference}</code>{item.excerpt && <p>{item.excerpt}</p>}</div>)}</div>{proposal.status === "proposed" && <div className="decision-actions"><button className="secondary" onClick={() => decideProposal("rejected")} disabled={busy}>Reject</button><button onClick={() => decideProposal("accepted")} disabled={busy}>Accept as revision</button></div>}</> : <p className="muted">Save a revision to request an explainable tailoring proposal.</p>}</section>
         </div>
       </section>
