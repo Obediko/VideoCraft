@@ -14,7 +14,7 @@
 
 - [x] Add database-backed repositories and initial migrations.
 - [x] Add authenticated API contracts for project, asset, revision, transcript, render, and proposal commands.
-- [ ] Add end-to-end tests against PostgreSQL and Redis.
+- [x] Add CI integration tests against PostgreSQL and Redis.
 - [x] Add a secure local object-storage boundary.
 - [x] Add bounded multipart asset ingestion with project-scoped keys and checksums.
 - [ ] Add production object storage and signed download URLs (local authenticated download remains the development adapter).
