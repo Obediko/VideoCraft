@@ -28,3 +28,17 @@ test("S3 adapter uploads and removes through the provider client", async () => {
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+
+test("S3 listing follows continuation tokens", async () => {
+  const pages = [
+    { Contents: [{ Key: "renders/a.mp4", Size: 1, LastModified: new Date("2026-01-01T00:00:00Z") }], IsTruncated: true, NextContinuationToken: "page-2" },
+    { Contents: [{ Key: "renders/b.mp4", Size: 2, LastModified: new Date("2026-02-01T00:00:00Z") }], IsTruncated: false }
+  ];
+  const commands = [];
+  const client = { send: async (command) => { commands.push(command); return pages.shift(); } };
+  const storage = new S3ObjectStorage({ bucket: "videocraft-test", region: "us-east-1", client });
+  const objects = await storage.list("renders/");
+  assert.deepEqual(objects.map((object) => object.key), ["renders/a.mp4", "renders/b.mp4"]);
+  assert.equal(commands[1].input.ContinuationToken, "page-2");
+});
