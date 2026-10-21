@@ -73,7 +73,7 @@ export function App() {
       try {
         const result = await request("/v1/projects/" + projectId + "/renders/" + id);
         setRenderJobStatus(result.job.status + " " + result.job.progress + "%");
-        if (["succeeded", "failed", "cancelled"].includes(result.job.status)) { setStatus("Render " + result.job.status); return; }
+        if (result.job.status === "succeeded") { const download = await request("/v1/projects/" + projectId + "/renders/" + id + "/download-url"); setRenderUrl(API + download.url); setStatus("Render succeeded"); return; }\n        if (["failed", "cancelled"].includes(result.job.status)) { setStatus("Render " + result.job.status); return; }
       } catch (error) { setStatus(errorMessage(error)); return; }
     }
   }
