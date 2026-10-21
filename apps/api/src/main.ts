@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto";
 import rateLimit from "@fastify/rate-limit";
 import { Queue } from "bullmq";
 import { createPool, PostgresAssetRepository, PostgresProjectRepository, PostgresProposalStore, PostgresRevisionRepository, PostgresTranscriptStore, PostgresRenderJobRepository, PostgresFeedbackRepository, type Database } from "@videocraft/persistence";
 import { BullMqRenderQueue } from "@videocraft/jobs";
+import { ProjectService } from "@videocraft/application";
 import { FasterWhisperWorker } from "@videocraft/transcription";
 import { LocalObjectStorage } from "@videocraft/storage";
 import { StaticStrategyRegistry } from "@videocraft/strategies";
@@ -11,6 +13,7 @@ import { registerUploadRoutes } from "./uploads.js";
 import { registerRenderRoutes } from "./render-routes.js";
 import { registerIntentRoutes } from "./intent-routes.js";
 import { registerFeedbackRoutes } from "./feedback-routes.js";
+import { registerTimelineRoutes } from "./timeline-routes.js";
 import { JwtAuthenticator, PostgresProjectAuthorizer } from "./auth.js";
 
 function required(name: string): string {
@@ -43,10 +46,12 @@ const authenticator = new JwtAuthenticator(required("AUTH_JWT_SECRET"), {
   ...(process.env.AUTH_AUDIENCE ? { audience: process.env.AUTH_AUDIENCE } : {}),
 });
 const authorizer = new PostgresProjectAuthorizer(projects, db);
+const revisions = new PostgresRevisionRepository(db);
 const renderJobs = new PostgresRenderJobRepository(db);
+const timelineService = new ProjectService(projects, assets, revisions, { next: () => randomUUID() }, { now: () => new Date().toISOString() });
 const feedback = new PostgresFeedbackRepository(db);
 const server = buildServer({
-  projects, assets, storage, revisions: new PostgresRevisionRepository(db),
+  projects, assets, storage, revisions,
   transcripts: new PostgresTranscriptStore(db),
   proposals: new PostgresProposalStore(db),
   strategies: new StaticStrategyRegistry(),
@@ -56,6 +61,7 @@ const server = buildServer({
   authorize: authorizer,
 });
 server.register(rateLimit, { max: 120, timeWindow: "1 minute", skipOnError: true });
+registerTimelineRoutes(server, { projects, revisions, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, saveRevision: (input) => timelineService.saveRevision(input) });
 registerFeedbackRoutes(server, { feedback, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, now: () => new Date().toISOString() });
 registerIntentRoutes(server, { analyzer: new RuleBasedIntentAnalyzer(), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
 registerRenderRoutes(server, { jobs: renderJobs, storage, signingSecret: required("DOWNLOAD_SIGNING_SECRET"), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
