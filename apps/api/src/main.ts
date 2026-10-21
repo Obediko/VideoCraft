@@ -52,7 +52,7 @@ const server = buildServer({
   authorize: authorizer,
 });
 server.register(rateLimit, { max: 120, timeWindow: "1 minute", skipOnError: true });
-registerRenderRoutes(server, { jobs: renderJobs, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
+registerRenderRoutes(server, { jobs: renderJobs, storage, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
 registerUploadRoutes(server, {
   assets, storage, authorize: authorizer, authenticate: (request) => authenticator.authenticate(request),
   clock: () => new Date().toISOString(),
