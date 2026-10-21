@@ -42,7 +42,7 @@
 - [x] Add an FFmpeg adapter and constrained render worker.
 - [x] Stage render inputs and persist outputs through the configured local or S3-compatible storage adapter.
 - [x] Add durable progress/status persistence, cancellation state, retries through BullMQ, and output manifests.
-- [x] Add a typed PySceneDetect adapter and standalone scene worker.\n- [x] Expose authenticated, project-scoped scene detection and stage inputs through local or S3 storage.
+- [x] Add a typed PySceneDetect adapter and standalone scene worker.\n- [x] Expose authenticated, project-scoped scene detection and stage inputs through local or S3 storage.\n- [x] Persist detected scenes for reuse by the editor and tailoring flows.
 - [x] Add a typed OTIO-shaped import/export adapter and authenticated API endpoints.
 - [x] Add a Python OpenTimelineIO provider bridge with a fail-closed worker protocol and mocked round-trip tests.
 - [x] Validate against the real OpenTimelineIO package in CI with a pinned worker dependency.
