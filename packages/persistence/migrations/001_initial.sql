@@ -26,6 +26,17 @@ CREATE TABLE IF NOT EXISTS assets (
   created_at TIMESTAMPTZ NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS transcript_segments (
+  id TEXT PRIMARY KEY,
+  asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+  start_us BIGINT NOT NULL CHECK (start_us >= 0),
+  end_us BIGINT NOT NULL CHECK (end_us > start_us),
+  text TEXT NOT NULL,
+  words JSONB NOT NULL DEFAULT '[]'::jsonb,
+  provider TEXT NOT NULL,
+  provider_version TEXT
+);
+
 CREATE TABLE IF NOT EXISTS project_revisions (
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   revision INTEGER NOT NULL CHECK (revision > 0),
@@ -40,3 +51,4 @@ CREATE TABLE IF NOT EXISTS project_revisions (
 CREATE INDEX IF NOT EXISTS assets_project_created_idx ON assets(project_id, created_at);
 CREATE INDEX IF NOT EXISTS revisions_project_idx ON project_revisions(project_id, revision DESC);
 CREATE INDEX IF NOT EXISTS project_members_user_idx ON project_members(user_id);
+CREATE INDEX IF NOT EXISTS transcript_asset_time_idx ON transcript_segments(asset_id, start_us);
