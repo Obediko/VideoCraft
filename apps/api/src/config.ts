@@ -8,6 +8,7 @@ export interface ProductionEnvironment {
   MALWARE_SCAN_REQUIRED?: string;
   CLAMAV_HOST?: string;
   OTEL_EXPORTER_OTLP_ENDPOINT?: string;
+  METRICS_AUTH_TOKEN?: string;
   INTENT_PROVIDER_MODE?: string;
   INTENT_PROVIDER_API_KEY?: string;
   INTENT_PROVIDER_URL?: string;
@@ -27,6 +28,7 @@ export function validateProductionConfiguration(env: ProductionEnvironment): voi
   if (env.MALWARE_SCAN_REQUIRED !== "true") missing.push("MALWARE_SCAN_REQUIRED=true");
   if (!env.CLAMAV_HOST) missing.push("CLAMAV_HOST");
   if (!env.OTEL_EXPORTER_OTLP_ENDPOINT) missing.push("OTEL_EXPORTER_OTLP_ENDPOINT");
+  if (!env.METRICS_AUTH_TOKEN || env.METRICS_AUTH_TOKEN.length < 32) missing.push("METRICS_AUTH_TOKEN (32+ characters)");
 
   const providerMode = env.INTENT_PROVIDER_MODE ?? (env.INTENT_PROVIDER_API_KEY ? "external" : "rule-based");
   if (providerMode !== "rule-based" && providerMode !== "external") {
