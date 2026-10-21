@@ -20,3 +20,19 @@ test("render status and short-lived download URL are project-scoped", async () =
   assert.equal(body.expires > Math.floor(Date.now() / 1000), true);
   await app.close();
 });
+
+
+test("render downloads reject output keys outside the project scope", async () => {
+  const app = Fastify();
+  const jobs = new Map([["render-2", { id: "render-2", projectId: "project-1", revision: 1, settings: { format: "mp4", videoCodec: "libx264", audioCodec: "aac", width: 1280, height: 720, frameRate: 30 }, idempotencyKey: "idem-87654321", status: "succeeded", progress: 100, output: { storageKey: "projects/project-2/renders/render-2.mp4", checksumSha256: "b".repeat(64), sizeBytes: 10, mimeType: "video/mp4" } }]]);
+  registerRenderRoutes(app, {
+    jobs: { get: async (id) => jobs.get(id), save: async () => undefined, update: async () => undefined },
+    storage: { resolve: () => "unused", putFile: async () => { throw new Error("unused"); }, remove: async () => undefined },
+    signingSecret: "s".repeat(32),
+    authenticate: async () => ({ userId: "user-1" }),
+    authorize: { canAccess: async () => true },
+  });
+  const response = await app.inject({ method: "GET", url: "/v1/projects/project-1/renders/render-2/download-url" });
+  assert.equal(response.statusCode, 404);
+  await app.close();
+});
