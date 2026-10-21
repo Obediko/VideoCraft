@@ -11,7 +11,7 @@ import type {
 
 export class ShortFormExplainerStrategy implements EditingStrategy {
   readonly id = "short-form-explainer";
-  readonly version = "1.0.0";
+  readonly version = "1.1.0";
 
   async propose(input: {
     project: Project;
