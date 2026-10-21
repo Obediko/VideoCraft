@@ -1,4 +1,5 @@
-import { PostgresAssetRepository, PostgresRenderJobRepository, createPool, type Database } from "@videocraft/persistence";
+import { PostgresAssetRepository, PostgresAuditRepository, PostgresRenderJobRepository, createPool, type Database } from "@videocraft/persistence";
+import { randomUUID } from "node:crypto";
 import { pruneExpiredObjects } from "@videocraft/retention";
 import { LocalObjectStorage, S3ObjectStorage, type ObjectStorage } from "@videocraft/storage";
 
@@ -27,6 +28,7 @@ async function main(): Promise<void> {
     const db = pool as unknown as Database;
     const assets = new PostgresAssetRepository(db);
     const renders = new PostgresRenderJobRepository(db);
+    const audit = new PostgresAuditRepository(db);
     const protectedKeys = new Set([
       ...(await assets.listStorageKeys()),
       ...(await renders.listOutputStorageKeys()),
@@ -38,6 +40,25 @@ async function main(): Promise<void> {
       protectedKeys,
       maxDeletes,
       dryRun: process.env.RETENTION_DRY_RUN !== "false",
+    });
+    await audit.append({
+      id: randomUUID(),
+      action: "retention.cleanup",
+      method: "WORKER",
+      route: "retention",
+      statusCode: 200,
+      requestId: randomUUID(),
+      metadata: {
+        cutoff: required("RETENTION_CUTOFF"),
+        dryRun: process.env.RETENTION_DRY_RUN !== "false",
+        examined: result.examined,
+        eligible: result.eligible,
+        deleted: result.deleted.length,
+        planned: result.planned.length,
+        skippedProtected: result.skippedProtected,
+        remainingEligible: result.remainingEligible,
+      },
+      createdAt: new Date().toISOString(),
     });
     console.log(JSON.stringify({ event: "retention.completed", ...result }));
   } finally {
