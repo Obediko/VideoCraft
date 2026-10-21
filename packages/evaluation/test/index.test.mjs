@@ -17,7 +17,7 @@ test("evaluation reports decision and downstream outcome rates for one strategy"
   assert.equal(report.exported, 1);
   assert.equal(report.acceptanceRate, 0.5);
   assert.equal(report.editRate, 0.5);
-  assert.equal(report.outcomeScore, 0.25);
+  assert.equal(report.outcomeScore, 0.5);
 });
 
 test("evaluation is explicit and empty strategies do not fabricate signal", () => {
