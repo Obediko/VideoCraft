@@ -1,5 +1,5 @@
 import { Pool, type PoolConfig } from "pg";
-import type { Asset, Project, ProjectRevision, TranscriptSegment, UUID } from "@videocraft/domain";
+import type { Asset, EditingProposal, Project, ProjectRevision, TranscriptSegment, UUID } from "@videocraft/domain";
 import type { AssetRepository, ProjectRepository, RevisionRepository } from "@videocraft/application";
 
 export interface Database {
@@ -8,6 +8,11 @@ export interface Database {
 export interface TranscriptStore {
   listForAsset(assetId: UUID): Promise<TranscriptSegment[]>;
   replaceForAsset(assetId: UUID, segments: TranscriptSegment[]): Promise<void>;
+}
+export interface ProposalStore {
+  save(proposal: EditingProposal): Promise<void>;
+  get(id: UUID): Promise<EditingProposal | undefined>;
+  setStatus(id: UUID, status: EditingProposal["status"]): Promise<void>;
 }
 export function createPool(config: PoolConfig | string): Pool {
   return new Pool(typeof config === "string" ? { connectionString: config } : config);
@@ -83,6 +88,33 @@ export class PostgresTranscriptStore implements TranscriptStore {
   }
 }
 
+export class PostgresProposalStore implements ProposalStore {
+  constructor(private readonly db: Database) {}
+  async save(proposal: EditingProposal): Promise<void> {
+    await this.db.query(
+      "INSERT INTO editing_proposals (id, project_id, base_revision, strategy_id, strategy_version, rationale, confidence, evidence, operations, status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+      [proposal.id, proposal.projectId, proposal.baseRevision, proposal.strategyId, proposal.strategyVersion, proposal.rationale, proposal.confidence, JSON.stringify(proposal.evidence), JSON.stringify(proposal.operations), proposal.status],
+    );
+  }
+  async get(id: UUID): Promise<EditingProposal | undefined> {
+    const result = await this.db.query<ProposalRow>(
+      "SELECT id, project_id, base_revision, strategy_id, strategy_version, rationale, confidence, evidence, operations, status FROM editing_proposals WHERE id = $1",
+      [id],
+    );
+    const row = result.rows[0];
+    return row ? {
+      id: row.id, projectId: row.project_id, baseRevision: row.base_revision,
+      strategyId: row.strategy_id, strategyVersion: row.strategy_version,
+      rationale: row.rationale, confidence: row.confidence,
+      evidence: row.evidence, operations: row.operations, status: row.status,
+    } : undefined;
+  }
+  async setStatus(id: UUID, status: EditingProposal["status"]): Promise<void> {
+    await this.db.query("UPDATE editing_proposals SET status = $2 WHERE id = $1", [id, status]);
+  }
+}
+
+type ProposalRow = { id: string; project_id: string; base_revision: number; strategy_id: string; strategy_version: string; rationale: string; confidence: number; evidence: EditingProposal["evidence"]; operations: EditingProposal["operations"]; status: EditingProposal["status"] };
 type ProjectRow = { id: string; owner_id: string; name: string; revision: number; created_at: string; updated_at: string };
 type AssetRow = { id: string; project_id: string; kind: Asset["kind"]; storage_key: string; checksum_sha256: string; duration_us: string | null; metadata: Record<string, string | number | boolean>; created_at: string };
 type RevisionRow = { project_id: string; revision: number; timeline: ProjectRevision["timeline"]; tailoring: NonNullable<ProjectRevision["tailoring"]> | null; accepted_proposal_ids: UUID[]; created_at: string; created_by: string };
