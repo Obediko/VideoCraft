@@ -1,6 +1,6 @@
 import rateLimit from "@fastify/rate-limit";
 import { Queue } from "bullmq";
-import { createPool, PostgresAssetRepository, PostgresProjectRepository, PostgresProposalStore, PostgresRevisionRepository, PostgresTranscriptStore, PostgresRenderJobRepository, type Database } from "@videocraft/persistence";
+import { createPool, PostgresAssetRepository, PostgresProjectRepository, PostgresProposalStore, PostgresRevisionRepository, PostgresTranscriptStore, PostgresRenderJobRepository, PostgresFeedbackRepository, type Database } from "@videocraft/persistence";
 import { BullMqRenderQueue } from "@videocraft/jobs";
 import { FasterWhisperWorker } from "@videocraft/transcription";
 import { LocalObjectStorage } from "@videocraft/storage";
@@ -10,6 +10,7 @@ import { buildServer } from "./server.js";
 import { registerUploadRoutes } from "./uploads.js";
 import { registerRenderRoutes } from "./render-routes.js";
 import { registerIntentRoutes } from "./intent-routes.js";
+import { registerFeedbackRoutes } from "./feedback-routes.js";
 import { JwtAuthenticator, PostgresProjectAuthorizer } from "./auth.js";
 
 function required(name: string): string {
@@ -43,6 +44,7 @@ const authenticator = new JwtAuthenticator(required("AUTH_JWT_SECRET"), {
 });
 const authorizer = new PostgresProjectAuthorizer(projects, db);
 const renderJobs = new PostgresRenderJobRepository(db);
+const feedback = new PostgresFeedbackRepository(db);
 const server = buildServer({
   projects, assets, storage, revisions: new PostgresRevisionRepository(db),
   transcripts: new PostgresTranscriptStore(db),
@@ -54,6 +56,7 @@ const server = buildServer({
   authorize: authorizer,
 });
 server.register(rateLimit, { max: 120, timeWindow: "1 minute", skipOnError: true });
+registerFeedbackRoutes(server, { feedback, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, now: () => new Date().toISOString() });
 registerIntentRoutes(server, { analyzer: new RuleBasedIntentAnalyzer(), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
 registerRenderRoutes(server, { jobs: renderJobs, storage, signingSecret: required("DOWNLOAD_SIGNING_SECRET"), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
 registerUploadRoutes(server, {
