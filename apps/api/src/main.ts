@@ -123,7 +123,7 @@ const server = buildServer({
 });
 server.register(rateLimit, { max: 120, timeWindow: "1 minute", skipOnError: true, keyGenerator: rateLimitKey });
 registerTimelineRoutes(server, { projects, revisions, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, saveRevision: (input) => timelineService.saveRevision(input) });
-registerFeedbackRoutes(server, { feedback, revisions, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, now: () => new Date().toISOString() });
+registerFeedbackRoutes(server, { feedback, revisions, proposals: new PostgresProposalStore(db), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, now: () => new Date().toISOString() });
 registerIntentRoutes(server, { analyzer: intentAnalyzer, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
 registerRenderRoutes(server, { jobs: renderJobs, storage, signingSecret: requiredSecret("DOWNLOAD_SIGNING_SECRET"), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
 registerUploadRoutes(server, {
