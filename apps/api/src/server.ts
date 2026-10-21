@@ -4,7 +4,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { validateProposal } from "@videocraft/domain";
 import type { Asset, EditingProposal, ProjectRevision, RenderSettings, RendererPort, StrategyRegistry, TailoringProfile, Timeline, TimelineClip, TimelineOperation, TranscriptSegment, TranscriptionPort, UUID } from "@videocraft/domain";
 import type { SceneDetector } from "@videocraft/scene-detection";
-import { ProjectService, type Clock, type IdFactory, type ProjectMemberRepository, type ProjectRepository, type AssetRepository, type RevisionRepository } from "@videocraft/application";
+import { ProjectService, type Clock, type IdFactory, type ProjectMemberRepository, type ProjectRepository, type AssetRepository, type RevisionRepository, type SceneRepository } from "@videocraft/application";
 import type { ObjectStorage } from "@videocraft/storage";
 import { MetricsRegistry } from "@videocraft/observability";
 
@@ -27,7 +27,7 @@ export interface AuditWriter {
 export interface ApiDependencies {
   projects: ProjectRepository; assets: AssetRepository; revisions: RevisionRepository; members?: ProjectMemberRepository; storage?: ObjectStorage;
   authenticate: Authenticator; authorize: ProjectAuthorizer;
-  renderer?: RendererPort; transcriber?: TranscriptionPort; sceneDetector?: SceneDetector; transcripts?: TranscriptStore; strategies?: StrategyRegistry; proposals?: ProposalStore;
+  renderer?: RendererPort; transcriber?: TranscriptionPort; sceneDetector?: SceneDetector; scenes?: SceneRepository; transcripts?: TranscriptStore; strategies?: StrategyRegistry; proposals?: ProposalStore;
   clock?: Clock; ids?: IdFactory; audit?: AuditWriter; metrics?: MetricsRegistry; readiness?: ReadinessCheck[];
 }
 
@@ -226,11 +226,36 @@ export function buildServer(dependencies: ApiDependencies): FastifyInstance {
     const asset = (await dependencies.assets.listForProject(projectId)).find((candidate) => candidate.id === assetId);
     if (!asset) return sendError(reply, 404, "not_found", "Asset not found");
     try {
-      const scenes = await dependencies.sceneDetector.detect(asset.storageKey);
-      return reply.code(201).send({ assetId, scenes });
+      const detected = await dependencies.sceneDetector.detect(asset.storageKey);
+      if (dependencies.scenes) {
+        await dependencies.scenes.replaceForAsset(assetId, detected.map((scene) => ({
+          id: scene.id,
+          assetId,
+          startUs: scene.startUs,
+          endUs: scene.endUs,
+          createdAt: clock.now(),
+        })));
+        const scenes = await dependencies.scenes.listForAsset(assetId);
+        return reply.code(201).send({ assetId, scenes });
+      }
+      return reply.code(201).send({ assetId, scenes: detected });
     } catch (error) {
       return sendError(reply, 503, "scene_detector_unavailable", messageOf(error));
     }
+  });
+
+  server.get("/v1/projects/:projectId/assets/:assetId/scenes", async (request, reply) => {
+    const principal = await authenticate(dependencies.authenticate, request, reply);
+    if (!principal) return;
+    if (!dependencies.scenes) return sendError(reply, 503, "scene_storage_unavailable", "Scene storage is not configured");
+    const params = asRecord(request.params);
+    const projectId = params.projectId;
+    const assetId = params.assetId;
+    if (typeof projectId !== "string" || typeof assetId !== "string") return sendError(reply, 400, "invalid_request", "projectId and assetId are required");
+    if (!(await dependencies.authorize.canAccess(principal, projectId, "viewer"))) return sendError(reply, 403, "forbidden", "Project access denied");
+    const asset = (await dependencies.assets.listForProject(projectId)).find((candidate) => candidate.id === assetId);
+    if (!asset) return sendError(reply, 404, "not_found", "Asset not found");
+    return { assetId, scenes: await dependencies.scenes.listForAsset(assetId) };
   });
 
   server.post("/v1/projects/:projectId/assets/:assetId/transcript", async (request, reply) => {
