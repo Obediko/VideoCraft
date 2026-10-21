@@ -1,8 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { CreateBucketCommand, S3Client } from "@aws-sdk/client-s3";
 import { Pool } from "pg";
 import Redis from "ioredis";
 import { migrateDatabase, PostgresAuditRepository, PostgresFeedbackRepository, PostgresRenderJobRepository } from "@videocraft/persistence";
+import { S3ObjectStorage } from "@videocraft/storage";
 
 const databaseUrl = process.env.DATABASE_URL;
 const redisUrl = process.env.REDIS_URL;
@@ -29,6 +34,36 @@ test("PostgreSQL persistence and Redis connectivity are available", { skip }, as
   await audit.append({ id: auditId, actorId: "integration-user", projectId, action: "/v1/projects/:projectId", method: "GET", route: "/v1/projects/:projectId", statusCode: 200, requestId: auditId, createdAt: new Date().toISOString() });
   const auditRow = await pool.query("SELECT actor_id, project_id, status_code FROM audit_events WHERE id = $1", [auditId]);
   assert.deepEqual(auditRow.rows[0], { actor_id: "integration-user", project_id: projectId, status_code: 200 });
+  if (process.env.S3_ENDPOINT) {
+    const bucket = process.env.S3_BUCKET ?? "videocraft-ci";
+    const client = new S3Client({
+      endpoint: process.env.S3_ENDPOINT,
+      region: process.env.S3_REGION ?? "us-east-1",
+      forcePathStyle: true,
+      credentials: {
+        accessKeyId: process.env.S3_ACCESS_KEY_ID ?? "videocraft",
+        secretAccessKey: process.env.S3_SECRET_ACCESS_KEY ?? "videocraft-secret",
+      },
+    });
+    await client.send(new CreateBucketCommand({ Bucket: bucket }));
+    const directory = await mkdtemp(join(tmpdir(), "videocraft-s3-integration-"));
+    const source = join(directory, "source.bin");
+    const destination = join(directory, "staged.bin");
+    const key = "integration/" + Date.now() + "/source.bin";
+    try {
+      await writeFile(source, "provider contract");
+      const storage = new S3ObjectStorage({ bucket, region: process.env.S3_REGION ?? "us-east-1", endpoint: process.env.S3_ENDPOINT, forcePathStyle: true, client });
+      await storage.putFile(source, key);
+      assert.equal((await storage.list("integration/")).some((object) => object.key === key), true);
+      await storage.downloadToFile(key, destination);
+      assert.equal(await readFile(destination, "utf8"), "provider contract");
+      await storage.remove(key);
+      assert.equal((await storage.list("integration/")).some((object) => object.key === key), false);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+
   const redis = new Redis(redisUrl);
   const pong = await redis.ping();
   assert.equal(pong, "PONG");
