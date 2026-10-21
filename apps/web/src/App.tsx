@@ -108,7 +108,7 @@ export function App() {
     finally { setBusy(false); }
   }
 
-  async function previewProposal() {
+  async function analyzeBrief() {\n    if (!projectId) { setStatus("Create a project first"); return; }\n    setBusy(true);\n    try {\n      const result = await request("/v1/projects/" + projectId + "/intent/analyze", { method: "POST", body: JSON.stringify({ prompt: intent }) });\n      const profile = result.analysis.profile; setIntent(profile.intent); setAudience(profile.audience); setChannel(profile.channel); setStatus("Brief analyzed into a tailoring profile");\n    } catch (error) { setStatus(errorMessage(error)); }\n    finally { setBusy(false); }\n  }\n\n  async function previewProposal() {
     if (!projectId || !revision) { setStatus("Save a revision before requesting a proposal"); return; }
     setBusy(true);
     try {
@@ -169,7 +169,7 @@ export function App() {
           <label>Intent<textarea value={intent} onChange={(event) => setIntent(event.target.value)} /></label>
           <label>Audience<input value={audience} onChange={(event) => setAudience(event.target.value)} /></label>
           <label>Channel<input value={channel} onChange={(event) => setChannel(event.target.value)} /></label>
-          <button className="secondary" onClick={previewProposal} disabled={busy || !revision}>Preview AI proposal</button>
+          <button className="secondary" onClick={analyzeBrief} disabled={busy || !projectId}>Analyze brief</button>\n          <button className="secondary" onClick={previewProposal} disabled={busy || !revision}>Preview AI proposal</button>
         </section>
         <section className="panel">
           <h2>Asset reference</h2>
