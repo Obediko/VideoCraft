@@ -35,6 +35,16 @@ export class ProjectService {
     return project;
   }
 
+  async renameProject(projectId: UUID, name: string): Promise<Project> {
+    const project = await this.requireProject(projectId);
+    const normalizedName = name.trim();
+    if (!normalizedName) throw new Error("Project name is required");
+    if (normalizedName.length > 120) throw new Error("Project name is too long");
+    const renamed = { ...project, name: normalizedName, updatedAt: this.clock.now() };
+    await this.projects.save(renamed);
+    return renamed;
+  }
+
   async addAsset(asset: Asset): Promise<void> {
     const project = await this.requireProject(asset.projectId);
     if (!/^[a-f0-9]{64}$/i.test(asset.checksumSha256)) throw new Error("Asset checksum must be a SHA-256 hex digest");
