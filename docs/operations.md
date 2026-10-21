@@ -34,7 +34,7 @@ The `@videocraft/retention` package provides bounded cleanup over providers that
 
 Intent-provider calls are bounded by `INTENT_PROVIDER_MAX_PER_MINUTE` per authenticated principal. Intent analysis is prompt-only by default; callers must explicitly set `includeTranscript=true` before persisted project speech is loaded into the provider request. API rate limits use Redis so the budget is shared across API instances; keep Redis available and monitor rejected requests.
 
-The API exposes a Prometheus-compatible `/metrics` endpoint with bounded request counters and latency count/sum metrics labeled only by method, route template, and status. Keep the endpoint inside the deployment network or behind platform access controls; it contains operational data and no request bodies or credentials.
+The API exposes a Prometheus-compatible `/metrics` endpoint with bounded request counters and latency count/sum metrics labeled only by method, route template, and status. Set METRICS_AUTH_TOKEN to a random 32+ character secret in production; requests must use its Bearer token. Keep the endpoint inside the deployment network or behind platform access controls; it contains operational data and no request bodies or credentials.
 
 ## Production requirements
 
