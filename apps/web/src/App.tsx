@@ -100,8 +100,8 @@ export function App() {
     setStatus("Clip added to the non-destructive timeline");
   }
 
-  function nudgeSelectedClip(deltaUs: number) {
-    if (!selectedClipId) { setStatus("Select a clip first"); return; }
+  function nudgeSelectedClip(deltaUs: number, clipId = selectedClipId) {
+    if (!clipId) { setStatus("Select a clip first"); return; }
     setTimeline((current) => ({
       ...current,
       tracks: current.tracks.map((track) => ({
@@ -117,8 +117,8 @@ export function App() {
     setStatus(deltaUs < 0 ? "Clip moved earlier" : "Clip moved later");
   }
 
-  function removeSelectedClip() {
-    if (!selectedClipId) { setStatus("Select a clip first"); return; }
+  function removeSelectedClip(clipId = selectedClipId) {
+    if (!clipId) { setStatus("Select a clip first"); return; }
     setTimeline((current) => ({ ...current, tracks: current.tracks.map((track) => ({ ...track, clips: track.clips.filter((clip) => clip.id !== clipId) })) }));
     setSelectedClipId("");
     setStatus("Clip removed from the non-destructive timeline");
