@@ -206,3 +206,29 @@ test("non-owners cannot manage project members", async () => {
   assert.equal(response.statusCode, 403);
   await server.close();
 });
+
+
+test("authorized editors can request project-scoped scene detection", async () => {
+  const deps = dependencies(async () => ({ userId: "user-1" }), {
+    sceneDetector: { detect: async (storageKey) => {
+      assert.equal(storageKey, "projects/project-1/assets/asset-1.media");
+      return [{ id: "scene-1", startUs: 0, endUs: 1_000_000 }];
+    } }
+  });
+  const server = buildServer(deps);
+  const created = await server.inject({ method: "POST", url: "/v1/projects", payload: { name: "Scenes" } });
+  const projectId = created.json().project.id;
+  await deps.assets.save({
+    id: "asset-1",
+    projectId,
+    kind: "video",
+    storageKey: "projects/project-1/assets/asset-1.media",
+    checksumSha256: "b".repeat(64),
+    metadata: {},
+    createdAt: "2026-10-21T00:00:00.000Z"
+  });
+  const response = await server.inject({ method: "POST", url: "/v1/projects/" + projectId + "/assets/asset-1/scenes" });
+  assert.equal(response.statusCode, 201);
+  assert.deepEqual(response.json().scenes, [{ id: "scene-1", startUs: 0, endUs: 1_000_000 }]);
+  await server.close();
+});
