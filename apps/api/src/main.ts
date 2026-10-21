@@ -5,7 +5,7 @@ import { createPool, PostgresAssetRepository, PostgresProjectRepository, Postgre
 import { BullMqRenderQueue } from "@videocraft/jobs";
 import { ProjectService } from "@videocraft/application";
 import { FasterWhisperWorker } from "@videocraft/transcription";
-import { LocalObjectStorage } from "@videocraft/storage";
+import { LocalObjectStorage, S3ObjectStorage, type ObjectStorage } from "@videocraft/storage";
 import { StaticStrategyRegistry } from "@videocraft/strategies";
 import { OpenAiCompatibleIntentAnalyzer, RuleBasedIntentAnalyzer } from "@videocraft/intent-analysis";
 import { buildServer } from "./server.js";
@@ -26,13 +26,25 @@ function redisConnection(value: string) {
   if (url.protocol !== "redis:" && url.protocol !== "rediss:") throw new Error("REDIS_URL must use redis:// or rediss://");
   return { host: url.hostname, port: Number(url.port || "6379"), ...(url.username ? { username: decodeURIComponent(url.username) } : {}), ...(url.password ? { password: decodeURIComponent(url.password) } : {}), ...(url.protocol === "rediss:" ? { tls: {} } : {}) };
 }
+function createStorage(): ObjectStorage {
+  if ((process.env.OBJECT_STORAGE_PROVIDER ?? "local") === "s3") {
+    return new S3ObjectStorage({
+      bucket: required("S3_BUCKET"),
+      region: process.env.S3_REGION ?? "us-east-1",
+      ...(process.env.S3_ENDPOINT ? { endpoint: process.env.S3_ENDPOINT } : {}),
+      ...(process.env.S3_PUBLIC_URL ? { publicUrl: process.env.S3_PUBLIC_URL } : {}),
+      forcePathStyle: process.env.S3_FORCE_PATH_STYLE === "true",
+    });
+  }
+  return new LocalObjectStorage(required("MEDIA_ROOT"));
+}
 
 const pool = createPool(required("DATABASE_URL"));
 const db = pool as unknown as Database;
 const projects = new PostgresProjectRepository(db);
 const assets = new PostgresAssetRepository(db);
 const mediaRoot = required("MEDIA_ROOT");
-const storage = new LocalObjectStorage(mediaRoot);
+const storage = createStorage();
 const renderQueue = new Queue("videocraft-render", { connection: redisConnection(required("REDIS_URL")) });
 const transcriber = new FasterWhisperWorker({
   workerPath: required("WHISPER_WORKER_PATH"),
