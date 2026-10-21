@@ -23,6 +23,10 @@ test("production configuration requires durable storage, JWT claims, and malware
     () => validateProductionConfiguration({ ...safe, OBJECT_STORAGE_PROVIDER: "local" }),
     /OBJECT_STORAGE_PROVIDER=s3/
   );
+  assert.throws(
+    () => validateProductionConfiguration({ ...safe, AUTH_JWT_SECRET: "same", AUTH_JWT_SECRET_PREVIOUS: "same" }),
+    /AUTH_JWT_SECRET_PREVIOUS must differ/
+  );
 });
 
 test("production external intent providers require explicit secure credentials", () => {
