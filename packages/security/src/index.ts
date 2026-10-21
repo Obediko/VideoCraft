@@ -39,8 +39,9 @@ export class ClamAvScanner implements MalwareScanner {
       socket.setTimeout(this.options.timeoutMs, () => finish(new Error("ClamAV socket timed out")));
       socket.on("connect", () => {
         socket.write(Buffer.from("zINSTREAM\0"));
-        input.on("data", (chunk: Buffer) => {
-          const size = Buffer.allocUnsafe(4); size.writeUInt32BE(chunk.length, 0);
+        input.on("data", (chunk: string | Buffer) => {
+          const buffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+          const size = Buffer.allocUnsafe(4); size.writeUInt32BE(buffer.length, 0);
           if (!socket.write(size) || !socket.write(buffer)) input.pause();
         });
         input.on("end", () => { socket.write(Buffer.alloc(4)); });
