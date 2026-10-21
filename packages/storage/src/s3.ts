@@ -17,7 +17,7 @@ export interface S3ObjectStorageOptions {
 export class S3ObjectStorage implements ObjectStorage {
   private readonly client: S3Client;
   private readonly bucket: string;
-  private readonly publicUrl?: string;
+  private readonly publicUrl: string | undefined;
 
   constructor(options: S3ObjectStorageOptions) {
     if (!options.bucket || !options.region) throw new Error("S3 bucket and region are required");
