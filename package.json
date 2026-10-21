@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "AI-assisted, explainable video editing platform",
   "packageManager": "npm@11",
-  "workspaces": ["packages/*", "apps/*"],
+  "workspaces": ["packages/*", "apps/*", "workers/*"],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
