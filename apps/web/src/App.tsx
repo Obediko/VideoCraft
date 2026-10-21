@@ -25,6 +25,9 @@ export function App() {
   const [proposal, setProposal] = useState<Proposal | null>(null);
   const [revision, setRevision] = useState(0);
   const [status, setStatus] = useState("Ready");
+  const [uploadKind, setUploadKind] = useState("video");
+  const [renderJobId, setRenderJobId] = useState("");
+  const [renderJobStatus, setRenderJobStatus] = useState("");
   const [busy, setBusy] = useState(false);
 
   const videoTrack = useMemo(() => timeline.tracks.find((track) => track.kind === "video"), [timeline]);
@@ -47,6 +50,31 @@ export function App() {
       setStatus("Project created");
     } catch (error) { setStatus(errorMessage(error)); }
     finally { setBusy(false); }
+  }
+
+  async function uploadAsset(event: { currentTarget: HTMLInputElement }) {
+    const file = event.currentTarget.files?.[0];
+    if (!file || !projectId) { setStatus(projectId ? "Choose a media file first" : "Create a project first"); return; }
+    setBusy(true);
+    try {
+      const form = new FormData(); form.append("file", file);
+      const response = await fetch(API + "/v1/projects/" + projectId + "/assets/upload?kind=" + encodeURIComponent(uploadKind), { method: "POST", body: form, headers: token ? { authorization: "Bearer " + token } : {} });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error?.message ?? "Upload failed");
+      setAssetId(body.asset.id); setStatus("Uploaded asset " + body.asset.id.slice(0, 8));
+    } catch (error) { setStatus(errorMessage(error)); }
+    finally { setBusy(false); event.currentTarget.value = ""; }
+  }
+
+  async function pollRender(id: string) {
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      try {
+        const result = await request("/v1/projects/" + projectId + "/renders/" + id);
+        setRenderJobStatus(result.job.status + " " + result.job.progress + "%");
+        if ([\"succeeded\", \"failed\", \"cancelled\"].includes(result.job.status)) { setStatus("Render " + result.job.status); return; }
+      } catch (error) { setStatus(errorMessage(error)); return; }
+    }
   }
 
   function addClip() {
@@ -117,7 +145,7 @@ export function App() {
           settings: { format: "mp4", videoCodec: "libx264", audioCodec: "aac", width: 1280, height: 720, frameRate: 30 },
         }),
       });
-      setStatus("Render queued: " + result.job.id);
+      setRenderJobId(result.job.id); setRenderJobStatus("queued 0%"); setStatus("Render queued: " + result.job.id); void pollRender(result.job.id);
     } catch (error) { setStatus(errorMessage(error)); }
     finally { setBusy(false); }
   }
@@ -159,7 +187,7 @@ export function App() {
           </div>
         </div>
         <div className="lower-grid">
-          <section className="panel preview-panel"><div className="panel-heading"><h2>Preview</h2><span className="badge">Non-destructive</span></div><div className="preview-screen"><span>Playback preview connects to the selected revision</span></div></section>
+          <section className="panel preview-panel"><div className="panel-heading"><h2>Preview</h2><span className="badge">Non-destructive</span></div><div className="preview-screen"><span>{renderJobId ? "Render " + renderJobStatus : "Playback preview connects to the selected revision"}</span></div></section>
           <section className="panel proposal-panel"><div className="panel-heading"><h2>AI proposal</h2>{proposal && <span className="badge">{Math.round(proposal.confidence * 100)}% confidence</span>}</div>{proposal ? <><p>{proposal.rationale}</p><div className="evidence">{proposal.evidence.map((item) => <div key={item.reference}><span>{item.source}</span><code>{item.reference}</code>{item.excerpt && <p>{item.excerpt}</p>}</div>)}</div>{proposal.status === "proposed" && <div className="decision-actions"><button className="secondary" onClick={() => decideProposal("rejected")} disabled={busy}>Reject</button><button onClick={() => decideProposal("accepted")} disabled={busy}>Accept as revision</button></div>}</> : <p className="muted">Save a revision to request an explainable tailoring proposal.</p>}</section>
         </div>
       </section>
