@@ -32,6 +32,7 @@ const worker = new Worker<RenderTask>("videocraft-render", async (job: Job<Rende
   const jobId = String(job.id ?? job.data.jobId);
   let record = await renderJobs.get(jobId);
   const base: RenderJob = record ?? { id: jobId, projectId: job.data.project.id, revision: job.data.revision.revision, settings: job.data.settings, idempotencyKey: job.data.idempotencyKey, status: "queued", progress: 0 };
+  if (!record) await renderJobs.save(base);
   if (base.status === "cancelled") return base;
   const running = { ...base, status: "running" as const, progress: 5, errorMessage: undefined };
   await renderJobs.update(running);
