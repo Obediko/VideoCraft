@@ -4,7 +4,7 @@ import { validateTimeline } from "@videocraft/domain";
 export interface Clock { now(): string; }
 export interface IdFactory { next(): UUID; }
 export interface ProjectRepository { get(id: UUID): Promise<Project | undefined>; listForOwner(ownerId: UUID): Promise<Project[]>; save(project: Project): Promise<void>; }
-export interface AssetRepository { listForProject(projectId: UUID): Promise<Asset[]>; save(asset: Asset): Promise<void>; }
+export interface AssetRepository { listForProject(projectId: UUID): Promise<Asset[]>; listStorageKeys(): Promise<string[]>; save(asset: Asset): Promise<void>; }
 export interface RevisionRepository { get(projectId: UUID, revision: number): Promise<ProjectRevision | undefined>; save(revision: ProjectRevision): Promise<void>; }
 
 export interface CreateProjectInput { ownerId: UUID; name: string; }
@@ -84,6 +84,7 @@ export class InMemoryProjectRepository implements ProjectRepository {
 export class InMemoryAssetRepository implements AssetRepository {
   private readonly values = new Map<UUID, Asset>();
   async listForProject(projectId: UUID) { return [...this.values.values()].filter((asset) => asset.projectId === projectId); }
+  async listStorageKeys() { return [...this.values.values()].map((asset) => asset.storageKey); }
   async save(asset: Asset) { this.values.set(asset.id, asset); }
 }
 export class InMemoryRevisionRepository implements RevisionRepository {
