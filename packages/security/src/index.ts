@@ -1,5 +1,5 @@
 import { createReadStream } from "node:fs";
-import { connect, type Socket } from "node:net";
+import { connect } from "node:net";
 
 export interface MalwareScanResult {
   clean: boolean;
