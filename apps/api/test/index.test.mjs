@@ -147,3 +147,24 @@ test("authorized users can retrieve a saved revision", async () => {
   assert.equal(response.json().revision.revision, 1);
   await server.close();
 });
+
+
+test("authorized users can list project assets", async () => {
+  const deps = dependencies(async () => ({ userId: "user-1" }));
+  const server = buildServer(deps);
+  const created = await server.inject({ method: "POST", url: "/v1/projects", payload: { name: "Assets" } });
+  const projectId = created.json().project.id;
+  await deps.assets.save({
+    id: "asset-1",
+    projectId,
+    kind: "video",
+    storageKey: "projects/" + projectId + "/assets/asset-1.media",
+    checksumSha256: "a".repeat(64),
+    metadata: { filename: "demo.mp4" },
+    createdAt: "2026-10-21T00:00:00.000Z"
+  });
+  const response = await server.inject({ method: "GET", url: "/v1/projects/" + projectId + "/assets" });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().assets[0].id, "asset-1");
+  await server.close();
+});
