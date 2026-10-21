@@ -8,7 +8,8 @@ const safe = {
   AUTH_ISSUER: "https://issuer.example",
   AUTH_AUDIENCE: "videocraft-api",
   MALWARE_SCAN_REQUIRED: "true",
-  CLAMAV_HOST: "clamav"
+  CLAMAV_HOST: "clamav",
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318/v1/traces"
 };
 
 test("production configuration requires durable storage, JWT claims, and malware scanning", () => {
