@@ -10,7 +10,7 @@ import { FasterWhisperWorker } from "@videocraft/transcription";
 import { LocalObjectStorage, S3ObjectStorage, type ObjectStorage } from "@videocraft/storage";
 import { StaticStrategyRegistry } from "@videocraft/strategies";
 import { OpenAiCompatibleIntentAnalyzer, RuleBasedIntentAnalyzer } from "@videocraft/intent-analysis";
-import { ClamAvScanner, type MalwareScanner } from "@videocraft/security";
+import { ClamAvScanner, EnvironmentSecretProvider, requireSecret, type MalwareScanner } from "@videocraft/security";
 import { MetricsRegistry } from "@videocraft/observability";
 import { buildServer } from "./server.js";
 import { registerUploadRoutes } from "./uploads.js";
@@ -21,16 +21,9 @@ import { registerTimelineRoutes } from "./timeline-routes.js";
 import { JwtAuthenticator, PostgresProjectAuthorizer } from "./auth.js";
 import { validateProductionConfiguration } from "./config.js";
 
-function required(name: string): string {
-  const value = process.env[name];
-  if (!value) throw new Error(name + " is required");
-  return value;
-}
-function requiredSecret(name: string): string {
-  const value = required(name);
-  if (value.length < 32) throw new Error(name + " must be at least 32 characters");
-  return value;
-}
+const secrets = new EnvironmentSecretProvider(process.env);
+function required(name: string): string { return requireSecret(secrets, name); }
+function requiredSecret(name: string): string { return requireSecret(secrets, name, 32); }
 function boundedInteger(name: string, fallback: number, minimum: number, maximum: number): number {
   const value = process.env[name];
   if (value === undefined || value === "") return fallback;
