@@ -36,6 +36,6 @@ This is feedback-driven product learning, not a claim that the production model 
 - Provider ports add boundary code, but avoid coupling the product to one AI, transcription vendor, or media runtime.
 - A JSON-friendly timeline is interoperable, but validation must remain strict.
 
-## Planned persistence
+## Persistence implementation
 
-Use a relational store for projects, memberships, revisions, assets, transcripts, tailoring profiles, strategies, proposals, render jobs, feedback, and evaluation runs. Store large media and outputs in object storage with checksums and access-controlled references in the database.
+The persistence layer uses PostgreSQL repositories and transactional migrations for projects, memberships, revisions, assets, transcripts, scenes, strategies, proposals, render jobs, feedback, audit events, and backup verification records. Large media and outputs use local or S3-compatible object storage with checksums and project-scoped access-controlled references.
