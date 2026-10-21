@@ -39,7 +39,7 @@ The API exposes a Prometheus-compatible `/metrics` endpoint with bounded request
 - Configure AUTH_ISSUER and AUTH_AUDIENCE in production; the API refuses unsafe production startup without them, S3-backed storage, and required malware scanning.
 - Run database migrations as a controlled release step.
 - Run transcription and rendering as separate worker processes with least-privilege filesystem access.
-- Configure OTEL_EXPORTER_OTLP_ENDPOINT for OTLP traces, keep connection pool limits/timeouts and health probes enabled, and add alerting before public exposure.
+- Configure OTEL_EXPORTER_OTLP_ENDPOINT for OTLP traces, keep connection pool limits/timeouts and health probes enabled, and load `ops/prometheus/videocraft-alerts.yml` into the Prometheus deployment. Route critical alerts to the on-call channel and review warning thresholds with real traffic.
 - Restrict outbound provider access from workers and sandbox media processing.
 - Configure retention, deletion, and malware signature update monitoring for source assets and derived artifacts. Run `@videocraft/backup-verifier-worker` against a known PostgreSQL custom-format backup; it verifies the manifest size and SHA-256, runs `pg_restore --list` without a shell, and records an audit event. Schedule it independently and alert on non-zero exit.
 - Run the emulator-backed S3-compatible provider contract test in CI; add staging-bucket coverage before production cutover.
