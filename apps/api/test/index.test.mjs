@@ -236,3 +236,26 @@ test("authorized editors can request project-scoped scene detection", async () =
   assert.equal(listed.json().scenes[0].id, "scene-1");
   await server.close();
 });
+
+
+test("project-scoped reads deny principals without project access", async () => {
+  const deps = dependencies(async () => ({ userId: "outsider" }), {
+    authorize: { canAccess: async () => false }
+  });
+  const server = buildServer(deps);
+  const created = await server.inject({ method: "POST", url: "/v1/projects", payload: { name: "Private reads" } });
+  const projectId = created.json().project.id;
+  const urls = [
+    "/v1/projects/" + projectId,
+    "/v1/projects/" + projectId + "/assets",
+    "/v1/projects/" + projectId + "/assets/asset-1/scenes",
+    "/v1/projects/" + projectId + "/assets/asset-1/transcript",
+    "/v1/projects/" + projectId + "/revisions/1"
+  ];
+  for (const url of urls) {
+    const response = await server.inject({ method: "GET", url });
+    assert.equal(response.statusCode, 403, url);
+    assert.equal(response.json().error.code, "forbidden", url);
+  }
+  await server.close();
+});
