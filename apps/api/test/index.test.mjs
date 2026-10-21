@@ -21,7 +21,8 @@ function dependencies(authenticate, overrides = {}) {
       async setStatus(id, status) { proposalValues.set(id, { ...proposalValues.get(id), status }); }
     },
     clock: { now: () => "2026-10-21T00:00:00.000Z" },
-    ids: { next: (() => { let n = 0; return () => "id-" + (++n); })() }
+    ids: { next: (() => { let n = 0; return () => "id-" + (++n); })() },
+    ...overrides
   };
 }
 
