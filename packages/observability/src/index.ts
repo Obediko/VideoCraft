@@ -48,3 +48,5 @@ function formatMetric(key: string, value: string): string {
 function escapeLabel(value: string): string {
   return value.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"").replaceAll("\n", "\\n");
 }
+
+export { configureTracing, type TracingEnvironment, type TracingRuntime } from "./tracing.js";
