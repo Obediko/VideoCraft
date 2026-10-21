@@ -282,6 +282,23 @@ export function buildServer(dependencies: ApiDependencies): FastifyInstance {
     }
   });
 
+  server.get("/v1/projects/:projectId/revisions/:revision", async (request, reply) => {
+    const principal = await authenticate(dependencies.authenticate, request, reply);
+    if (!principal) return;
+    const params = asRecord(request.params);
+    const projectId = params.projectId;
+    const revisionValue = params.revision;
+    if (typeof projectId !== "string" || typeof revisionValue !== "string" || !/^\\d+$/.test(revisionValue)) {
+      return sendError(reply, 400, "invalid_request", "projectId and a positive revision are required");
+    }
+    const revisionNumber = Number(revisionValue);
+    if (!Number.isSafeInteger(revisionNumber) || revisionNumber < 1) return sendError(reply, 400, "invalid_request", "revision must be a positive integer");
+    if (!(await dependencies.authorize.canAccess(principal, projectId, "viewer"))) return sendError(reply, 403, "forbidden", "Project access denied");
+    const revision = await dependencies.revisions.get(projectId, revisionNumber);
+    if (!revision) return sendError(reply, 404, "not_found", "Project revision not found");
+    return { revision };
+  });
+
   server.post("/v1/projects/:projectId/renders", async (request, reply) => {
     const principal = await authenticate(dependencies.authenticate, request, reply);
     if (!principal) return;
