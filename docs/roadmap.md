@@ -19,6 +19,7 @@
 - [x] Add bounded multipart asset ingestion with project-scoped keys and checksums.
 - [x] Add an S3-compatible object-storage adapter with provider-native signed download URLs.
 - [x] Add provider-neutral object listing and a bounded protected-object cleanup primitive.
+- [x] Add a PostgreSQL-protected retention worker with dry-run default and bounded deletion.
 - [ ] Add production credential/retention policy and provider integration tests.
 
 ## Editing intelligence - in progress
