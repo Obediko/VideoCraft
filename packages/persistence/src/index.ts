@@ -21,11 +21,11 @@ export function createPool(config: PoolConfig | string): Pool {
 
 export function createDatabase(pool: Pool): Database {
   return {
-    query: (text, values) => pool.query(text, values as unknown[] | undefined),
+    query: <T = Record<string, unknown>>(text: string, values?: readonly unknown[]) => pool.query(text, values as unknown[] | undefined) as unknown as Promise<{ rows: T[] }>,
     transaction: async <T>(work: (database: Database) => Promise<T>): Promise<T> => {
       const client = await pool.connect();
       const database: Database = {
-        query: (text, values) => client.query(text, values as unknown[] | undefined),
+        query: <T = Record<string, unknown>>(text: string, values?: readonly unknown[]) => client.query(text, values as unknown[] | undefined) as unknown as Promise<{ rows: T[] }>,
       };
       try {
         await client.query("BEGIN");
