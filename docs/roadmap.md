@@ -35,7 +35,8 @@
 - [x] Add an FFmpeg adapter and constrained render worker.
 - [x] Add durable progress/status persistence, cancellation state, retries through BullMQ, and output manifests.
 - [x] Add a typed PySceneDetect adapter and standalone scene worker.
-- [ ] Add OpenTimelineIO import/export after the internal timeline model stabilizes.
+- [x] Add a typed OTIO-shaped import/export adapter and authenticated API endpoints.
+- [ ] Add a Python OpenTimelineIO provider adapter for interchange with external editorial tools.
 
 ## Product surface - in progress
 
