@@ -27,7 +27,7 @@ const secrets = new EnvironmentSecretProvider(secretEnvironment);
 function required(name: string): string { return requireSecret(secrets, name); }
 function requiredSecret(name: string): string { return requireSecret(secrets, name, 32); }
 function boundedInteger(name: string, fallback: number, minimum: number, maximum: number): number {
-  const value = process.env[name];
+  const value = secretEnvironment[name];
   if (value === undefined || value === "") return fallback;
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
