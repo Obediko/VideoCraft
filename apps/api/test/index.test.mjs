@@ -114,3 +114,18 @@ test("project-scoped mutations deny principals without project access", async ()
   assert.equal(response.json().error.code, "forbidden");
   await server.close();
 });
+
+
+test("authenticated users can list and retrieve their projects", async () => {
+  const server = buildServer(dependencies(async () => ({ userId: "user-1" })));
+  const first = await server.inject({ method: "POST", url: "/v1/projects", payload: { name: "First" } });
+  const second = await server.inject({ method: "POST", url: "/v1/projects", payload: { name: "Second" } });
+  const list = await server.inject({ method: "GET", url: "/v1/projects" });
+  assert.equal(list.statusCode, 200);
+  assert.deepEqual(list.json().projects.map((project) => project.name), ["First", "Second"]);
+  const projectId = second.json().project.id;
+  const retrieved = await server.inject({ method: "GET", url: "/v1/projects/" + projectId });
+  assert.equal(retrieved.statusCode, 200);
+  assert.equal(retrieved.json().project.id, projectId);
+  await server.close();
+});
