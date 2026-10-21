@@ -12,16 +12,20 @@ The render worker requires DATABASE_URL as well as REDIS_URL, MEDIA_ROOT, and RE
 
 Set OBJECT_STORAGE_PROVIDER=local for development. Set OBJECT_STORAGE_PROVIDER=s3 for S3-compatible storage and provide S3_BUCKET, S3_REGION, and credentials through the runtime environment or secret manager. S3_ENDPOINT supports compatible providers such as MinIO; S3_FORCE_PATH_STYLE=true is useful for local emulators. In S3 mode, completed render download endpoints return provider-native presigned URLs and do not stream through the API.
 
+## Upload scanning
+
+Set CLAMAV_HOST and optionally CLAMAV_PORT to enable the ClamAV INSTREAM adapter. Set MALWARE_SCAN_REQUIRED=true in production; the API then refuses to start without CLAMAV_HOST. Files are scanned while still in the temporary upload location and are promoted to object storage only after a clean result. Scanner outages return a 503 and never promote the file.
+
 ## Production requirements
 
 - Use a managed PostgreSQL instance with encrypted connections and automated backups.
-- Store authentication, storage, and intent-provider secrets in a secret manager; never place them in repository files.
+- Store authentication, storage, scanner, and intent-provider secrets in a secret manager; never place them in repository files.
 - Configure AUTH_ISSUER and AUTH_AUDIENCE when the identity provider supports them.
 - Run database migrations as a controlled release step.
 - Run transcription and rendering as separate worker processes with least-privilege filesystem access.
-- Add connection pool limits, timeouts, health probes, metrics, tracing, and structured audit events before public exposure.
+- Add connection pool limits, timeouts, health probes, metrics, and tracing before public exposure.
 - Restrict outbound provider access from workers and sandbox media processing.
-- Configure retention, deletion, malware scanning, and backup verification for source assets and derived artifacts.
+- Configure retention, deletion, backup verification, and malware signature update monitoring for source assets and derived artifacts.
 - Add S3 integration tests against an emulator or staging bucket before production cutover.
 
 The current branch contains a deployable vertical slice, but the operational controls above remain explicit gates for broad public exposure.
