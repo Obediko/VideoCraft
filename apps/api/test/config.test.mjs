@@ -10,6 +10,7 @@ const safe = {
   MALWARE_SCAN_REQUIRED: "true",
   CLAMAV_HOST: "clamav",
   OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318/v1/traces",
+  METRICS_AUTH_TOKEN: "m".repeat(32),
   INTENT_PROVIDER_MODE: "rule-based"
 };
 
