@@ -1,8 +1,8 @@
 import type { Evidence, IntentAnalysisPort, TailoringProfile, TranscriptSegment } from "@videocraft/domain";
 
 export interface IntentFetchResponse { ok: boolean; status?: number; json(): Promise<unknown>; }
-export type IntentFetch = (url: string, init: { method: "POST"; headers: Record<string, string>; body: string }) => Promise<IntentFetchResponse>;
-export interface OpenAiCompatibleIntentOptions { endpoint: string; apiKey: string; model: string; fetchImpl?: IntentFetch; }
+export type IntentFetch = (url: string, init: { method: "POST"; headers: Record<string, string>; body: string; signal?: AbortSignal }) => Promise<IntentFetchResponse>;
+export interface OpenAiCompatibleIntentOptions { endpoint: string; apiKey: string; model: string; timeoutMs?: number; fetchImpl?: IntentFetch; }
 
 export class RuleBasedIntentAnalyzer implements IntentAnalysisPort {
   async analyze(input: { prompt: string; transcript?: TranscriptSegment[] }): Promise<{ profile: TailoringProfile; evidence: Evidence[]; provider: string; providerVersion: string }> {
@@ -27,8 +27,15 @@ export class OpenAiCompatibleIntentAnalyzer implements IntentAnalysisPort {
   }
   async analyze(input: { prompt: string; transcript?: TranscriptSegment[] }): Promise<{ profile: TailoringProfile; evidence: Evidence[]; provider: string; providerVersion?: string }> {
     const prompt = validatePrompt(input.prompt);
-    const response = await this.fetchImpl(this.options.endpoint.replace(/\/$/, "") + "/chat/completions", {
+    const timeoutMs = this.options.timeoutMs ?? 15_000;
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 120_000) throw new Error("Intent provider timeout must be between 1,000 and 120,000 milliseconds");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let response: IntentFetchResponse;
+    try {
+      response = await this.fetchImpl(this.options.endpoint.replace(/\/$/, "") + "/chat/completions", {
       method: "POST",
+      signal: controller.signal,
       headers: { authorization: "Bearer " + this.options.apiKey, "content-type": "application/json" },
       body: JSON.stringify({
         model: this.options.model,
@@ -39,7 +46,13 @@ export class OpenAiCompatibleIntentAnalyzer implements IntentAnalysisPort {
           { role: "user", content: JSON.stringify({ prompt, transcript: (input.transcript ?? []).slice(0, 100).map((segment) => ({ id: segment.id, text: segment.text, startUs: segment.startUs, endUs: segment.endUs })) }) },
         ],
       }),
-    });
+      });
+    } catch (error) {
+      if (controller.signal.aborted) throw new Error("Intent provider request timed out");
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
     if (!response.ok) throw new Error("Intent provider request failed with status " + (response.status ?? "unknown"));
     const payload = await response.json();
     const content = extractContent(payload);
