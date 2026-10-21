@@ -31,12 +31,17 @@
 - [x] Add idempotent render jobs and a BullMQ queue.
 - [x] Add an FFmpeg adapter and constrained render worker.
 - [ ] Add durable progress/status persistence, cancellation, retries, and output manifests.
-- [ ] Add scene-boundary analysis through a PySceneDetect adapter.
+- [x] Add a typed PySceneDetect adapter and standalone scene worker.
 - [ ] Add OpenTimelineIO import/export after the internal timeline model stabilizes.
+
+## Product surface - in progress
+
+- [x] Add a web editor surface for projects, revisions, tailoring, proposal review, and render submission.
+- [ ] Add multipart uploads, signed object-storage URLs, browser playback, and render-status polling.
+- [ ] Add keyboard-accessible timeline editing and browser end-to-end tests.
 
 ## Hardening - in progress
 
 - [x] Add fail-closed JWT authentication and project authorization hooks.
 - [ ] Add complete tenant isolation, audit logs, malware scanning, and rate limits.
 - [ ] Add observability, retention, backups, and secret management.
-- [ ] Add accessible browser timeline editing.
