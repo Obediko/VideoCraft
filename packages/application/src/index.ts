@@ -60,7 +60,10 @@ export class ProjectService {
   async addAsset(asset: Asset): Promise<void> {
     const project = await this.requireProject(asset.projectId);
     if (!/^[a-f0-9]{64}$/i.test(asset.checksumSha256)) throw new Error("Asset checksum must be a SHA-256 hex digest");
-    if (!asset.storageKey.trim() || asset.storageKey.startsWith("/") || asset.storageKey.includes("\0")) throw new Error("Asset storage key is invalid");
+    const expectedPrefix = "projects/" + project.id + "/assets/";
+    if (!asset.storageKey.startsWith(expectedPrefix) || !asset.storageKey.slice(expectedPrefix.length) || asset.storageKey.includes("\\0")) {
+      throw new Error("Asset storage key must be scoped to the project");
+    }
     await this.assets.save(asset);
     await this.projects.save({ ...project, updatedAt: this.clock.now() });
   }
