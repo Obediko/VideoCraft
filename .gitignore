@@ -1,0 +1,15 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+*.mp4
+*.mov
+*.mkv
+*.wav
+*.mp3
+renders/
+uploads/
+.DS_Store
+Thumbs.db
