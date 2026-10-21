@@ -33,7 +33,7 @@ export class PythonOpenTimelineIOAdapter {
 
 function readDocument(value: unknown): OtioDocument {
   if (!isObject(value) || value.ok !== true || !isObject(value.document)) throw new Error(isObject(value) && typeof value.error === "string" ? value.error : "OpenTimelineIO worker returned an invalid response");
-  return value.document as OtioDocument;
+  return value.document as unknown as OtioDocument;
 }
 
 function createProcessRunner(pythonCommand: string, workerPath: string): PythonOtioRunner {
