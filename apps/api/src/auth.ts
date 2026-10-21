@@ -5,12 +5,13 @@ import type { Database, PostgresProjectRepository } from "@videocraft/persistenc
 import type { Authenticator, Principal, ProjectAuthorizer } from "./server.js";
 
 export class JwtAuthenticator implements Authenticator {
-  private readonly secret: Uint8Array;
+  private readonly secrets: Uint8Array[];
   private readonly options: JWTVerifyOptions;
 
-  constructor(secret: string, options: { issuer?: string; audience?: string } = {}) {
-    if (secret.length < 32) throw new Error("AUTH_JWT_SECRET must be at least 32 characters");
-    this.secret = new TextEncoder().encode(secret);
+  constructor(secret: string | readonly string[], options: { issuer?: string; audience?: string } = {}) {
+    const values = typeof secret === "string" ? [secret] : [...secret];
+    if (values.length === 0 || values.some((value) => value.length < 32)) throw new Error("Every AUTH_JWT_SECRET value must be at least 32 characters");
+    this.secrets = values.map((value) => new TextEncoder().encode(value));
     this.options = {
       ...(options.issuer ? { issuer: options.issuer } : {}),
       ...(options.audience ? { audience: options.audience } : {}),
@@ -20,12 +21,15 @@ export class JwtAuthenticator implements Authenticator {
   async authenticate(request: FastifyRequest): Promise<Principal | null> {
     const header = request.headers.authorization;
     if (!header?.startsWith("Bearer ")) return null;
-    try {
-      const { payload } = await jwtVerify(header.slice(7), this.secret, this.options);
-      return typeof payload.sub === "string" && payload.sub.length > 0 ? { userId: payload.sub } : null;
-    } catch {
-      return null;
+    for (const secret of this.secrets) {
+      try {
+        const { payload } = await jwtVerify(header.slice(7), secret, this.options);
+        return typeof payload.sub === "string" && payload.sub.length > 0 ? { userId: payload.sub } : null;
+      } catch {
+        // Try the next active signing secret during an overlap rotation window.
+      }
     }
+    return null;
   }
 }
 
