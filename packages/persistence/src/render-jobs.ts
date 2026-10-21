@@ -13,6 +13,10 @@ export class PostgresRenderJobRepository implements RenderJobRepository {
     const result = await this.db.query<RenderJobRow>("SELECT id, project_id, revision, settings, idempotency_key, status, progress, error_message, output FROM render_jobs WHERE id = $1", [id]);
     return result.rows[0] ? map(result.rows[0]) : undefined;
   }
+  async listOutputStorageKeys(): Promise<string[]> {
+    const result = await this.db.query<{ storage_key: string }>("SELECT output->>'storageKey' AS storage_key FROM render_jobs WHERE output IS NOT NULL AND output->>'storageKey' IS NOT NULL");
+    return result.rows.map((row) => row.storage_key);
+  }
   async save(job: RenderJob): Promise<void> {
     await this.db.query(
       "INSERT INTO render_jobs (id, project_id, revision, settings, idempotency_key, status, progress, error_message, output) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (id) DO NOTHING",
