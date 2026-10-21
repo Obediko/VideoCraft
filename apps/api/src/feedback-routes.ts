@@ -8,6 +8,7 @@ export interface FeedbackRouteDependencies {
   revisions: RevisionRepository;
   authenticate(request: FastifyRequest): Promise<{ userId: UUID } | null>;
   authorize: { canAccess(principal: { userId: UUID }, projectId: UUID, role: "viewer" | "editor"): Promise<boolean> };
+  proposals?: { get(id: UUID): Promise<{ projectId: UUID } | undefined> };
   now(): string;
 }
 export function registerFeedbackRoutes(server: FastifyInstance, dependencies: FeedbackRouteDependencies): void {
@@ -22,6 +23,10 @@ export function registerFeedbackRoutes(server: FastifyInstance, dependencies: Fe
       return error(reply, 400, "invalid_request", "revision and a valid feedback type are required");
     }
     if (!(await dependencies.revisions.get(params.projectId, body.revision as number))) return error(reply, 404, "not_found", "Project revision not found");
+    if (typeof body.proposalId === "string" && dependencies.proposals) {
+      const proposal = await dependencies.proposals.get(body.proposalId);
+      if (!proposal || proposal.projectId !== params.projectId) return error(reply, 404, "not_found", "Project proposal not found");
+    }
     if (body.value !== undefined && (typeof body.value !== "number" || !Number.isFinite(body.value))) return error(reply, 400, "invalid_request", "value must be finite");
     if (body.note !== undefined && (typeof body.note !== "string" || body.note.length > 2_000)) return error(reply, 400, "invalid_request", "note must be at most 2,000 characters");
     const event: FeedbackEvent = {
