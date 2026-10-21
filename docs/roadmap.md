@@ -26,7 +26,8 @@
 - [x] Add proposal persistence and accept/reject decisions as revision events.
 - [x] Add durable feedback events for evaluation and future supervised improvement.
 - [x] Add deterministic intent and audience extraction with structured outputs and evidence.
-- [ ] Add a model-backed intent provider after provider credentials and evaluation fixtures are available.
+- [x] Add an explicit OpenAI-compatible structured-output intent provider adapter.
+- [ ] Add provider credentials management and offline evaluation fixtures before enabling it by default.
 - [ ] Add fixtures and offline strategy evaluation.
 
 ## Media pipeline - in progress
