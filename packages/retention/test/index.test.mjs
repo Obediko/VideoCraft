@@ -21,10 +21,22 @@ test("retention deletes only expired, unprotected objects within a bound", async
     prefix: "renders/",
     olderThan: "2026-10-01T00:00:00.000Z",
     protectedKeys: new Set(["renders/protected.mp4"]),
-    maxDeletes: 1
+    maxDeletes: 1,
+    dryRun: false
   });
-  assert.deepEqual(result, { examined: 3, eligible: 2, deleted: ["renders/old.mp4"], skippedProtected: 1, remainingEligible: 0 });
+  assert.deepEqual(result, { examined: 3, eligible: 2, deleted: ["renders/old.mp4"], skippedProtected: 1, remainingEligible: 0, planned: ["renders/old.mp4"] });
   assert.deepEqual(adapter.removed, ["renders/old.mp4"]);
+});
+
+test("retention dry-run plans cleanup without deleting", async () => {
+  const adapter = storage([{ key: "renders/old.mp4", size: 10, lastModified: "2026-01-01T00:00:00.000Z" }]);
+  const result = await pruneExpiredObjects(adapter, {
+    olderThan: "2026-10-01T00:00:00.000Z",
+    dryRun: true
+  });
+  assert.deepEqual(result.deleted, []);
+  assert.deepEqual(result.planned, ["renders/old.mp4"]);
+  assert.deepEqual(adapter.removed, []);
 });
 
 test("retention refuses unbounded or unsupported cleanup", async () => {
