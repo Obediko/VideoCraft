@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn } from "node:child_process";
 import type { ProjectRevision, RenderSettings } from "@videocraft/domain";
 
 export interface AssetPathResolver { resolve(assetId: string): Promise<string>; }
@@ -15,6 +15,7 @@ export class FfmpegCommandPlanner {
     if (audioTrack && audioTrack.clips.length > 1) throw new Error("Initial renderer supports at most one audio clip");
 
     const video = videoTrack.clips[0];
+    if (!video) throw new Error("Video track clip is missing");
     const videoPath = await this.assets.resolve(video.assetId);
     const args = [
       "-hide_banner", "-loglevel", "error", "-y",
@@ -47,7 +48,7 @@ export class FfmpegProcess {
   constructor(private readonly executable = "ffmpeg") {}
   run(plan: RenderPlan, signal?: AbortSignal): Promise<void> {
     return new Promise((resolve, reject) => {
-      const child: ChildProcessWithoutNullStreams = spawn(this.executable, plan.args, { shell: false, stdio: ["ignore", "pipe", "pipe"] });
+      const child = spawn(this.executable, plan.args, { shell: false, stdio: ["ignore", "pipe", "pipe"] });
       let stderr = "";
       child.stderr.on("data", (chunk) => { stderr += String(chunk); });
       const abort = () => child.kill("SIGTERM");
