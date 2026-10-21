@@ -8,11 +8,13 @@ import multipart from "@fastify/multipart";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { Asset, UUID } from "@videocraft/domain";
 import type { AssetRepository } from "@videocraft/application";
-import type { ObjectStorage } from "@videocraft/storage";\nimport type { MalwareScanner } from "@videocraft/security";
+import type { ObjectStorage } from "@videocraft/storage";
+import type { MalwareScanner } from "@videocraft/security";
 
 export interface UploadDependencies {
   assets: AssetRepository;
   storage: ObjectStorage;
+  scanner?: MalwareScanner;
   authorize: { canAccess(principal: { userId: UUID }, projectId: UUID, minimumRole: "viewer" | "editor"): Promise<boolean> };
   authenticate(request: FastifyRequest): Promise<{ userId: UUID } | null>;
   clock(): string;
