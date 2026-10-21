@@ -121,3 +121,31 @@ export function parseClamAvResponse(response: string): MalwareScanResult | undef
   const match = value.match(/stream: (.+) FOUND$/);
   return match?.[1] ? { clean: false, signature: match[1] } : undefined;
 }
+
+
+export interface QuotaStore {
+  eval(script: string, numberOfKeys: number, ...args: string[]): Promise<unknown>;
+}
+export interface ProviderQuota {
+  consume(key: string, limit: number, windowSeconds: number): Promise<{ allowed: boolean; remaining: number; resetAt: number }>;
+}
+export class RedisProviderQuota implements ProviderQuota {
+  constructor(private readonly store: QuotaStore, private readonly prefix = "videocraft:quota") {}
+  async consume(key: string, limit: number, windowSeconds: number): Promise<{ allowed: boolean; remaining: number; resetAt: number }> {
+    if (!key || !Number.isSafeInteger(limit) || limit < 1 || !Number.isSafeInteger(windowSeconds) || windowSeconds < 1) {
+      throw new Error("Invalid provider quota");
+    }
+    const now = Math.floor(Date.now() / 1000);
+    const bucket = Math.floor(now / windowSeconds);
+    const redisKey = this.prefix + ":" + encodeURIComponent(key) + ":" + bucket;
+    const result = await this.store.eval(
+      "local current = redis.call('INCR', KEYS[1]); if current == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end; return current",
+      1,
+      redisKey,
+      String(windowSeconds),
+    );
+    const current = Number(result);
+    if (!Number.isSafeInteger(current) || current < 1) throw new Error("Invalid provider quota response");
+    return { allowed: current <= limit, remaining: Math.max(0, limit - current), resetAt: (bucket + 1) * windowSeconds };
+  }
+}
