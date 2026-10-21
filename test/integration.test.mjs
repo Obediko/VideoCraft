@@ -12,13 +12,20 @@ const skip = !databaseUrl || !redisUrl;
 test("PostgreSQL persistence and Redis connectivity are available", { skip }, async () => {
   const pool = new Pool({ connectionString: databaseUrl });
   const migration = await readFile(new URL("../packages/persistence/migrations/001_initial.sql", import.meta.url), "utf8");
+  const idempotencyMigration = await readFile(new URL("../packages/persistence/migrations/002_scope_render_idempotency.sql", import.meta.url), "utf8");
   await pool.query(migration);
+  await pool.query(idempotencyMigration);
   const projectId = "integration-project-" + Date.now();
   await pool.query("INSERT INTO projects (id, owner_id, name, revision, created_at, updated_at) VALUES ($1,$2,$3,$4,now(),now())", [projectId, "integration-user", "Integration", 0]);
   const renderJobs = new PostgresRenderJobRepository(pool);
   const job = { id: "integration-render-" + Date.now(), projectId, revision: 1, settings: { format: "mp4", videoCodec: "libx264", audioCodec: "aac", width: 1280, height: 720, frameRate: 30 }, idempotencyKey: "integration-" + Date.now(), status: "queued", progress: 0 };
   await renderJobs.save(job);
   assert.equal((await renderJobs.get(job.id))?.projectId, projectId);
+  const secondProjectId = projectId + "-second";
+  await pool.query("INSERT INTO projects (id, owner_id, name, revision, created_at, updated_at) VALUES ($1,$2,$3,$4,now(),now())", [secondProjectId, "integration-user", "Second", 0]);
+  const secondJob = { ...job, id: job.id + "-second", projectId: secondProjectId };
+  await renderJobs.save(secondJob);
+  assert.equal((await renderJobs.get(secondJob.id))?.projectId, secondProjectId);
   const feedback = new PostgresFeedbackRepository(pool);
   await feedback.append({ id: "integration-feedback-" + Date.now(), projectId, revision: 1, type: "accepted", createdAt: new Date().toISOString() });
   const audit = new PostgresAuditRepository(pool);
@@ -30,6 +37,6 @@ test("PostgreSQL persistence and Redis connectivity are available", { skip }, as
   const pong = await redis.ping();
   assert.equal(pong, "PONG");
   await redis.quit();
-  await pool.query("DELETE FROM projects WHERE id = $1", [projectId]);
+  await pool.query("DELETE FROM projects WHERE id = ANY($1)", [[projectId, secondProjectId]]);
   await pool.end();
 });
