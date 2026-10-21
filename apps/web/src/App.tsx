@@ -90,7 +90,8 @@ export function App() {
       timelineStartUs: 0,
       timelineEndUs: 10_000_000,
     };
-    setSelectedClipId(clip.id);\n    setTimeline((current) => ({
+    setSelectedClipId(clip.id);
+    setTimeline((current) => ({
       ...current,
       tracks: current.tracks.some((track) => track.kind === "video")
         ? current.tracks.map((track) => track.kind === "video" ? { ...track, clips: [...track.clips, clip] } : track)
