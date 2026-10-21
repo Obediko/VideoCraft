@@ -3,7 +3,7 @@ import { validateTimeline } from "@videocraft/domain";
 
 export interface Clock { now(): string; }
 export interface IdFactory { next(): UUID; }
-export interface ProjectRepository { get(id: UUID): Promise<Project | undefined>; save(project: Project): Promise<void>; }
+export interface ProjectRepository { get(id: UUID): Promise<Project | undefined>; listForOwner(ownerId: UUID): Promise<Project[]>; save(project: Project): Promise<void>; }
 export interface AssetRepository { listForProject(projectId: UUID): Promise<Asset[]>; save(asset: Asset): Promise<void>; }
 export interface RevisionRepository { get(projectId: UUID, revision: number): Promise<ProjectRevision | undefined>; save(revision: ProjectRevision): Promise<void>; }
 
@@ -78,6 +78,7 @@ export class ProjectService {
 export class InMemoryProjectRepository implements ProjectRepository {
   private readonly values = new Map<UUID, Project>();
   async get(id: UUID) { return this.values.get(id); }
+  async listForOwner(ownerId: UUID) { return [...this.values.values()].filter((project) => project.ownerId === ownerId).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)); }
   async save(project: Project) { this.values.set(project.id, project); }
 }
 export class InMemoryAssetRepository implements AssetRepository {
