@@ -2,6 +2,7 @@ import { Queue } from "bullmq";
 import { createPool, PostgresAssetRepository, PostgresProjectRepository, PostgresRevisionRepository, PostgresTranscriptStore, type Database } from "@videocraft/persistence";
 import { BullMqRenderQueue } from "@videocraft/jobs";
 import { FasterWhisperWorker } from "@videocraft/transcription";
+import { StaticStrategyRegistry } from "@videocraft/strategies";
 import { buildServer } from "./server.js";
 import { JwtAuthenticator, PostgresProjectAuthorizer } from "./auth.js";
 
@@ -31,6 +32,7 @@ const transcriber = new FasterWhisperWorker({
 const server = buildServer({
   projects, assets, revisions: new PostgresRevisionRepository(db),
   transcripts: new PostgresTranscriptStore(db),
+  strategies: new StaticStrategyRegistry(),
   transcriber,
   renderer: new BullMqRenderQueue(renderQueue, assets),
   authenticate: new JwtAuthenticator(required("AUTH_JWT_SECRET"), {
