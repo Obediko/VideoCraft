@@ -47,3 +47,14 @@ test("rejects assets for missing projects", async () => {
     createdAt: clock.now()
   }), /Project not found/);
 });
+
+
+test("renames a project with the same validation as creation", async () => {
+  const projects = new InMemoryProjectRepository();
+  const app = new ProjectService(projects, new InMemoryAssetRepository(), new InMemoryRevisionRepository(), ids, clock);
+  const project = await app.createProject({ ownerId: "owner-rename", name: "Before" });
+  const renamed = await app.renameProject(project.id, " After ");
+  assert.equal(renamed.name, "After");
+  assert.equal((await projects.get(project.id)).name, "After");
+  await assert.rejects(() => app.renameProject(project.id, "   "), /required/);
+});
