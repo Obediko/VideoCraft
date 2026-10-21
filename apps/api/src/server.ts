@@ -204,7 +204,7 @@ export function buildServer(dependencies: ApiDependencies): FastifyInstance {
     try {
       const revision = await projectService.saveRevision({
         projectId, createdBy: principal.userId, timeline: body.timeline,
-        ...(isJsonObject(body.tailoring) ? { tailoring: body.tailoring as NonNullable<ProjectRevision["tailoring"]> } : {}),
+        ...(isJsonObject(body.tailoring) ? { tailoring: body.tailoring as unknown as NonNullable<ProjectRevision["tailoring"]> } : {}),
         acceptedProposalIds: Array.isArray(body.acceptedProposalIds) ? body.acceptedProposalIds.filter((value): value is string => typeof value === "string") : [],
       });
       return reply.code(201).send({ revision });
@@ -278,6 +278,7 @@ function applyTimelineOperations(timeline: Timeline, operations: TimelineOperati
       if (index < 0) continue;
       found = true;
       const clip = track.clips[index];
+      if (!clip) continue;
       if (operation.type === "remove-clip") track.clips.splice(index, 1);
       if (operation.type === "trim-clip") {
         if (operation.sourceEndUs <= operation.sourceStartUs) throw new Error("Trim range is invalid");
