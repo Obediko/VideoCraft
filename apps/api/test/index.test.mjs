@@ -259,3 +259,39 @@ test("project-scoped reads deny principals without project access", async () => 
   }
   await server.close();
 });
+
+
+test("nested asset resources cannot cross project boundaries", async () => {
+  let sceneCalls = 0;
+  let transcriptCalls = 0;
+  const deps = dependencies(async () => ({ userId: "user-1" }), {
+    sceneDetector: { detect: async () => { sceneCalls += 1; return []; } },
+    transcriber: { transcribe: async () => { transcriptCalls += 1; return []; } }
+  });
+  const server = buildServer(deps);
+  const first = await server.inject({ method: "POST", url: "/v1/projects", payload: { name: "First project" } });
+  const second = await server.inject({ method: "POST", url: "/v1/projects", payload: { name: "Second project" } });
+  const firstProjectId = first.json().project.id;
+  const secondProjectId = second.json().project.id;
+  await deps.assets.save({
+    id: "asset-private",
+    projectId: firstProjectId,
+    kind: "video",
+    storageKey: "projects/" + firstProjectId + "/assets/asset-private.media",
+    checksumSha256: "c".repeat(64),
+    metadata: {},
+    createdAt: "2026-10-21T00:00:00.000Z"
+  });
+
+  for (const method of ["GET", "POST"]) {
+    const scenes = await server.inject({ method, url: "/v1/projects/" + secondProjectId + "/assets/asset-private/scenes" });
+    assert.equal(scenes.statusCode, 404, method + " scenes");
+    assert.equal(scenes.json().error.code, "not_found", method + " scenes");
+    const transcript = await server.inject({ method, url: "/v1/projects/" + secondProjectId + "/assets/asset-private/transcript" });
+    assert.equal(transcript.statusCode, 404, method + " transcript");
+    assert.equal(transcript.json().error.code, "not_found", method + " transcript");
+  }
+  assert.equal(sceneCalls, 0);
+  assert.equal(transcriptCalls, 0);
+  await server.close();
+});
