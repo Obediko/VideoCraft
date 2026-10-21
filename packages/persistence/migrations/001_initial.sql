@@ -68,3 +68,18 @@ CREATE TABLE IF NOT EXISTS editing_proposals (
 );
 
 CREATE INDEX IF NOT EXISTS proposals_project_idx ON editing_proposals(project_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS render_jobs (
+  id TEXT PRIMARY KEY,
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL,
+  settings JSONB NOT NULL,
+  idempotency_key TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL CHECK (status IN ('queued','running','succeeded','failed','cancelled')),
+  progress INTEGER NOT NULL CHECK (progress BETWEEN 0 AND 100),
+  error_message TEXT,
+  output JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS render_jobs_project_idx ON render_jobs(project_id, created_at DESC);
