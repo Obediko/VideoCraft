@@ -11,7 +11,7 @@ import { LocalObjectStorage, S3ObjectStorage, type ObjectStorage } from "@videoc
 import { StaticStrategyRegistry } from "@videocraft/strategies";
 import { OpenAiCompatibleIntentAnalyzer, RuleBasedIntentAnalyzer } from "@videocraft/intent-analysis";
 import { ClamAvScanner, EnvironmentSecretProvider, loadSecretEnvironment, requireSecret, type MalwareScanner } from "@videocraft/security";
-import { MetricsRegistry } from "@videocraft/observability";
+import { configureTracing, MetricsRegistry } from "@videocraft/observability";
 import { buildServer } from "./server.js";
 import { registerUploadRoutes } from "./uploads.js";
 import { registerRenderRoutes } from "./render-routes.js";
@@ -64,6 +64,7 @@ function createMalwareScanner(): MalwareScanner | undefined {
 }
 
 validateProductionConfiguration(secretEnvironment);
+const tracing = configureTracing(secretEnvironment);
 const pool = createPool({
   connectionString: required("DATABASE_URL"),
   max: boundedInteger("DB_POOL_MAX", 20, 1, 100),
@@ -130,7 +131,7 @@ registerUploadRoutes(server, {
 
 const port = Number(process.env.PORT ?? "8080");
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("PORT must be a valid TCP port");
-const shutdown = async () => { await server.close(); await renderQueue.close(); await rateLimitRedis.quit(); await pool.end(); };
+const shutdown = async () => { await server.close(); await renderQueue.close(); await rateLimitRedis.quit(); await tracing.shutdown(); await pool.end(); };
 process.once("SIGTERM", () => void shutdown());
 process.once("SIGINT", () => void shutdown());
 await server.listen({ host: "0.0.0.0", port });
