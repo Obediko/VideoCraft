@@ -22,7 +22,7 @@ function createStorage(): ObjectStorage {
   return new LocalObjectStorage(required("MEDIA_ROOT"));
 }
 
-async function main(): Promise<void> {
+async function runOnce(): Promise<void> {
   const pool = createPool(required("DATABASE_URL"));
   try {
     const db = pool as unknown as Database;
@@ -64,6 +64,38 @@ async function main(): Promise<void> {
   } finally {
     await pool.end();
   }
+}
+
+
+function retentionIntervalMs(): number {
+  const raw = process.env.RETENTION_INTERVAL_MS ?? "0";
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0 || (value !== 0 && (value < 60_000 || value > 86_400_000))) {
+    throw new Error("RETENTION_INTERVAL_MS must be 0 or an integer between 60,000 and 86,400,000");
+  }
+  return value;
+}
+
+async function waitForNextRun(intervalMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const finish = (shouldContinue: boolean) => {
+      clearTimeout(timer);
+      process.off("SIGTERM", stop);
+      process.off("SIGINT", stop);
+      resolve(shouldContinue);
+    };
+    const stop = () => finish(false);
+    const timer = setTimeout(() => finish(true), intervalMs);
+    process.once("SIGTERM", stop);
+    process.once("SIGINT", stop);
+  });
+}
+
+async function main(): Promise<void> {
+  const intervalMs = retentionIntervalMs();
+  do {
+    await runOnce();
+  } while (intervalMs > 0 && await waitForNextRun(intervalMs));
 }
 
 main().catch((error: unknown) => {
