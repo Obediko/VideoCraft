@@ -24,6 +24,11 @@ function required(name: string): string {
   if (!value) throw new Error(name + " is required");
   return value;
 }
+function requiredSecret(name: string): string {
+  const value = required(name);
+  if (value.length < 32) throw new Error(name + " must be at least 32 characters");
+  return value;
+}
 function rateLimitKey(request: FastifyRequest): string {
   const authorization = request.headers.authorization;
   return authorization?.startsWith("Bearer ")
@@ -69,7 +74,7 @@ const transcriber = new FasterWhisperWorker({
   ...(process.env.WHISPER_LANGUAGE ? { language: process.env.WHISPER_LANGUAGE } : {}),
 });
 
-const authenticator = new JwtAuthenticator(required("AUTH_JWT_SECRET"), {
+const authenticator = new JwtAuthenticator(requiredSecret("AUTH_JWT_SECRET"), {
   ...(process.env.AUTH_ISSUER ? { issuer: process.env.AUTH_ISSUER } : {}),
   ...(process.env.AUTH_AUDIENCE ? { audience: process.env.AUTH_AUDIENCE } : {}),
 });
@@ -102,7 +107,7 @@ server.register(rateLimit, { max: 120, timeWindow: "1 minute", skipOnError: true
 registerTimelineRoutes(server, { projects, revisions, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, saveRevision: (input) => timelineService.saveRevision(input) });
 registerFeedbackRoutes(server, { feedback, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, now: () => new Date().toISOString() });
 registerIntentRoutes(server, { analyzer: intentAnalyzer, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
-registerRenderRoutes(server, { jobs: renderJobs, storage, signingSecret: required("DOWNLOAD_SIGNING_SECRET"), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
+registerRenderRoutes(server, { jobs: renderJobs, storage, signingSecret: requiredSecret("DOWNLOAD_SIGNING_SECRET"), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
 registerUploadRoutes(server, {
   assets, storage, authorize: authorizer, authenticate: (request) => authenticator.authenticate(request),
   clock: () => new Date().toISOString(), ...(malwareScanner ? { scanner: malwareScanner } : {}),
