@@ -4,7 +4,7 @@ import type { Database } from "./index.js";
 type RenderJobRow = {
   id: string; project_id: string; revision: number; settings: RenderJob["settings"];
   idempotency_key: string; status: RenderJob["status"]; progress: number;
-  error_message: string | null; output: RenderJob["output"] | null;
+  error_message: string | null; output: NonNullable<RenderJob["output"]> | null;
 };
 
 export class PostgresRenderJobRepository implements RenderJobRepository {
