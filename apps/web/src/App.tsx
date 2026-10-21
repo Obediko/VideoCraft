@@ -105,7 +105,7 @@ export function App() {
       tracks: current.tracks.map((track) => ({
         ...track,
         clips: track.clips.map((clip) => {
-          if (clip.id !== selectedClipId) return clip;
+          if (clip.id !== clipId) return clip;
           const duration = clip.timelineEndUs - clip.timelineStartUs;
           const nextStart = Math.max(0, Math.min(current.durationUs - duration, clip.timelineStartUs + deltaUs));
           return { ...clip, timelineStartUs: nextStart, timelineEndUs: nextStart + duration };
@@ -117,15 +117,15 @@ export function App() {
 
   function removeSelectedClip() {
     if (!selectedClipId) { setStatus("Select a clip first"); return; }
-    setTimeline((current) => ({ ...current, tracks: current.tracks.map((track) => ({ ...track, clips: track.clips.filter((clip) => clip.id !== selectedClipId) })) }));
+    setTimeline((current) => ({ ...current, tracks: current.tracks.map((track) => ({ ...track, clips: track.clips.filter((clip) => clip.id !== clipId) })) }));
     setSelectedClipId("");
     setStatus("Clip removed from the non-destructive timeline");
   }
 
   function handleClipKeyDown(event: KeyboardEvent<HTMLButtonElement>, clip: TimelineClip) {
-    if (event.key === "ArrowLeft") { event.preventDefault(); setSelectedClipId(clip.id); nudgeSelectedClip(-500_000); }
-    if (event.key === "ArrowRight") { event.preventDefault(); setSelectedClipId(clip.id); nudgeSelectedClip(500_000); }
-    if (event.key === "Delete" || event.key === "Backspace") { event.preventDefault(); setSelectedClipId(clip.id); removeSelectedClip(); }
+    if (event.key === "ArrowLeft") { event.preventDefault(); setSelectedClipId(clip.id); nudgeSelectedClip(-500_000, clip.id); }
+    if (event.key === "ArrowRight") { event.preventDefault(); setSelectedClipId(clip.id); nudgeSelectedClip(500_000, clip.id); }
+    if (event.key === "Delete" || event.key === "Backspace") { event.preventDefault(); setSelectedClipId(clip.id); removeSelectedClip(clip.id); }
   }
 
   async function saveRevision() {
