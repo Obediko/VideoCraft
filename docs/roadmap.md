@@ -62,6 +62,6 @@
 - [x] Add append-only audit event persistence and request lifecycle coverage.
 - [x] Add ClamAV upload scanning before storage promotion.
 - [x] Add principal-keyed global rate limits and tighter intent/upload route budgets.
-- [x] Add owner-controlled project member management with viewer/editor roles and non-owner denial tests.\n- [ ] Add complete tenant isolation audits and provider quota enforcement.
+- [x] Add owner-controlled project member management with viewer/editor roles and non-owner denial tests.\n- [x] Enforce project-scoped object keys at the application boundary.\n- [ ] Add complete tenant isolation audits and provider quota enforcement.
 - [x] Add bounded request metrics and Prometheus-compatible export.
 - [x] Add OTLP-capable distributed tracing with auto-instrumentation and production startup validation.\n- [x] Add manifest-checked PostgreSQL backup verification with `pg_restore --list` and audit records.\n- [x] Add vendor-neutral Prometheus alert rules for API failures, readiness failures, and quota pressure.\n- [ ] Add cloud secret-manager operational rotation.
