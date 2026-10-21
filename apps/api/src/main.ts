@@ -47,21 +47,21 @@ function redisConnection(value: string) {
   return { host: url.hostname, port: Number(url.port || "6379"), connectTimeout: boundedInteger("REDIS_CONNECT_TIMEOUT_MS", 5_000, 100, 60_000), ...(url.username ? { username: decodeURIComponent(url.username) } : {}), ...(url.password ? { password: decodeURIComponent(url.password) } : {}), ...(url.protocol === "rediss:" ? { tls: {} } : {}) };
 }
 function createStorage(): ObjectStorage {
-  if ((process.env.OBJECT_STORAGE_PROVIDER ?? "local") === "s3") {
+  if ((secretEnvironment.OBJECT_STORAGE_PROVIDER ?? "local") === "s3") {
     return new S3ObjectStorage({
       bucket: required("S3_BUCKET"),
-      region: process.env.S3_REGION ?? "us-east-1",
-      ...(process.env.S3_ENDPOINT ? { endpoint: process.env.S3_ENDPOINT } : {}),
-      ...(process.env.S3_PUBLIC_URL ? { publicUrl: process.env.S3_PUBLIC_URL } : {}),
-      forcePathStyle: process.env.S3_FORCE_PATH_STYLE === "true",
+      region: secretEnvironment.S3_REGION ?? "us-east-1",
+      ...(secretEnvironment.S3_ENDPOINT ? { endpoint: secretEnvironment.S3_ENDPOINT } : {}),
+      ...(secretEnvironment.S3_PUBLIC_URL ? { publicUrl: secretEnvironment.S3_PUBLIC_URL } : {}),
+      forcePathStyle: secretEnvironment.S3_FORCE_PATH_STYLE === "true",
     });
   }
   return new LocalObjectStorage(required("MEDIA_ROOT"));
 }
 function createMalwareScanner(): MalwareScanner | undefined {
-  const host = process.env.CLAMAV_HOST;
-  if (!host && process.env.MALWARE_SCAN_REQUIRED === "true") throw new Error("CLAMAV_HOST is required when MALWARE_SCAN_REQUIRED=true");
-  return host ? new ClamAvScanner({ host, port: Number(process.env.CLAMAV_PORT ?? "3310") }) : undefined;
+  const host = secretEnvironment.CLAMAV_HOST;
+  if (!host && secretEnvironment.MALWARE_SCAN_REQUIRED === "true") throw new Error("CLAMAV_HOST is required when MALWARE_SCAN_REQUIRED=true");
+  return host ? new ClamAvScanner({ host, port: Number(secretEnvironment.CLAMAV_PORT ?? "3310") }) : undefined;
 }
 
 validateProductionConfiguration(secretEnvironment);
@@ -80,7 +80,7 @@ const scenes = new PostgresSceneRepository(db);
 const mediaRoot = required("MEDIA_ROOT");
 const storage = createStorage();
 const malwareScanner = createMalwareScanner();
-const sceneDetector = process.env.SCENE_WORKER_PATH ? new PySceneDetectWorker({ workerPath: process.env.SCENE_WORKER_PATH, storage, ...(process.env.SCENE_PYTHON ? { pythonCommand: process.env.SCENE_PYTHON } : {}) }) : undefined;
+const sceneDetector = secretEnvironment.SCENE_WORKER_PATH ? new PySceneDetectWorker({ workerPath: secretEnvironment.SCENE_WORKER_PATH, storage, ...(secretEnvironment.SCENE_PYTHON ? { pythonCommand: secretEnvironment.SCENE_PYTHON } : {}) }) : undefined;
 const metrics = new MetricsRegistry();
 const redisOptions = redisConnection(required("REDIS_URL"));
 const renderQueue = new Queue("videocraft-render", { connection: redisOptions });
@@ -89,13 +89,13 @@ const transcriber = new FasterWhisperWorker({
   workerPath: required("WHISPER_WORKER_PATH"),
   mediaRoot,
   storage,
-  ...(process.env.WHISPER_PYTHON ? { pythonCommand: process.env.WHISPER_PYTHON } : {}),
-  ...(process.env.WHISPER_LANGUAGE ? { language: process.env.WHISPER_LANGUAGE } : {}),
+  ...(secretEnvironment.WHISPER_PYTHON ? { pythonCommand: secretEnvironment.WHISPER_PYTHON } : {}),
+  ...(secretEnvironment.WHISPER_LANGUAGE ? { language: secretEnvironment.WHISPER_LANGUAGE } : {}),
 });
 
 const authenticator = new JwtAuthenticator(requiredSecret("AUTH_JWT_SECRET"), {
-  ...(process.env.AUTH_ISSUER ? { issuer: process.env.AUTH_ISSUER } : {}),
-  ...(process.env.AUTH_AUDIENCE ? { audience: process.env.AUTH_AUDIENCE } : {}),
+  ...(secretEnvironment.AUTH_ISSUER ? { issuer: secretEnvironment.AUTH_ISSUER } : {}),
+  ...(secretEnvironment.AUTH_AUDIENCE ? { audience: secretEnvironment.AUTH_AUDIENCE } : {}),
 });
 const authorizer = new PostgresProjectAuthorizer(projects, db);
 const revisions = new PostgresRevisionRepository(db);
@@ -103,8 +103,8 @@ const renderJobs = new PostgresRenderJobRepository(db);
 const timelineService = new ProjectService(projects, assets, revisions, { next: () => randomUUID() }, { now: () => new Date().toISOString() });
 const feedback = new PostgresFeedbackRepository(db);
 const audit = new PostgresAuditRepository(db);
-const intentAnalyzer = process.env.INTENT_PROVIDER_API_KEY
-  ? new OpenAiCompatibleIntentAnalyzer({ endpoint: process.env.INTENT_PROVIDER_URL ?? "https://api.openai.com/v1", apiKey: process.env.INTENT_PROVIDER_API_KEY, model: process.env.INTENT_PROVIDER_MODEL ?? "gpt-4o-mini" })
+const intentAnalyzer = secretEnvironment.INTENT_PROVIDER_API_KEY
+  ? new OpenAiCompatibleIntentAnalyzer({ endpoint: secretEnvironment.INTENT_PROVIDER_URL ?? "https://api.openai.com/v1", apiKey: secretEnvironment.INTENT_PROVIDER_API_KEY, model: secretEnvironment.INTENT_PROVIDER_MODEL ?? "gpt-4o-mini" })
   : new RuleBasedIntentAnalyzer();
 const server = buildServer({
   projects, assets, members, storage, revisions,
@@ -134,7 +134,7 @@ registerUploadRoutes(server, {
   clock: () => new Date().toISOString(), ...(malwareScanner ? { scanner: malwareScanner } : {}),
 });
 
-const port = Number(process.env.PORT ?? "8080");
+const port = Number(secretEnvironment.PORT ?? "8080");
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("PORT must be a valid TCP port");
 const shutdown = async () => { await server.close(); await renderQueue.close(); await rateLimitRedis.quit(); await tracing.shutdown(); await pool.end(); };
 process.once("SIGTERM", () => void shutdown());
