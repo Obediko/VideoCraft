@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { validateProposal } from "@videocraft/domain";
-import type { Asset, EditingProposal, ProjectRevision, RenderSettings, RendererPort, StrategyRegistry, TailoringProfile, Timeline, TranscriptSegment, TranscriptionPort, UUID } from "@videocraft/domain";
+import type { Asset, EditingProposal, ProjectRevision, RenderSettings, RendererPort, StrategyRegistry, TailoringProfile, Timeline, TimelineClip, TimelineOperation, TranscriptSegment, TranscriptionPort, UUID } from "@videocraft/domain";
 import { ProjectService, type Clock, type IdFactory, type ProjectRepository, type AssetRepository, type RevisionRepository } from "@videocraft/application";
 
 export interface Principal { userId: UUID; }
@@ -11,10 +11,15 @@ export interface TranscriptStore {
   replaceForAsset(assetId: UUID, segments: TranscriptSegment[]): Promise<void>;
   listForAsset(assetId: UUID): Promise<TranscriptSegment[]>;
 }
+export interface ProposalStore {
+  save(proposal: EditingProposal): Promise<void>;
+  get(id: UUID): Promise<EditingProposal | undefined>;
+  setStatus(id: UUID, status: EditingProposal["status"]): Promise<void>;
+}
 export interface ApiDependencies {
   projects: ProjectRepository; assets: AssetRepository; revisions: RevisionRepository;
   authenticate: Authenticator; authorize: ProjectAuthorizer;
-  renderer?: RendererPort; transcriber?: TranscriptionPort; transcripts?: TranscriptStore; strategies?: StrategyRegistry;
+  renderer?: RendererPort; transcriber?: TranscriptionPort; transcripts?: TranscriptStore; strategies?: StrategyRegistry; proposals?: ProposalStore;
   clock?: Clock; ids?: IdFactory;
 }
 
@@ -107,7 +112,7 @@ export function buildServer(dependencies: ApiDependencies): FastifyInstance {
   server.post("/v1/projects/:projectId/proposals", async (request, reply) => {
     const principal = await authenticate(dependencies.authenticate, request, reply);
     if (!principal) return;
-    if (!dependencies.strategies || !dependencies.transcripts) return sendError(reply, 503, "strategy_unavailable", "Strategy or transcript service is not configured");
+    if (!dependencies.strategies || !dependencies.transcripts || !dependencies.proposals) return sendError(reply, 503, "strategy_unavailable", "Strategy, transcript, or proposal service is not configured");
     const { projectId } = asRecord(request.params);
     if (typeof projectId !== "string") return sendError(reply, 400, "invalid_request", "projectId is required");
     if (!(await dependencies.authorize.canAccess(principal, projectId, "viewer"))) return sendError(reply, 403, "forbidden", "Project access denied");
@@ -144,9 +149,47 @@ export function buildServer(dependencies: ApiDependencies): FastifyInstance {
         ...result,
       };
       validateProposal(proposal);
+      await dependencies.proposals.save(proposal);
       return reply.code(200).send({ proposal });
     } catch (error) {
       return sendError(reply, 400, "invalid_request", messageOf(error));
+    }
+  });
+
+  server.post("/v1/projects/:projectId/proposals/:proposalId/decision", async (request, reply) => {
+    const principal = await authenticate(dependencies.authenticate, request, reply);
+    if (!principal) return;
+    if (!dependencies.proposals) return sendError(reply, 503, "proposal_unavailable", "Proposal storage is not configured");
+    const params = asRecord(request.params);
+    const projectId = params.projectId;
+    const proposalId = params.proposalId;
+    if (typeof projectId !== "string" || typeof proposalId !== "string") return sendError(reply, 400, "invalid_request", "projectId and proposalId are required");
+    if (!(await dependencies.authorize.canAccess(principal, projectId, "editor"))) return sendError(reply, 403, "forbidden", "Project access denied");
+    const proposal = await dependencies.proposals.get(proposalId);
+    if (!proposal || proposal.projectId !== projectId) return sendError(reply, 404, "not_found", "Proposal not found");
+    if (proposal.status !== "proposed") return sendError(reply, 409, "proposal_state", "Proposal is no longer pending");
+
+    const body = asRecord(request.body);
+    if (body.decision !== "accepted" && body.decision !== "rejected") return sendError(reply, 400, "invalid_request", "decision must be accepted or rejected");
+    if (body.decision === "rejected") {
+      await dependencies.proposals.setStatus(proposal.id, "rejected");
+      return { proposal: { ...proposal, status: "rejected" } };
+    }
+
+    const base = await dependencies.revisions.get(projectId, proposal.baseRevision);
+    if (!base) return sendError(reply, 409, "revision_conflict", "Proposal base revision is no longer available");
+    try {
+      const revision = await projectService.saveRevision({
+        projectId,
+        createdBy: principal.userId,
+        timeline: applyTimelineOperations(base.timeline, proposal.operations),
+        ...(base.tailoring === undefined ? {} : { tailoring: base.tailoring }),
+        acceptedProposalIds: [...base.acceptedProposalIds, proposal.id],
+      });
+      await dependencies.proposals.setStatus(proposal.id, "accepted");
+      return reply.code(201).send({ proposal: { ...proposal, status: "accepted" }, revision });
+    } catch (error) {
+      return sendError(reply, 400, "invalid_proposal", messageOf(error));
     }
   });
 
@@ -210,6 +253,54 @@ function isMediaKind(value: unknown): value is Asset["kind"] { return value === 
 function isTimeline(value: unknown): value is Timeline {
   if (!isJsonObject(value) || typeof value.durationUs !== "number" || !Array.isArray(value.tracks)) return false;
   return value.tracks.every((track) => isJsonObject(track) && typeof track.id === "string" && typeof track.kind === "string" && Array.isArray(track.clips));
+}
+function applyTimelineOperations(timeline: Timeline, operations: TimelineOperation[]): Timeline {
+  const tracks = timeline.tracks.map((track) => ({ ...track, clips: [...track.clips] }));
+  for (const operation of operations) {
+    if (operation.type === "add-caption") {
+      const captionTrack = tracks.find((track) => track.kind === "caption");
+      const clip: TimelineClip = {
+        id: "caption-" + operation.atUs + "-" + operation.durationUs,
+        assetId: "generated:caption",
+        sourceStartUs: 0,
+        sourceEndUs: operation.durationUs,
+        timelineStartUs: operation.atUs,
+        timelineEndUs: operation.atUs + operation.durationUs,
+        transform: { text: operation.text },
+      };
+      if (captionTrack) captionTrack.clips.push(clip);
+      else tracks.push({ id: "captions", kind: "caption", clips: [clip] });
+      continue;
+    }
+    let found = false;
+    for (const track of tracks) {
+      const index = track.clips.findIndex((clip) => clip.id === operation.clipId);
+      if (index < 0) continue;
+      found = true;
+      const clip = track.clips[index];
+      if (operation.type === "remove-clip") track.clips.splice(index, 1);
+      if (operation.type === "trim-clip") {
+        if (operation.sourceEndUs <= operation.sourceStartUs) throw new Error("Trim range is invalid");
+        track.clips[index] = {
+          ...clip,
+          sourceStartUs: operation.sourceStartUs,
+          sourceEndUs: operation.sourceEndUs,
+          timelineEndUs: clip.timelineStartUs + operation.sourceEndUs - operation.sourceStartUs,
+        };
+      }
+      if (operation.type === "split-clip") {
+        if (operation.atUs <= clip.sourceStartUs || operation.atUs >= clip.sourceEndUs) throw new Error("Split point is invalid");
+        const sourceRatio = (operation.atUs - clip.sourceStartUs) / (clip.sourceEndUs - clip.sourceStartUs);
+        const timelineAt = clip.timelineStartUs + Math.round((clip.timelineEndUs - clip.timelineStartUs) * sourceRatio);
+        const first: TimelineClip = { ...clip, id: clip.id + ":a", sourceEndUs: operation.atUs, timelineEndUs: timelineAt };
+        const second: TimelineClip = { ...clip, id: clip.id + ":b", sourceStartUs: operation.atUs, timelineStartUs: timelineAt };
+        track.clips.splice(index, 1, first, second);
+      }
+      break;
+    }
+    if (!found) throw new Error("Proposal references an unknown clip");
+  }
+  return { ...timeline, tracks };
 }
 function isTailoringProfile(value: unknown): value is TailoringProfile {
   if (!isJsonObject(value) || typeof value.intent !== "string" || typeof value.audience !== "string" || typeof value.channel !== "string" || !Array.isArray(value.constraints)) return false;
