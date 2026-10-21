@@ -10,6 +10,7 @@ type TimelineClip = {
 };
 type Timeline = { durationUs: number; tracks: Array<{ id: string; kind: string; clips: TimelineClip[] }> };
 type Proposal = { id: string; rationale: string; confidence: number; evidence: Array<{ source: string; reference: string; excerpt?: string }>; operations: unknown[]; status: string };
+type Project = { id: string; name: string; revision: number; createdAt: string; updatedAt: string };
 
 const API = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
 
@@ -17,6 +18,7 @@ export function App() {
   const [token, setToken] = useState("");
   const [projectId, setProjectId] = useState("");
   const [projectName, setProjectName] = useState("My first cut");
+  const [projects, setProjects] = useState<Project[]>([]);
   const [intent, setIntent] = useState("Create a clear short-form explainer");
   const [audience, setAudience] = useState("People discovering the product");
   const [channel, setChannel] = useState("short-form");
@@ -49,7 +51,40 @@ export function App() {
     try {
       const result = await request("/v1/projects", { method: "POST", body: JSON.stringify({ name: projectName }) });
       setProjectId(result.project.id);
+      setProjects((current) => [...current.filter((project) => project.id !== result.project.id), result.project]);
       setStatus("Project created");
+    } catch (error) { setStatus(errorMessage(error)); }
+    finally { setBusy(false); }
+  }
+
+  async function refreshProjects() {
+    if (!token) { setStatus("Enter an API token first"); return; }
+    setBusy(true);
+    try {
+      const result = await request("/v1/projects");
+      setProjects(result.projects);
+      setStatus(result.projects.length ? "Projects refreshed" : "No projects found");
+    } catch (error) { setStatus(errorMessage(error)); }
+    finally { setBusy(false); }
+  }
+
+  async function openProject(project: Project) {
+    setBusy(true);
+    try {
+      setProjectId(project.id);
+      setProjectName(project.name);
+      setRevision(project.revision);
+      setProposal(null);
+      setRenderJobId("");
+      setRenderJobStatus("");
+      setRenderUrl("");
+      if (project.revision > 0) {
+        const result = await request("/v1/projects/" + project.id + "/revisions/" + project.revision);
+        setTimeline(result.revision.timeline);
+      } else {
+        setTimeline({ durationUs: 30_000_000, tracks: [] });
+      }
+      setStatus("Opened " + project.name);
     } catch (error) { setStatus(errorMessage(error)); }
     finally { setBusy(false); }
   }
@@ -206,6 +241,8 @@ export function App() {
           <label>API token<input type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="Bearer token" /></label>
           <label>Project name<input value={projectName} onChange={(event) => setProjectName(event.target.value)} /></label>
           <button onClick={createProject} disabled={busy}>{projectId ? "Project " + projectId.slice(0, 8) : "Create project"}</button>
+          <button className="secondary" onClick={refreshProjects} disabled={busy || !token}>Refresh projects</button>
+          {projects.length > 0 && <label>Existing project<select value={projectId} onChange={(event) => { const project = projects.find((item) => item.id === event.target.value); if (project) void openProject(project); }}><option value="">Choose a project</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name} · rev {project.revision}</option>)}</select></label>}
         </section>
         <section className="panel">
           <h2>Tailoring brief</h2>
