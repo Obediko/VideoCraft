@@ -46,7 +46,7 @@
 - [x] Add multipart uploads and render-status polling.
 - [x] Add local HMAC-signed playback URLs and browser playback.
 - [x] Add provider-native signed object-storage URLs.
-- [ ] Add keyboard-accessible timeline editing and browser end-to-end tests.
+- [x] Add keyboard-accessible timeline editing and a Playwright browser contract test.
 
 ## Hardening - in progress
 
