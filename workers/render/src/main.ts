@@ -24,7 +24,7 @@ async function checksum(path: string): Promise<{ sizeBytes: number; checksumSha2
 
 const mediaRoot = required("MEDIA_ROOT");
 const outputRoot = required("RENDER_ROOT");
-await mkdir(outputRoot, { recursive: true });
+await mkdir(outputRoot + "/renders", { recursive: true });
 const pool = createPool(required("DATABASE_URL"));
 const renderJobs = new PostgresRenderJobRepository(pool as unknown as Database);
 const processRunner = new FfmpegProcess(process.env.FFMPEG_BIN ?? "ffmpeg");
