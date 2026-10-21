@@ -16,6 +16,10 @@ Set OBJECT_STORAGE_PROVIDER=local for development. Set OBJECT_STORAGE_PROVIDER=s
 
 Set CLAMAV_HOST and optionally CLAMAV_PORT to enable the ClamAV INSTREAM adapter. Set MALWARE_SCAN_REQUIRED=true in production; the API then refuses to start without CLAMAV_HOST. Files are scanned while still in the temporary upload location and are promoted to object storage only after a clean result. Scanner outages return a 503 and never promote the file.
 
+## Observability
+
+The API exposes a Prometheus-compatible `/metrics` endpoint with bounded request counters and latency count/sum metrics labeled only by method, route template, and status. Keep the endpoint inside the deployment network or behind platform access controls; it contains operational data and no request bodies or credentials.
+
 ## Production requirements
 
 - Use a managed PostgreSQL instance with encrypted connections and automated backups.
@@ -23,7 +27,7 @@ Set CLAMAV_HOST and optionally CLAMAV_PORT to enable the ClamAV INSTREAM adapter
 - Configure AUTH_ISSUER and AUTH_AUDIENCE when the identity provider supports them.
 - Run database migrations as a controlled release step.
 - Run transcription and rendering as separate worker processes with least-privilege filesystem access.
-- Add connection pool limits, timeouts, health probes, metrics, and tracing before public exposure.
+- Add connection pool limits, timeouts, health probes, distributed tracing, and alerting before public exposure.
 - Restrict outbound provider access from workers and sandbox media processing.
 - Configure retention, deletion, backup verification, and malware signature update monitoring for source assets and derived artifacts.
 - Add S3 integration tests against an emulator or staging bucket before production cutover.
