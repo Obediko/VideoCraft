@@ -34,7 +34,7 @@ The API exposes a Prometheus-compatible `/metrics` endpoint with bounded request
 
 - Use a managed PostgreSQL instance with encrypted connections and automated backups.
 - Store authentication, storage, scanner, and intent-provider secrets in a secret manager; never place them in repository files.
-- Configure AUTH_ISSUER and AUTH_AUDIENCE when the identity provider supports them.
+- Configure AUTH_ISSUER and AUTH_AUDIENCE in production; the API refuses unsafe production startup without them, S3-backed storage, and required malware scanning.
 - Run database migrations as a controlled release step.
 - Run transcription and rendering as separate worker processes with least-privilege filesystem access.
 - Add connection pool limits, timeouts, health probes, distributed tracing, and alerting before public exposure.
