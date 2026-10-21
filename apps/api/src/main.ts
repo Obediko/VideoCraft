@@ -109,8 +109,9 @@ const timelineService = new ProjectService(projects, assets, revisions, { next: 
 const transcripts = new PostgresTranscriptStore(db);
 const feedback = new PostgresFeedbackRepository(db);
 const audit = new PostgresAuditRepository(db);
-const intentAnalyzer = secretEnvironment.INTENT_PROVIDER_API_KEY
-  ? new OpenAiCompatibleIntentAnalyzer({ endpoint: secretEnvironment.INTENT_PROVIDER_URL ?? "https://api.openai.com/v1", apiKey: secretEnvironment.INTENT_PROVIDER_API_KEY, model: secretEnvironment.INTENT_PROVIDER_MODEL ?? "gpt-4o-mini" })
+const intentProviderMode = secretEnvironment.INTENT_PROVIDER_MODE ?? (secretEnvironment.INTENT_PROVIDER_API_KEY ? "external" : "rule-based");
+const intentAnalyzer = intentProviderMode === "external"
+  ? new OpenAiCompatibleIntentAnalyzer({ endpoint: required("INTENT_PROVIDER_URL"), apiKey: required("INTENT_PROVIDER_API_KEY"), model: required("INTENT_PROVIDER_MODEL") })
   : new RuleBasedIntentAnalyzer();
 const server = buildServer({
   projects, assets, members, storage, revisions,
