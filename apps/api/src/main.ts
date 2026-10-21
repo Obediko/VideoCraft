@@ -94,7 +94,11 @@ const transcriber = new FasterWhisperWorker({
   ...(secretEnvironment.WHISPER_LANGUAGE ? { language: secretEnvironment.WHISPER_LANGUAGE } : {}),
 });
 
-const authenticator = new JwtAuthenticator(requiredSecret("AUTH_JWT_SECRET"), {
+const jwtSecrets = [
+  requiredSecret("AUTH_JWT_SECRET"),
+  ...(secretEnvironment.AUTH_JWT_SECRET_PREVIOUS ? [requiredSecret("AUTH_JWT_SECRET_PREVIOUS")] : []),
+];
+const authenticator = new JwtAuthenticator(jwtSecrets, {
   ...(secretEnvironment.AUTH_ISSUER ? { issuer: secretEnvironment.AUTH_ISSUER } : {}),
   ...(secretEnvironment.AUTH_AUDIENCE ? { audience: secretEnvironment.AUTH_AUDIENCE } : {}),
 });
