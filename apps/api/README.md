@@ -1,3 +1,14 @@
 # VideoCraft API
 
-Planned authenticated API boundary for project, asset, transcript, proposal, feedback, and render commands. Validate request schemas, authorize project access, enqueue long-running work, and return stable DTOs. Do not call AI or media providers directly from request handlers.
+The API is an authenticated Fastify boundary for projects, revisions, assets, transcripts, intent analysis, proposals, feedback, and renders. Request handlers authorize project access, validate provider output, and enqueue long-running work without calling media or AI providers directly.
+
+Implemented project lifecycle endpoints include:
+
+- `GET /healthz` and dependency-aware `GET /readyz`
+- `GET /metrics`
+- `GET /v1/projects` and `GET /v1/projects/:projectId`
+- `POST /v1/projects`
+- `GET /v1/projects/:projectId/revisions/:revision`
+- `POST /v1/projects/:projectId/revisions`
+
+All project-scoped responses require authentication and the appropriate viewer/editor authorization. Long-running transcription and rendering remain provider/queue adapters behind explicit ports.
