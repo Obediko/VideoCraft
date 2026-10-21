@@ -11,11 +11,15 @@ export class EnvironmentSecretProvider implements SecretProvider {
 }
 
 
+export interface SecretsManagerClientLike {
+  send(command: GetSecretValueCommand): Promise<{ SecretString?: string }>;
+}
+
 export class AwsSecretsManagerProvider {
-  private readonly client: SecretsManagerClient;
-  constructor(private readonly secretId: string, region = process.env.AWS_REGION ?? "us-east-1") {
+  private readonly client: SecretsManagerClientLike;
+  constructor(private readonly secretId: string, region = process.env.AWS_REGION ?? "us-east-1", client?: SecretsManagerClientLike) {
     if (!secretId.trim()) throw new Error("AWS secret ID is required");
-    this.client = new SecretsManagerClient({ region });
+    this.client = client ?? new SecretsManagerClient({ region });
   }
 
   async load(): Promise<Record<string, string>> {
