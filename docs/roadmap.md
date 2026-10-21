@@ -36,6 +36,7 @@
 ## Media pipeline - in progress
 
 - [x] Add idempotent render jobs and a BullMQ queue.
+- [x] Scope render idempotency keys to each project at both application and database layers.
 - [x] Add an FFmpeg adapter and constrained render worker.
 - [x] Stage render inputs and persist outputs through the configured local or S3-compatible storage adapter.
 - [x] Add durable progress/status persistence, cancellation state, retries through BullMQ, and output manifests.
