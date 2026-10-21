@@ -97,3 +97,20 @@ test("metrics endpoint exposes bounded request counters", async () => {
   assert.match(response.body, /route="\/healthz"/);
   await server.close();
 });
+
+
+test("project-scoped mutations deny principals without project access", async () => {
+  const server = buildServer(dependencies(async () => ({ userId: "user-1" }), {
+    authorize: { canAccess: async () => false }
+  }));
+  const created = await server.inject({ method: "POST", url: "/v1/projects", payload: { name: "Private" } });
+  const projectId = created.json().project.id;
+  const response = await server.inject({
+    method: "POST",
+    url: "/v1/projects/" + projectId + "/revisions",
+    payload: { timeline: { durationUs: 100, tracks: [] } }
+  });
+  assert.equal(response.statusCode, 403);
+  assert.equal(response.json().error.code, "forbidden");
+  await server.close();
+});
