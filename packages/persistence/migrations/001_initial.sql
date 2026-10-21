@@ -52,3 +52,19 @@ CREATE INDEX IF NOT EXISTS assets_project_created_idx ON assets(project_id, crea
 CREATE INDEX IF NOT EXISTS revisions_project_idx ON project_revisions(project_id, revision DESC);
 CREATE INDEX IF NOT EXISTS project_members_user_idx ON project_members(user_id);
 CREATE INDEX IF NOT EXISTS transcript_asset_time_idx ON transcript_segments(asset_id, start_us);
+
+CREATE TABLE IF NOT EXISTS editing_proposals (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  base_revision INTEGER NOT NULL,
+  strategy_id TEXT NOT NULL,
+  strategy_version TEXT NOT NULL,
+  rationale TEXT NOT NULL,
+  confidence DOUBLE PRECISION NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+  evidence JSONB NOT NULL,
+  operations JSONB NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('proposed', 'accepted', 'rejected', 'superseded')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS proposals_project_idx ON editing_proposals(project_id, created_at DESC);
