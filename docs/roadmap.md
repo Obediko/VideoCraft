@@ -23,7 +23,7 @@
 - [x] Add faster-whisper worker protocol and normalized transcript persistence.
 - [x] Add non-destructive proposal preview with evidence and strategy version.
 - [x] Add proposal persistence and accept/reject decisions as revision events.
-- [ ] Add intent and audience extraction with structured outputs and evidence.
+- [x] Add deterministic intent and audience extraction with structured outputs and evidence.\n- [ ] Add a model-backed intent provider after provider credentials and evaluation fixtures are available.
 - [ ] Add fixtures and offline strategy evaluation.
 
 ## Media pipeline - in progress
