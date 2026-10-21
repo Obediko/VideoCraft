@@ -11,7 +11,7 @@ import { LocalObjectStorage, S3ObjectStorage, type ObjectStorage } from "@videoc
 import { StaticStrategyRegistry } from "@videocraft/strategies";
 import { PySceneDetectWorker } from "@videocraft/scene-detection";
 import { OpenAiCompatibleIntentAnalyzer, RuleBasedIntentAnalyzer } from "@videocraft/intent-analysis";
-import { ClamAvScanner, EnvironmentSecretProvider, loadSecretEnvironment, requireSecret, type MalwareScanner } from "@videocraft/security";
+import { ClamAvScanner, EnvironmentSecretProvider, loadSecretEnvironment, RedisProviderQuota, requireSecret, type MalwareScanner } from "@videocraft/security";
 import { configureTracing, MetricsRegistry } from "@videocraft/observability";
 import { buildServer } from "./server.js";
 import { registerUploadRoutes } from "./uploads.js";
@@ -84,7 +84,7 @@ const sceneDetector = secretEnvironment.SCENE_WORKER_PATH ? new PySceneDetectWor
 const metrics = new MetricsRegistry();
 const redisOptions = redisConnection(required("REDIS_URL"));
 const renderQueue = new Queue("videocraft-render", { connection: redisOptions });
-const rateLimitRedis = new Redis(redisOptions);
+const rateLimitRedis = new Redis(redisOptions);\nconst providerQuota = new RedisProviderQuota(rateLimitRedis);
 const transcriber = new FasterWhisperWorker({
   workerPath: required("WHISPER_WORKER_PATH"),
   mediaRoot,
@@ -127,7 +127,7 @@ const server = buildServer({
 server.register(rateLimit, { max: 120, timeWindow: "1 minute", redis: rateLimitRedis, skipOnError: false, keyGenerator: rateLimitKey });
 registerTimelineRoutes(server, { projects, revisions, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, saveRevision: (input) => timelineService.saveRevision(input) });
 registerFeedbackRoutes(server, { feedback, revisions, proposals: new PostgresProposalStore(db), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, now: () => new Date().toISOString() });
-registerIntentRoutes(server, { analyzer: intentAnalyzer, assets, transcripts, providerRateLimitMax: boundedInteger("INTENT_PROVIDER_MAX_PER_MINUTE", 20, 1, 1_000), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
+registerIntentRoutes(server, { analyzer: intentAnalyzer, assets, transcripts, quota: providerQuota, providerRateLimitMax: boundedInteger("INTENT_PROVIDER_MAX_PER_MINUTE", 20, 1, 1_000), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
 registerRenderRoutes(server, { jobs: renderJobs, storage, signingSecret: requiredSecret("DOWNLOAD_SIGNING_SECRET"), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
 registerUploadRoutes(server, {
   assets, storage, authorize: authorizer, authenticate: (request) => authenticator.authenticate(request),
