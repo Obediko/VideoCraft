@@ -192,9 +192,11 @@ test("project owners can manage members and members can be listed", async () => 
 });
 
 test("non-owners cannot manage project members", async () => {
-  const deps = dependencies(async () => ({ userId: "not-owner" }));
+  let principalId = "owner-1";
+  const deps = dependencies(async () => ({ userId: principalId }));
   const server = buildServer(deps);
   const created = await server.inject({ method: "POST", url: "/v1/projects", payload: { name: "Private" } });
+  principalId = "not-owner";
   const projectId = created.json().project.id;
   const response = await server.inject({
     method: "PUT",
