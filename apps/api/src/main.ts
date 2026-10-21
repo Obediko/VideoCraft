@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import rateLimit from "@fastify/rate-limit";
 import { Queue } from "bullmq";
+import type { FastifyRequest } from "fastify";
 import { createPool, PostgresAssetRepository, PostgresProjectRepository, PostgresProposalStore, PostgresRevisionRepository, PostgresTranscriptStore, PostgresRenderJobRepository, PostgresFeedbackRepository, PostgresAuditRepository, type Database } from "@videocraft/persistence";
 import { BullMqRenderQueue } from "@videocraft/jobs";
 import { ProjectService } from "@videocraft/application";
@@ -23,7 +24,7 @@ function required(name: string): string {
   if (!value) throw new Error(name + " is required");
   return value;
 }
-function rateLimitKey(request: { headers: { authorization?: string }; ip: string }): string {
+function rateLimitKey(request: FastifyRequest): string {
   const authorization = request.headers.authorization;
   return authorization?.startsWith("Bearer ")
     ? "principal:" + createHash("sha256").update(authorization).digest("hex")
