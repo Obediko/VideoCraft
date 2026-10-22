@@ -61,8 +61,9 @@ done
 if [ "$status" = succeeded ]; then
   code "${H[@]}" "$API/v1/projects/$PID/renders/$JID/download-url" >/dev/null
   URL="$(js 'd["url"]' < "$TMP/body")"
-  c="$(curl -s -o "$TMP/out.mp4" -w '%{http_code}' -L "$API$URL")"
-  [ "$c" = 200 ] && [ -s "$TMP/out.mp4" ] && ok "signed download works ($(stat -c %s "$TMP/out.mp4") bytes)" || bad "download -> $c"
+  case "$URL" in http*) DL="$URL";; *) DL="$API$URL";; esac
+  c="$(curl -s -o "$TMP/out.mp4" -w '%{http_code}' -L "$DL")"
+  if [ "$c" = 200 ] && head -c 12 "$TMP/out.mp4" | grep -q ftyp; then ok "signed download returns an MP4 ($(stat -c %s "$TMP/out.mp4") bytes)"; else bad "download -> $c (not an MP4)"; fi
 fi
 docker logs --since 15m videocraft-render-worker 2>&1 | grep -E 'render\.' | tail -5
 
