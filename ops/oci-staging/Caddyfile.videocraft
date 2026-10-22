@@ -1,0 +1,16 @@
+# Appended to the existing Caddyfile. Caddy provisions HTTPS and redirects HTTP->HTTPS automatically.
+# UPSTREAM_WEB / UPSTREAM_API are replaced by deploy.sh:
+#   Caddy on the host  -> 127.0.0.1:18080 / 127.0.0.1:18081
+#   Caddy in Docker    -> videocraft-web:8080 / videocraft-api:8080 (Caddy joined to videocraft_edge)
+videocraft.emancipationdevelopment.org {
+	encode gzip
+	request_body {
+		max_size 2GB
+	}
+	handle_path /api/* {
+		reverse_proxy UPSTREAM_API
+	}
+	handle {
+		reverse_proxy UPSTREAM_WEB
+	}
+}

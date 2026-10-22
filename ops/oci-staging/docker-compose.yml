@@ -1,0 +1,139 @@
+# VideoCraft staging stack for the OCI Ampere host (130.61.84.214).
+# Secrets live only in /opt/videocraft/.env (mode 600). Nothing here is secret.
+name: videocraft
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-app-env: &app-env
+  NODE_ENV: production
+  DATABASE_URL: postgres://videocraft:${POSTGRES_PASSWORD}@postgres:5432/videocraft
+  REDIS_URL: redis://redis:6379
+  OBJECT_STORAGE_PROVIDER: s3
+  S3_BUCKET: videocraft-staging
+  S3_REGION: auto
+  S3_ENDPOINT: https://ce0b0cae608258fcab60f5c7f68a7700.r2.cloudflarestorage.com
+  S3_FORCE_PATH_STYLE: "true"
+  AWS_REGION: auto
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+  JOB_QUEUE_PROVIDER: cloudflare
+  CF_ACCOUNT_ID: ce0b0cae608258fcab60f5c7f68a7700
+  CF_QUEUE_ID: ca8d5a38c54147889a48a439cc3365fa
+  CF_QUEUES_API_TOKEN: ${CF_QUEUES_API_TOKEN}
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: videocraft-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: videocraft
+      POSTGRES_DB: videocraft
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U videocraft -d videocraft"], interval: 10s, timeout: 5s, retries: 10 }
+    mem_limit: 1g
+    cpus: 1.0
+    logging: *logging
+    networks: [internal]
+
+  redis:
+    image: redis:7
+    container_name: videocraft-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [redisdata:/data]
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 10s, timeout: 5s, retries: 10 }
+    mem_limit: 256m
+    cpus: 0.5
+    logging: *logging
+    networks: [internal]
+
+  clamav:
+    image: clamav/clamav-debian:stable
+    container_name: videocraft-clamav
+    restart: unless-stopped
+    volumes: [clamdb:/var/lib/clamav]
+    healthcheck: { test: ["CMD", "clamdcheck.sh"], interval: 30s, timeout: 10s, retries: 20, start_period: 300s }
+    mem_limit: 3g
+    cpus: 1.0
+    logging: *logging
+    networks: [internal]
+
+  otel-collector:
+    image: otel/opentelemetry-collector:0.111.0
+    container_name: videocraft-otel
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes: [./otel-collector.yaml:/etc/otelcol/config.yaml:ro]
+    mem_limit: 256m
+    cpus: 0.25
+    logging: *logging
+    networks: [internal]
+
+  api:
+    image: ghcr.io/obediko/videocraft-api:staging
+    container_name: videocraft-api
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+      PORT: "8080"
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET}
+      AUTH_ISSUER: https://videocraft.emancipationdevelopment.org
+      AUTH_AUDIENCE: videocraft-staging
+      DOWNLOAD_SIGNING_SECRET: ${DOWNLOAD_SIGNING_SECRET}
+      METRICS_AUTH_TOKEN: ${METRICS_AUTH_TOKEN}
+      MALWARE_SCAN_REQUIRED: "true"
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: "3310"
+      OTEL_SERVICE_NAME: videocraft-api
+      INTENT_PROVIDER_MODE: rule-based
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      clamav: { condition: service_healthy }
+    ports: ["127.0.0.1:18081:8080"]
+    healthcheck: { test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"], interval: 15s, timeout: 5s, retries: 5 }
+    mem_limit: 1g
+    cpus: 1.0
+    logging: *logging
+    networks: [internal, edge]
+
+  render-worker:
+    image: ghcr.io/obediko/videocraft-render-worker:staging
+    container_name: videocraft-render-worker
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+      OTEL_SERVICE_NAME: videocraft-render-worker
+      RENDER_CONCURRENCY: "1"
+    tmpfs: ["/tmp:size=4g"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    mem_limit: 3g
+    cpus: 2.0
+    logging: *logging
+    networks: [internal]
+
+  web:
+    image: ghcr.io/obediko/videocraft-web:staging
+    container_name: videocraft-web
+    restart: unless-stopped
+    ports: ["127.0.0.1:18080:8080"]
+    healthcheck: { test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"], interval: 15s, timeout: 5s, retries: 5 }
+    mem_limit: 128m
+    cpus: 0.25
+    logging: *logging
+    networks: [edge]
+
+volumes:
+  pgdata:
+  redisdata:
+  clamdb:
+
+networks:
+  internal:
+  edge:
