@@ -1,0 +1,40 @@
+name: Staging render worker image
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "workers/render/**"
+      - "packages/**"
+      - "package.json"
+      - "tsconfig.base.json"
+      - ".github/workflows/staging-render-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: videocraft-render-image-\${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: \${{ github.actor }}
+          password: \${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: workers/render/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/\${{ github.repository_owner }}/videocraft-render-worker:\${{ github.sha }}
+            ghcr.io/\${{ github.repository_owner }}/videocraft-render-worker:staging
