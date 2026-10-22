@@ -21,6 +21,7 @@ import { registerFeedbackRoutes } from "./feedback-routes.js";
 import { registerTimelineRoutes } from "./timeline-routes.js";
 import { JwtAuthenticator, PostgresProjectAuthorizer } from "./auth.js";
 import { validateProductionConfiguration } from "./config.js";
+import { registerAuthRoutes } from "./auth-routes.js";
 
 const secretEnvironment = await loadSecretEnvironment(process.env);
 const secrets = new EnvironmentSecretProvider(secretEnvironment);
@@ -135,6 +136,12 @@ const server = buildServer({
     { name: "database", check: async () => { await db.query("SELECT 1"); return true; } },
     { name: "redis", check: async () => { await renderQueue.getJobCounts(); return true; } },
   ],
+});
+registerAuthRoutes(server, {
+  database: db,
+  secret: requiredSecret("AUTH_JWT_SECRET"),
+  ...(secretEnvironment.AUTH_ISSUER ? { issuer: secretEnvironment.AUTH_ISSUER } : {}),
+  ...(secretEnvironment.AUTH_AUDIENCE ? { audience: secretEnvironment.AUTH_AUDIENCE } : {}),
 });
 server.register(rateLimit, { max: 120, timeWindow: "1 minute", redis: rateLimitRedis, skipOnError: false, keyGenerator: rateLimitKey });
 registerTimelineRoutes(server, { projects, revisions, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, saveRevision: (input) => timelineService.saveRevision(input) });
