@@ -8,7 +8,7 @@ RUN apt-get update   && apt-get install -y --no-install-recommends ffmpeg ca-cer
 
 WORKDIR /app
 COPY . .
-RUN npm install --include=dev --ignore-scripts && npm run build
+RUN npm install --include=dev --ignore-scripts   && npm run build --workspace=@videocraft/domain   && npm run build --workspace=@videocraft/storage   && npm run build --workspace=@videocraft/application   && npm run build --workspace=@videocraft/transcription   && npm run build --workspace=@videocraft/rendering   && npm run build --workspace=@videocraft/persistence   && npm run build --workspace=@videocraft/jobs   && npm run build --workspace=@videocraft/render-worker
 
 USER node
 CMD ["node", "workers/render/dist/main.js"]
