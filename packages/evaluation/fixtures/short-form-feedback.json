@@ -1,0 +1,9 @@
+{
+  "strategyId": "short-form-explainer",
+  "events": [
+    { "type": "accepted", "weight": 1 },
+    { "type": "edited", "weight": 1 },
+    { "type": "exported", "weight": 1 }
+  ],
+  "interpretation": "Offline evaluation fixture only. It is not a training set and does not enable autonomous model updates."
+}

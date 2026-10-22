@@ -1,0 +1,44 @@
+groups:
+  - name: videocraft-api
+    interval: 30s
+    rules:
+      - alert: VideoCraftApiHighServerErrorRate
+        expr: |
+          (
+            sum(rate(videocraft_http_requests_total{status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(videocraft_http_requests_total[5m])), 1)
+          ) > 0.05
+        for: 10m
+        labels:
+          severity: critical
+          service: videocraft-api
+        annotations:
+          summary: "VideoCraft API server error rate is high"
+          description: "More than 5% of API requests have returned 5xx responses for 10 minutes."
+
+      - alert: VideoCraftApiReadinessFailures
+        expr: |
+          sum(rate(videocraft_http_requests_total{route="/readyz",status="503"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: videocraft-api
+        annotations:
+          summary: "VideoCraft API readiness checks are failing"
+          description: "The API has returned readiness failures for at least 5 minutes; inspect PostgreSQL and Redis dependencies."
+
+      - alert: VideoCraftQuotaPressure
+        expr: |
+          (
+            sum(rate(videocraft_http_requests_total{status="429"}[5m]))
+            /
+            clamp_min(sum(rate(videocraft_http_requests_total[5m])), 1)
+          ) > 0.10
+        for: 10m
+        labels:
+          severity: warning
+          service: videocraft-api
+        annotations:
+          summary: "VideoCraft rate-limit pressure is high"
+          description: "More than 10% of requests are being rate-limited; review provider quotas, client behavior, or capacity."

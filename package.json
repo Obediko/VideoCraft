@@ -1,0 +1,20 @@
+{
+  "name": "videocraft",
+  "private": true,
+  "version": "0.1.0",
+  "description": "AI-assisted, explainable video editing platform",
+  "packageManager": "npm@11",
+  "workspaces": ["packages/*", "apps/*", "workers/*"],
+  "scripts": {
+    "build": "npm run build --workspace=@videocraft/domain && npm run build --workspace=@videocraft/storage && npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test:integration": "node --test test/integration.test.mjs",
+    "check": "npm run build && npm test && npm run typecheck"
+  },
+  "engines": {"node": ">=22"},
+  "devDependencies": {
+    "ioredis": "^5.4.1",
+    "pg": "^8.13.1"
+  }
+}

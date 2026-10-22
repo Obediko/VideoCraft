@@ -1,0 +1,47 @@
+:root { color: #e8ecf4; background: #0b0e14; font-family: Inter, ui-sans-serif, system-ui, sans-serif; font-synthesis: none; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 1120px; }
+button, input, textarea { font: inherit; }
+button { border: 0; border-radius: 8px; padding: 10px 14px; background: #6d5dfc; color: white; cursor: pointer; font-weight: 650; }
+button:disabled { opacity: .45; cursor: default; }
+button.secondary { background: #202735; color: #c9d1e2; border: 1px solid #303a4d; }
+input, textarea { width: 100%; margin-top: 7px; padding: 10px 11px; color: #e8ecf4; background: #121722; border: 1px solid #2d3748; border-radius: 7px; outline: none; }
+textarea { min-height: 68px; resize: vertical; }
+label { display: block; margin: 12px 0; color: #aab4c5; font-size: 12px; letter-spacing: .02em; }
+h1, h2, p { margin-top: 0; }
+h1 { margin-bottom: 0; font-size: 24px; letter-spacing: -.04em; }
+h2 { margin-bottom: 14px; font-size: 14px; letter-spacing: .02em; }
+.app-shell { min-height: 100vh; }
+.topbar { height: 74px; display: flex; align-items: center; justify-content: space-between; padding: 0 28px; border-bottom: 1px solid #1f2633; background: #0e121a; }
+.eyebrow { color: #7e8ba1; font-size: 10px; letter-spacing: .16em; font-weight: 800; }
+.status-pill { display: flex; align-items: center; gap: 8px; color: #aab4c5; font-size: 12px; }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; background: #55d69a; box-shadow: 0 0 12px #55d69a; }
+.workspace { display: grid; grid-template-columns: 290px 1fr; min-height: calc(100vh - 74px); }
+.sidebar { padding: 18px; border-right: 1px solid #1f2633; background: #0e121a; }
+.editor { padding: 22px 26px; max-width: 1500px; width: 100%; margin: 0 auto; }
+.panel { padding: 16px; border: 1px solid #222b3a; border-radius: 12px; background: #111722; margin-bottom: 14px; }
+.panel button { width: 100%; margin-top: 8px; }
+.muted { color: #7e8ba1; font-size: 12px; line-height: 1.55; }
+.editor-toolbar, .panel-heading, .toolbar-actions, .decision-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.editor-toolbar h2 { margin-top: 7px; font-size: 20px; }
+.toolbar-actions { justify-content: flex-end; }
+.timeline-card { min-height: 260px; padding: 18px; border: 1px solid #222b3a; border-radius: 12px; background: #111722; }
+.timeline-help { margin: 0 0 12px 80px; color: #7e8ba1; font-size: 11px; }
+.ruler { display: flex; justify-content: space-between; padding: 0 12px 14px 80px; color: #68758b; font-size: 11px; border-bottom: 1px solid #242e3e; }
+.track { display: grid; grid-template-columns: 68px 1fr; min-height: 58px; border-bottom: 1px solid #202938; }
+.track-label { display: flex; align-items: center; color: #8996aa; font-size: 11px; text-transform: uppercase; }
+.track-lane { display: flex; align-items: center; gap: 6px; padding: 8px 0; background: repeating-linear-gradient(90deg, transparent 0, transparent calc(16.66% - 1px), #1c2533 calc(16.66% - 1px), #1c2533 16.66%); }
+.clip { display: flex; flex-direction: column; gap: 5px; min-width: 90px; padding: 9px 11px; border-radius: 7px; background: linear-gradient(135deg, #6559db, #3d8acb); color: white; overflow: hidden; text-align: left; }
+.clip:hover, .clip.selected { background: linear-gradient(135deg, #7c70f4, #4ba9e2); }
+.clip:focus-visible { outline: 3px solid #f4d35e; outline-offset: 2px; }
+.clip small { color: #cfd7e7; }
+.empty-state { width: 100%; padding: 52px 24px; text-align: center; color: #68758b; font-size: 13px; }
+.lower-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
+.preview-screen { min-height: 185px; display: grid; place-items: center; border-radius: 8px; background: radial-gradient(circle at 50% 20%, #26364e, #0a0d13 70%); color: #748198; font-size: 12px; text-align: center; }
+.badge { padding: 4px 8px; border-radius: 99px; color: #a6e7c8; background: #18352b; font-size: 10px; }
+.evidence { display: grid; gap: 8px; margin: 12px 0; }
+.evidence > div { padding: 9px; border-radius: 7px; background: #171e2b; font-size: 11px; }
+.evidence span { margin-right: 8px; color: #8d9bf8; text-transform: uppercase; }
+.evidence code { color: #aab4c5; }
+.evidence p { margin: 6px 0 0; color: #b9c3d4; }
+.decision-actions { justify-content: flex-end; margin-top: 16px; }
