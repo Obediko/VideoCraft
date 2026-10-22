@@ -10,11 +10,14 @@ import type { Asset, UUID } from "@videocraft/domain";
 import type { AssetRepository } from "@videocraft/application";
 import type { ObjectStorage } from "@videocraft/storage";
 import type { MalwareScanner } from "@videocraft/security";
+import { validateMedia, type MediaInfo } from "@videocraft/analysis";
 
 export interface UploadDependencies {
   assets: AssetRepository;
   storage: ObjectStorage;
   scanner?: MalwareScanner;
+  /** Extracts duration and stream metadata; uploads that cannot be decoded are rejected. */
+  inspector?: (path: string) => Promise<MediaInfo>;
   authorize: { canAccess(principal: { userId: UUID }, projectId: UUID, minimumRole: "viewer" | "editor"): Promise<boolean> };
   authenticate(request: FastifyRequest): Promise<{ userId: UUID } | null>;
   clock(): string;
@@ -47,10 +50,27 @@ export function registerUploadRoutes(server: FastifyInstance, dependencies: Uplo
         catch (caught) { return error(reply, 503, "malware_scanner_unavailable", caught instanceof Error ? caught.message : "Malware scanner unavailable"); }
         if (!scan.clean) return error(reply, 422, "malware_detected", "The uploaded file was rejected by malware scanning");
       }
+      let info: MediaInfo | undefined;
+      if (dependencies.inspector && (kind === "video" || kind === "audio")) {
+        try { info = await dependencies.inspector(temporaryPath); }
+        catch (caught) {
+          const unavailable = (caught as NodeJS.ErrnoException)?.code === "ENOENT";
+          return error(reply, unavailable ? 503 : 422, unavailable ? "media_inspector_unavailable" : "invalid_media", unavailable ? "Media inspection is not available on this server" : "The file could not be read as media: " + (caught instanceof Error ? caught.message.slice(0, 200) : "unknown error"));
+        }
+        try {
+          validateMedia(info);
+          if (kind === "video" && !info.hasVideo) throw new Error("File has no video stream");
+          if (kind === "audio" && !info.hasAudio) throw new Error("File has no audio stream");
+        } catch (caught) { return error(reply, 422, "invalid_media", caught instanceof Error ? caught.message : "Invalid media"); }
+      }
       const stored = await dependencies.storage.putFile(temporaryPath, storageKey);
       const asset: Asset = {
         id: assetId, projectId, kind, storageKey: stored.key, checksumSha256: stored.checksumSha256,
-        metadata: { filename: part.filename.slice(0, 255), mimeType: part.mimetype },
+        ...(info ? { durationUs: info.durationUs } : {}),
+        metadata: {
+          filename: part.filename.slice(0, 255), mimeType: part.mimetype,
+          ...(info ? { hasVideo: info.hasVideo, hasAudio: info.hasAudio, container: info.formatName.slice(0, 80), ...(info.width ? { width: info.width } : {}), ...(info.height ? { height: info.height } : {}), ...(info.frameRate ? { frameRate: info.frameRate } : {}), ...(info.videoCodec ? { videoCodec: info.videoCodec } : {}), ...(info.audioCodec ? { audioCodec: info.audioCodec } : {}) } : {}),
+        },
         createdAt: dependencies.clock(),
       };
       try {

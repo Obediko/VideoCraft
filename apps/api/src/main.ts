@@ -15,6 +15,8 @@ import { ClamAvScanner, EnvironmentSecretProvider, loadSecretEnvironment, RedisP
 import { configureTracing, MetricsRegistry } from "@videocraft/observability";
 import { buildServer } from "./server.js";
 import { registerUploadRoutes } from "./uploads.js";
+import { probeMedia } from "@videocraft/analysis";
+import { StorageSilenceDetector } from "./media-analysis.js";
 import { registerRenderRoutes } from "./render-routes.js";
 import { registerIntentRoutes } from "./intent-routes.js";
 import { registerFeedbackRoutes } from "./feedback-routes.js";
@@ -122,6 +124,7 @@ const intentAnalyzer = intentProviderMode === "external"
 const server = buildServer({
   projects, assets, members, storage, revisions, ...(secretEnvironment.METRICS_AUTH_TOKEN ? { metricsToken: secretEnvironment.METRICS_AUTH_TOKEN } : {}),
   ...(sceneDetector ? { sceneDetector } : {}),
+  silenceDetector: new StorageSilenceDetector(storage, secretEnvironment.FFMPEG_BIN ? { ffmpeg: secretEnvironment.FFMPEG_BIN } : {}),
   scenes,
   transcripts,
   proposals: new PostgresProposalStore(db),
@@ -152,6 +155,7 @@ registerRenderRoutes(server, { jobs: renderJobs, storage, signingSecret: require
 registerUploadRoutes(server, {
   assets, storage, authorize: authorizer, authenticate: (request) => authenticator.authenticate(request),
   clock: () => new Date().toISOString(), ...(malwareScanner ? { scanner: malwareScanner } : {}),
+  inspector: (path) => probeMedia(path, secretEnvironment.FFPROBE_BIN ? { executable: secretEnvironment.FFPROBE_BIN } : {}),
 });
 
 const port = Number(secretEnvironment.PORT ?? "8080");

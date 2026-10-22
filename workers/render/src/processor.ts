@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import { safeMediaPath } from "@videocraft/transcription";
 import { FfmpegCommandPlanner, FfmpegProcess } from "@videocraft/rendering";
+import { probeMedia } from "@videocraft/analysis";
 import { LocalObjectStorage, S3ObjectStorage, type ObjectStorage } from "@videocraft/storage";
 import { PostgresRenderJobRepository, type Database } from "@videocraft/persistence";
 import type { RenderTask } from "@videocraft/jobs";
@@ -90,6 +91,11 @@ export class RenderTaskProcessor {
           const path = stagedAssets[assetId];
           if (!path) throw new Error("Asset is missing from render manifest");
           return path;
+        },
+        hasAudio: async (assetId: string): Promise<boolean> => {
+          const path = stagedAssets[assetId];
+          if (!path) return false;
+          return (await probeMedia(path, process.env.FFPROBE_BIN ? { executable: process.env.FFPROBE_BIN } : {})).hasAudio;
         },
       };
       const plan = await new FfmpegCommandPlanner(assetResolver).plan(task.revision, task.settings, outputPath);

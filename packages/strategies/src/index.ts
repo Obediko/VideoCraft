@@ -78,10 +78,13 @@ function captionText(profile: TailoringProfile): string {
   return audience ? "For " + audience + ": " + intent : intent;
 }
 
+export * from "./highlights.js";
+import { HighlightReelStrategy } from "./highlights.js";
+
 export class StaticStrategyRegistry {
   private readonly strategies = new Map<string, EditingStrategy>();
 
-  constructor(strategies: EditingStrategy[] = [new ShortFormExplainerStrategy()]) {
+  constructor(strategies: EditingStrategy[] = [new ShortFormExplainerStrategy(), new HighlightReelStrategy()]) {
     for (const strategy of strategies) {
       this.strategies.set(strategy.id + "@" + strategy.version, strategy);
     }

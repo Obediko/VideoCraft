@@ -7,11 +7,22 @@ type TimelineClip = {
   sourceEndUs: number;
   timelineStartUs: number;
   timelineEndUs: number;
+  reason?: string;
+  score?: number;
+  transform?: Record<string, string | number | boolean>;
 };
 type Timeline = { durationUs: number; tracks: Array<{ id: string; kind: string; clips: TimelineClip[] }> };
-type Proposal = { id: string; rationale: string; confidence: number; evidence: Array<{ source: string; reference: string; excerpt?: string }>; operations: unknown[]; status: string };
+type Evidence = { source: string; reference: string; excerpt?: string; startUs?: number; endUs?: number };
+type Operation = { type: string; reason?: string; score?: number; sourceStartUs?: number; sourceEndUs?: number; [key: string]: unknown };
+type Proposal = { id: string; rationale: string; confidence: number; evidence: Evidence[]; operations: Operation[]; status: string };
+const PLATFORMS: Record<string, { label: string; width: number; height: number; fit: "cover" | "contain"; captionStyle: string }> = {
+  tiktok: { label: "TikTok / Reels / Shorts 9:16", width: 1080, height: 1920, fit: "cover", captionStyle: "bold-pop" },
+  youtube: { label: "YouTube 16:9", width: 1920, height: 1080, fit: "contain", captionStyle: "clean" },
+  square: { label: "Feed 1:1", width: 1080, height: 1080, fit: "cover", captionStyle: "clean" },
+  preview: { label: "Quick preview 720p", width: 1280, height: 720, fit: "contain", captionStyle: "clean" },
+};
 type Project = { id: string; name: string; revision: number; createdAt: string; updatedAt: string };
-type Asset = { id: string; kind: string; storageKey: string; metadata: Record<string, string | number | boolean> };
+type Asset = { id: string; kind: string; storageKey: string; durationUs?: number; metadata: Record<string, string | number | boolean> };
 
 const API = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
 
@@ -39,8 +50,16 @@ export function App() {
   const [renderUrl, setRenderUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [selectedClipId, setSelectedClipId] = useState("");
+  const [targetSeconds, setTargetSeconds] = useState(30);
+  const [platform, setPlatform] = useState("tiktok");
+  const [captionDrafts, setCaptionDrafts] = useState<Record<string, string>>({});
+  const [segmentStart, setSegmentStart] = useState("0");
+  const [segmentEnd, setSegmentEnd] = useState("10");
 
   const videoTrack = useMemo(() => timeline.tracks.find((track) => track.kind === "video"), [timeline]);
+  const videoClips = useMemo(() => [...(videoTrack?.clips ?? [])].sort((a, b) => a.timelineStartUs - b.timelineStartUs), [videoTrack]);
+  const captionCues = useMemo(() => timeline.tracks.filter((track) => track.kind === "caption").flatMap((track) => track.clips).sort((a, b) => a.timelineStartUs - b.timelineStartUs), [timeline]);
+  const selectedClip = videoClips.find((clip) => clip.id === selectedClipId);
 
   async function request(path: string, init: RequestInit = {}, accessToken = token, retried = false): Promise<any> {
     const response = await fetch(API + path, {
@@ -165,17 +184,21 @@ export function App() {
 
   function addClip() {
     if (!assetId.trim()) { setStatus("Register an asset and enter its asset ID first"); return; }
+    const videoEndUs = videoClips.reduce((end, existing) => Math.max(end, existing.timelineEndUs), 0);
+    const knownAsset = assets.find((asset) => asset.id === assetId.trim());
+    const assetLengthUs = knownAsset?.durationUs && knownAsset.durationUs > 0 ? knownAsset.durationUs : 10_000_000;
     const clip: TimelineClip = {
       id: "clip-" + Date.now(),
       assetId: assetId.trim(),
       sourceStartUs: 0,
-      sourceEndUs: 10_000_000,
-      timelineStartUs: 0,
-      timelineEndUs: 10_000_000,
+      sourceEndUs: assetLengthUs,
+      timelineStartUs: videoEndUs,
+      timelineEndUs: videoEndUs + assetLengthUs,
     };
     setSelectedClipId(clip.id);
     setTimeline((current) => ({
       ...current,
+      durationUs: Math.max(current.durationUs, videoEndUs + assetLengthUs),
       tracks: current.tracks.some((track) => track.kind === "video")
         ? current.tracks.map((track) => track.kind === "video" ? { ...track, clips: [...track.clips, clip] } : track)
         : [...current.tracks, { id: "video-1", kind: "video", clips: [clip] }],
@@ -183,8 +206,33 @@ export function App() {
     setStatus("Clip added to the non-destructive timeline");
   }
 
-  function nudgeSelectedClip(deltaUs: number, clipId = selectedClipId) {
+  /** Saved revisions are edited on the server (ripple edit, captions follow the cuts); unsaved drafts edit locally. */
+  async function applyEdit(operations: Array<Record<string, unknown>>, message: string) {
+    if (!projectId || !revision) return false;
+    setBusy(true);
+    try {
+      const result = await request("/v1/projects/" + projectId + "/revisions/" + revision + "/edit", { method: "POST", body: JSON.stringify({ operations }) });
+      setRevision(result.revision.revision);
+      setTimeline(result.revision.timeline);
+      setRenderUrl(""); setRenderJobId(""); setRenderJobStatus("");
+      setStatus(message + " (revision " + result.revision.revision + ")");
+      return true;
+    } catch (error) { setStatus(errorMessage(error)); return false; }
+    finally { setBusy(false); }
+  }
+
+  function nudgeSelectedClip(direction: -1 | 1, clipId = selectedClipId) {
     if (!clipId) { setStatus("Select a clip first"); return; }
+    const message = direction < 0 ? "Clip moved earlier" : "Clip moved later";
+    if (revision > 0) {
+      const index = videoClips.findIndex((clip) => clip.id === clipId);
+      const target = index + direction;
+      if (index < 0 || target < 0 || target >= videoClips.length) { setStatus("Clip is already at the " + (direction < 0 ? "start" : "end")); return; }
+      const order = videoClips.map((clip) => clip.id);
+      [order[index], order[target]] = [order[target] as string, order[index] as string];
+      void applyEdit([{ type: "reorder-clips", clipIds: order }], message);
+      return;
+    }
     setTimeline((current) => ({
       ...current,
       tracks: current.tracks.map((track) => ({
@@ -192,25 +240,65 @@ export function App() {
         clips: track.clips.map((clip) => {
           if (clip.id !== clipId) return clip;
           const duration = clip.timelineEndUs - clip.timelineStartUs;
-          const nextStart = Math.max(0, Math.min(current.durationUs - duration, clip.timelineStartUs + deltaUs));
+          const nextStart = Math.max(0, Math.min(current.durationUs - duration, clip.timelineStartUs + direction * 500_000));
           return { ...clip, timelineStartUs: nextStart, timelineEndUs: nextStart + duration };
         }),
       })),
     }));
-    setStatus(deltaUs < 0 ? "Clip moved earlier" : "Clip moved later");
+    setStatus(message);
   }
 
   function removeSelectedClip(clipId = selectedClipId) {
     if (!clipId) { setStatus("Select a clip first"); return; }
-    setTimeline((current) => ({ ...current, tracks: current.tracks.map((track) => ({ ...track, clips: track.clips.filter((clip) => clip.id !== clipId) })).filter((track) => track.clips.length > 0) }));
     setSelectedClipId("");
+    if (revision > 0) { void applyEdit([{ type: "remove-clip", clipId, reason: "Removed in the editor" }], "Clip removed"); return; }
+    setTimeline((current) => ({ ...current, tracks: current.tracks.map((track) => ({ ...track, clips: track.clips.filter((clip) => clip.id !== clipId) })).filter((track) => track.clips.length > 0) }));
     setStatus("Clip removed from the non-destructive timeline");
   }
 
+  function trimSelectedClip(startDeltaUs: number, endDeltaUs: number) {
+    if (!selectedClip) { setStatus("Select a clip first"); return; }
+    if (revision === 0) { setStatus("Save a revision before trimming"); return; }
+    const source = assets.find((asset) => asset.id === selectedClip.assetId);
+    const start = Math.max(0, selectedClip.sourceStartUs + startDeltaUs);
+    const end = Math.min(source?.durationUs ?? Number.MAX_SAFE_INTEGER, selectedClip.sourceEndUs + endDeltaUs);
+    if (end - start < 300_000) { setStatus("A clip must stay at least 0.3s long"); return; }
+    void applyEdit([{ type: "trim-clip", clipId: selectedClip.id, sourceStartUs: start, sourceEndUs: end }], "Clip trimmed");
+  }
+
+  function addSegment() {
+    const start = Number(segmentStart);
+    const end = Number(segmentEnd);
+    const source = assets.find((asset) => asset.id === (selectedClip?.assetId ?? assetId));
+    if (!source) { setStatus("Choose the source asset first"); return; }
+    if (!(start >= 0) || !(end > start)) { setStatus("Enter a start and end in seconds (end after start)"); return; }
+    if (source.durationUs && end * 1_000_000 > source.durationUs) { setStatus("The segment ends after the source video does"); return; }
+    if (revision === 0) { setStatus("Save a revision before adding segments"); return; }
+    void applyEdit([{ type: "insert-clip", assetId: source.id, sourceStartUs: Math.round(start * 1e6), sourceEndUs: Math.round(end * 1e6), reason: "Added in the editor" }], "Segment added");
+  }
+
+  function saveCaption(clip: TimelineClip) {
+    const text = (captionDrafts[clip.id] ?? String(clip.transform?.text ?? "")).trim();
+    if (!text) { setStatus("A caption cannot be empty"); return; }
+    void applyEdit([{ type: "update-caption", clipId: clip.id, text }], "Caption corrected").then((ok) => { if (ok) setCaptionDrafts((current) => { const { [clip.id]: _removed, ...rest } = current; return rest; }); });
+  }
+
   function handleClipKeyDown(event: KeyboardEvent<HTMLButtonElement>, clip: TimelineClip) {
-    if (event.key === "ArrowLeft") { event.preventDefault(); setSelectedClipId(clip.id); nudgeSelectedClip(-500_000, clip.id); }
-    if (event.key === "ArrowRight") { event.preventDefault(); setSelectedClipId(clip.id); nudgeSelectedClip(500_000, clip.id); }
+    if (event.key === "ArrowLeft") { event.preventDefault(); setSelectedClipId(clip.id); nudgeSelectedClip(-1, clip.id); }
+    if (event.key === "ArrowRight") { event.preventDefault(); setSelectedClipId(clip.id); nudgeSelectedClip(1, clip.id); }
     if (event.key === "Delete" || event.key === "Backspace") { event.preventDefault(); setSelectedClipId(clip.id); removeSelectedClip(clip.id); }
+  }
+
+  async function transcribeAsset() {
+    if (!projectId || !assetId) { setStatus("Choose an uploaded video first"); return; }
+    setBusy(true);
+    setStatus("Transcribing… this can take a few minutes for long videos");
+    try {
+      const result = await request("/v1/projects/" + projectId + "/assets/" + assetId + "/transcript", { method: "POST" });
+      const words = result.segments.reduce((total: number, segment: { words: unknown[] }) => total + segment.words.length, 0);
+      setStatus("Transcribed " + result.segments.length + " segments (" + words + " timed words)");
+    } catch (error) { setStatus(errorMessage(error)); }
+    finally { setBusy(false); }
   }
 
   async function saveRevision() {
@@ -240,7 +328,7 @@ export function App() {
     try {
       const result = await request("/v1/projects/" + projectId + "/proposals", {
         method: "POST",
-        body: JSON.stringify({ revision, strategyId: "short-form-explainer", profile: { intent, audience, channel, constraints: [] } }),
+        body: JSON.stringify({ revision, strategyId: "highlight-reel", profile: { intent, audience, channel, targetDurationUs: Math.round(targetSeconds * 1_000_000), constraints: [] } }),
       });
       setProposal(result.proposal);
       setStatus("Proposal ready for review");
@@ -268,8 +356,8 @@ export function App() {
         method: "POST",
         body: JSON.stringify({
           revision,
-          idempotencyKey: projectId + ":" + revision + ":preview",
-          settings: { format: "mp4", videoCodec: "libx264", audioCodec: "aac", width: 1280, height: 720, frameRate: 30 },
+          idempotencyKey: projectId + ":" + revision + ":" + platform,
+          settings: { format: "mp4", videoCodec: "libx264", audioCodec: "aac", width: PLATFORMS[platform]!.width, height: PLATFORMS[platform]!.height, frameRate: 30, fit: PLATFORMS[platform]!.fit, captionStyle: PLATFORMS[platform]!.captionStyle },
         }),
       });
       setRenderJobId(result.job.id); setRenderUrl(""); setRenderJobStatus("queued 0%"); setStatus("Render queued: " + result.job.id); void pollRender(result.job.id);
@@ -298,7 +386,8 @@ export function App() {
           <label>Audience<input value={audience} onChange={(event) => setAudience(event.target.value)} /></label>
           <label>Channel<input value={channel} onChange={(event) => setChannel(event.target.value)} /></label>
           <button className="secondary" onClick={analyzeBrief} disabled={busy || !projectId}>Analyze brief</button>
-          <button className="secondary" onClick={previewProposal} disabled={busy || !revision}>Preview AI proposal</button>
+          <label>Target length (seconds)<input type="number" min={5} max={600} value={targetSeconds} onChange={(event) => setTargetSeconds(Math.max(5, Number(event.target.value) || 30))} /></label>
+          <button className="secondary" onClick={previewProposal} disabled={busy || !revision}>Find highlights</button>
         </section>
         <section className="panel">
           <h2>Asset reference</h2>
@@ -307,10 +396,11 @@ export function App() {
           <label>Project library<select value={assetId} onChange={(event) => setAssetId(event.target.value)}><option value="">Choose an asset</option>{assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.kind} · {String(asset.metadata.filename ?? asset.id.slice(0, 8))}</option>)}</select></label>
           <label>Registered asset ID<input value={assetId} onChange={(event) => setAssetId(event.target.value)} placeholder="asset ID" /></label>
           <button className="secondary" onClick={addClip} disabled={!assetId}>Add video clip</button>
+          <button className="secondary" onClick={transcribeAsset} disabled={busy || !projectId || !assetId}>Transcribe</button>
         </section>
       </aside>
       <section className="editor">
-        <div className="editor-toolbar"><div><span className="eyebrow">TIMELINE</span><h2>{projectId ? "Revision " + revision : "No project selected"}</h2></div><div className="toolbar-actions"><button className="secondary" onClick={saveRevision} disabled={busy || !projectId}>Save revision</button><button onClick={submitRender} disabled={busy || !revision}>Render preview</button></div></div>
+        <div className="editor-toolbar"><div><span className="eyebrow">TIMELINE</span><h2>{projectId ? "Revision " + revision : "No project selected"}</h2></div><div className="toolbar-actions"><button className="secondary" onClick={saveRevision} disabled={busy || !projectId}>Save revision</button><select aria-label="Platform" value={platform} onChange={(event) => setPlatform(event.target.value)}>{Object.entries(PLATFORMS).map(([key, preset]) => <option key={key} value={key}>{preset.label}</option>)}</select><button onClick={submitRender} disabled={busy || !revision}>Render preview</button></div></div>
         <div className="timeline-card">
           <div className="ruler"><span>00:00</span><span>00:10</span><span>00:20</span><span>00:30</span></div>
           <div className="track-list">
@@ -318,9 +408,31 @@ export function App() {
             {timeline.tracks.map((track) => <div className="track" key={track.id}><div className="track-label">{track.kind}</div><div className="track-lane">{track.clips.map((clip) => <button type="button" className={"clip" + (selectedClipId === clip.id ? " selected" : "")} key={clip.id} style={{ width: Math.max(16, ((clip.timelineEndUs - clip.timelineStartUs) / timeline.durationUs) * 100) + "%" }} aria-label={"Clip " + clip.assetId.slice(0, 12) + ", " + formatSeconds(clip.sourceEndUs - clip.sourceStartUs)} aria-pressed={selectedClipId === clip.id} onClick={() => setSelectedClipId(clip.id)} onKeyDown={(event) => handleClipKeyDown(event, clip)}><strong>{clip.assetId.slice(0, 12)}</strong><small>{formatSeconds(clip.sourceEndUs - clip.sourceStartUs)}</small></button>)}</div></div>)}
           </div>
         </div>
+        {selectedClip && <section className="panel clip-panel" aria-label="Selected clip">
+          <div className="panel-heading"><h2>Selected clip</h2><span className="badge">{formatSeconds(selectedClip.sourceStartUs)}–{formatSeconds(selectedClip.sourceEndUs)} of source</span></div>
+          {selectedClip.reason && <p>{selectedClip.reason}{typeof selectedClip.score === "number" && <> <span className="badge">score {Math.round(selectedClip.score * 100)}</span></>}</p>}
+          <div className="clip-actions">
+            <button className="secondary" onClick={() => nudgeSelectedClip(-1)} disabled={busy}>Move earlier</button>
+            <button className="secondary" onClick={() => nudgeSelectedClip(1)} disabled={busy}>Move later</button>
+            <button className="secondary" onClick={() => trimSelectedClip(500_000, 0)} disabled={busy || revision === 0}>Trim start +0.5s</button>
+            <button className="secondary" onClick={() => trimSelectedClip(-500_000, 0)} disabled={busy || revision === 0}>Start −0.5s</button>
+            <button className="secondary" onClick={() => trimSelectedClip(0, -500_000)} disabled={busy || revision === 0}>Trim end −0.5s</button>
+            <button className="secondary" onClick={() => trimSelectedClip(0, 500_000)} disabled={busy || revision === 0}>End +0.5s</button>
+            <button className="secondary" onClick={() => removeSelectedClip()} disabled={busy}>Remove</button>
+          </div>
+        </section>}
+        {revision > 0 && <section className="panel segment-panel" aria-label="Add segment">
+          <h2>Add a segment</h2>
+          <div className="segment-row"><label>Start (s)<input type="number" min={0} step={0.1} value={segmentStart} onChange={(event) => setSegmentStart(event.target.value)} /></label><label>End (s)<input type="number" min={0} step={0.1} value={segmentEnd} onChange={(event) => setSegmentEnd(event.target.value)} /></label><button className="secondary" onClick={addSegment} disabled={busy}>Add segment</button></div>
+        </section>}
+        {captionCues.length > 0 && <section className="panel captions-panel" aria-label="Captions">
+          <div className="panel-heading"><h2>Captions</h2><span className="badge">{captionCues.length} cues</span></div>
+          <p className="muted">Captions follow their clips when you cut or reorder. Correct wording here; timing is kept.</p>
+          <ul className="cue-list">{captionCues.map((cue) => { const original = String(cue.transform?.text ?? ""); const draft = captionDrafts[cue.id] ?? original; return <li key={cue.id}><span className="cue-time">{formatSeconds(cue.timelineStartUs)}</span><input aria-label={"Caption at " + formatSeconds(cue.timelineStartUs)} value={draft} onChange={(event) => setCaptionDrafts((current) => ({ ...current, [cue.id]: event.target.value }))} /><button className="secondary" onClick={() => saveCaption(cue)} disabled={busy || revision === 0 || draft.trim() === original}>Save</button></li>; })}</ul>
+        </section>}
         <div className="lower-grid">
           <section className="panel preview-panel"><div className="panel-heading"><h2>Preview</h2><span className="badge">Non-destructive</span></div><div className="preview-screen">{renderUrl ? <video controls src={renderUrl} /> : <span>{renderJobId ? "Render " + renderJobStatus : "Playback preview connects to the selected revision"}</span>}</div></section>
-          <section className="panel proposal-panel"><div className="panel-heading"><h2>AI proposal</h2>{proposal && <span className="badge">{Math.round(proposal.confidence * 100)}% confidence</span>}</div>{proposal ? <><p>{proposal.rationale}</p><div className="evidence">{proposal.evidence.map((item) => <div key={item.reference}><span>{item.source}</span><code>{item.reference}</code>{item.excerpt && <p>{item.excerpt}</p>}</div>)}</div>{proposal.status === "proposed" && <div className="decision-actions"><button className="secondary" onClick={() => decideProposal("rejected")} disabled={busy}>Reject</button><button onClick={() => decideProposal("accepted")} disabled={busy}>Accept as revision</button></div>}</> : <p className="muted">Save a revision to request an explainable tailoring proposal.</p>}</section>
+          <section className="panel proposal-panel"><div className="panel-heading"><h2>AI proposal</h2>{proposal && <span className="badge">{Math.round(proposal.confidence * 100)}% confidence</span>}</div>{proposal ? <><p>{proposal.rationale}</p>{proposal.operations.some((operation) => operation.type === "insert-clip") && <ol className="highlight-list">{proposal.operations.filter((operation) => operation.type === "insert-clip").map((operation, index) => <li key={index}><strong>{formatSeconds(operation.sourceStartUs ?? 0)}–{formatSeconds(operation.sourceEndUs ?? 0)}</strong>{typeof operation.score === "number" && <span className="badge">score {Math.round(operation.score * 100)}</span>}<p>{operation.reason}</p></li>)}</ol>}<div className="evidence">{proposal.evidence.map((item) => <div key={item.reference}><span>{item.source}</span><code>{item.reference}{typeof item.startUs === "number" && typeof item.endUs === "number" ? " · " + formatSeconds(item.startUs) + "–" + formatSeconds(item.endUs) : ""}</code>{item.excerpt && <p>{item.excerpt}</p>}</div>)}</div>{proposal.status === "proposed" && <div className="decision-actions"><button className="secondary" onClick={() => decideProposal("rejected")} disabled={busy}>Reject</button><button onClick={() => decideProposal("accepted")} disabled={busy}>Accept as revision</button></div>}</> : <p className="muted">Save a revision to request an explainable tailoring proposal.</p>}</section>
         </div>
       </section>
     </main>
