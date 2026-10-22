@@ -1,16 +1,20 @@
 import { createHash, randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
-import { promisify } from "node:util";
 import { jwtVerify, SignJWT } from "jose";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { Database } from "@videocraft/persistence";
 
-const scrypt = promisify(scryptCallback);
 const ACCESS_TTL_SECONDS = 15 * 60;
 const REFRESH_TTL_SECONDS = 30 * 24 * 60 * 60;
 const REFRESH_COOKIE = "videocraft_refresh";
 type AuthOptions = { database: Database; secret: string; issuer?: string; audience?: string };
 type UserRow = { id: string; email: string; password_hash: string; created_at: string };
 type RequestBody = { email?: unknown; password?: unknown };
+type ScryptOptions = { N: number; r: number; p: number };
+function deriveKey(password: string, salt: Buffer, keyLength: number, options: ScryptOptions): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    scryptCallback(password, salt, keyLength, options, (error, derived) => error ? reject(error) : resolve(derived as Buffer));
+  });
+}
 
 export function registerAuthRoutes(server: FastifyInstance, options: AuthOptions): void {
   server.post("/auth/register", async (request, reply) => {
@@ -96,7 +100,7 @@ function readCookie(header: string | undefined, name: string): string | undefine
 function digest(value: string): string { return createHash("sha256").update(value).digest("hex"); }
 async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(16);
-  const hash = await scrypt(password, salt, 64, { N: 16_384, r: 8, p: 1 }) as Buffer;
+  const hash = await deriveKey(password, salt, 64, { N: 16_384, r: 8, p: 1 }) as Buffer;
   return "scrypt$16384$8$1$" + salt.toString("base64url") + "$" + hash.toString("base64url");
 }
 async function verifyPassword(password: string, encoded: string): Promise<boolean> {
@@ -105,7 +109,7 @@ async function verifyPassword(password: string, encoded: string): Promise<boolea
   const [, n, r, p, saltEncoded, hashEncoded] = parts;
   try {
     const expected = Buffer.from(hashEncoded!, "base64url");
-    const actual = await scrypt(password, Buffer.from(saltEncoded!, "base64url"), expected.length, { N: Number(n), r: Number(r), p: Number(p) }) as Buffer;
+    const actual = await deriveKey(password, Buffer.from(saltEncoded!, "base64url"), expected.length, { N: Number(n), r: Number(r), p: Number(p) }) as Buffer;
     return expected.length === actual.length && timingSafeEqual(expected, actual);
   } catch { return false; }
 }
