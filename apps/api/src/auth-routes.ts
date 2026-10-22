@@ -3,25 +3,26 @@ import { jwtVerify, SignJWT } from "jose";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { Database } from "@videocraft/persistence";
 
+function scrypt(password: string, salt: Buffer, keylen: number, options: { N: number; r: number; p: number }): Promise<Buffer> {
+  return new Promise((resolve, reject) => scryptCallback(password, salt, keylen, options, (error, key) => error ? reject(error) : resolve(key)));
+}
 const ACCESS_TTL_SECONDS = 15 * 60;
 const REFRESH_TTL_SECONDS = 30 * 24 * 60 * 60;
 const REFRESH_COOKIE = "videocraft_refresh";
-type AuthOptions = { database: Database; secret: string; issuer?: string; audience?: string };
+type AuthOptions = { database: Database; secret: string; issuer?: string; audience?: string; allowedEmails?: string[] | "*"; rateLimitMax?: number };
 type UserRow = { id: string; email: string; password_hash: string; created_at: string };
 type RequestBody = { email?: unknown; password?: unknown };
-type ScryptOptions = { N: number; r: number; p: number };
-function deriveKey(password: string, salt: Buffer, keyLength: number, options: ScryptOptions): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    scryptCallback(password, salt, keyLength, options, (error, derived) => error ? reject(error) : resolve(derived as Buffer));
-  });
-}
 
 export function registerAuthRoutes(server: FastifyInstance, options: AuthOptions): void {
-  server.post("/auth/register", async (request, reply) => {
+  // Per-IP limit for credential endpoints, independent of any bearer header (requires @fastify/rate-limit to be registered first).
+  const limited = { config: { rateLimit: { max: options.rateLimitMax ?? 10, timeWindow: "1 minute", keyGenerator: (request: FastifyRequest) => "auth:" + request.ip } } } as any;
+  const allowed = options.allowedEmails ?? "*";
+  server.post("/auth/register", limited, async (request, reply) => {
     const body = request.body as RequestBody;
     const email = normalizeEmail(body?.email);
     const password = validPassword(body?.password);
     if (!email || !password || password.length > 128) return authError(reply, 400, "Use a valid email and a password of 10–128 characters");
+    if (allowed !== "*" && !allowed.includes(email)) return authError(reply, 403, "Registration is invite-only for this site");
     const userId = randomUUID();
     try {
       await options.database.query("INSERT INTO users (id, email, password_hash, created_at) VALUES ($1, $2, $3, NOW())", [userId, email, await hashPassword(password)]);
@@ -36,7 +37,7 @@ export function registerAuthRoutes(server: FastifyInstance, options: AuthOptions
     return reply.code(201).send({ user, accessToken });
   });
 
-  server.post("/auth/login", async (request, reply) => {
+  server.post("/auth/login", limited, async (request, reply) => {
     const body = request.body as RequestBody;
     const email = normalizeEmail(body?.email);
     const password = validPassword(body?.password);
@@ -49,7 +50,7 @@ export function registerAuthRoutes(server: FastifyInstance, options: AuthOptions
     return { user: { id: user.id, email: user.email }, accessToken };
   });
 
-  server.post("/auth/refresh", async (request, reply) => {
+  server.post("/auth/refresh", limited, async (request, reply) => {
     const presented = readCookie(request.headers.cookie, REFRESH_COOKIE);
     if (!presented) return authError(reply, 401, "Refresh session required");
     const result = await options.database.query<UserRow & { session_id: string }>(
@@ -100,7 +101,7 @@ function readCookie(header: string | undefined, name: string): string | undefine
 function digest(value: string): string { return createHash("sha256").update(value).digest("hex"); }
 async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(16);
-  const hash = await deriveKey(password, salt, 64, { N: 16_384, r: 8, p: 1 }) as Buffer;
+  const hash = await scrypt(password, salt, 64, { N: 16_384, r: 8, p: 1 });
   return "scrypt$16384$8$1$" + salt.toString("base64url") + "$" + hash.toString("base64url");
 }
 async function verifyPassword(password: string, encoded: string): Promise<boolean> {
@@ -109,11 +110,16 @@ async function verifyPassword(password: string, encoded: string): Promise<boolea
   const [, n, r, p, saltEncoded, hashEncoded] = parts;
   try {
     const expected = Buffer.from(hashEncoded!, "base64url");
-    const actual = await deriveKey(password, Buffer.from(saltEncoded!, "base64url"), expected.length, { N: Number(n), r: Number(r), p: Number(p) }) as Buffer;
+    const actual = await scrypt(password, Buffer.from(saltEncoded!, "base64url"), expected.length, { N: Number(n), r: Number(r), p: Number(p) });
     return expected.length === actual.length && timingSafeEqual(expected, actual);
   } catch { return false; }
 }
 function normalizeEmail(value: unknown): string | undefined { if (typeof value !== "string") return undefined; const email = value.trim().toLowerCase(); return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : undefined; }
 function validPassword(value: unknown): string | undefined { return typeof value === "string" && value.length >= 10 ? value : undefined; }
 function isUniqueViolation(error: unknown): error is { code: string } { return typeof error === "object" && error !== null && "code" in error && (error as { code?: string }).code === "23505"; }
-function authError(reply: FastifyReply, status: number, message: string) { return reply.code(status).send({ error: { code: status === 401 ? "unauthorized" : "auth_error", message } }); }
+function authError(reply: FastifyReply, status: number, message: string) { return reply.code(status).send({ error: { code: status === 401 ? "unauthorized" : status === 403 ? "registration_closed" : "auth_error", message } }); }
+export function parseAllowedEmails(value: string | undefined, production: boolean): string[] | "*" {
+  if (value === undefined || value.trim() === "") return production ? [] : "*";
+  if (value.trim() === "*") return "*";
+  return value.split(",").map((entry) => entry.trim().toLowerCase()).filter(Boolean);
+}
