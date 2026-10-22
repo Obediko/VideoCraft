@@ -93,6 +93,9 @@ services:
       CLAMAV_PORT: "3310"
       OTEL_SERVICE_NAME: videocraft-api
       INTENT_PROVIDER_MODE: rule-based
+      MEDIA_ROOT: /tmp/videocraft-media
+      WHISPER_WORKER_PATH: /app/workers/transcription/worker.py
+    tmpfs: ["/tmp:size=512m"]
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
