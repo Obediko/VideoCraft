@@ -32,9 +32,9 @@ H=(-H "$(cat "$TMP/auth")")
 c="$(code -X POST "${H[@]}" -H 'content-type: application/json' -d '{"name":"staging smoke test"}' "$API/v1/projects")"
 if [ "$c" = 201 ]; then PID="$(js 'd["project"]["id"]' < "$TMP/body")"; ok "project created $PID"; else bad "create project -> $c $(cat "$TMP/body")"; exit 1; fi
 
-docker exec videocraft-render-worker ffmpeg -loglevel error -y -f lavfi -i testsrc=duration=2:size=320x240:rate=25 \
-  -f lavfi -i sine=frequency=440:duration=2 -shortest -c:v libx264 -pix_fmt yuv420p -c:a aac /tmp/vc-smoke.mp4 \
-  && docker cp videocraft-render-worker:/tmp/vc-smoke.mp4 "$TMP/smoke.mp4" >/dev/null
+docker exec videocraft-render-worker ffmpeg -loglevel error -f lavfi -i testsrc=duration=2:size=320x240:rate=25 \
+  -f lavfi -i sine=frequency=440:duration=2 -shortest -c:v libx264 -pix_fmt yuv420p -c:a aac \
+  -movflags frag_keyframe+empty_moov -f mp4 pipe:1 > "$TMP/smoke.mp4"
 c="$(code -X POST "${H[@]}" -F "file=@$TMP/smoke.mp4;type=video/mp4" "$API/v1/projects/$PID/assets/upload?kind=video")"
 if [ "$c" = 201 ] || [ "$c" = 200 ]; then AID="$(js 'd["asset"]["id"]' < "$TMP/body")"; ok "asset uploaded $AID (ClamAV scanned, stored in R2)"; else bad "upload -> $c $(cat "$TMP/body")"; exit 1; fi
 
