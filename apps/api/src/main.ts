@@ -105,9 +105,11 @@ const authorizer = new PostgresProjectAuthorizer(projects, db);
 const revisions = new PostgresRevisionRepository(db);
 const renderJobs = new PostgresRenderJobRepository(db);
 const queueProvider = secretEnvironment.JOB_QUEUE_PROVIDER ?? "bullmq";
-const renderQueue = queueProvider === "cloudflare"
+const cloudflareQueue = queueProvider === "cloudflare"
   ? new CloudflareQueueRenderQueue({ accountId: required("CF_ACCOUNT_ID"), queueId: required("CF_QUEUE_ID"), apiToken: requiredSecret("CF_QUEUES_API_TOKEN") }, assets, renderJobs)
-  : new Queue("videocraft-render", { connection: redisOptions });
+  : undefined;
+const bullmqQueue = queueProvider === "bullmq" ? new Queue("videocraft-render", { connection: redisOptions }) : undefined;
+const renderQueue = cloudflareQueue ?? bullmqQueue!;
 const timelineService = new ProjectService(projects, assets, revisions, { next: () => randomUUID() }, { now: () => new Date().toISOString() });
 const transcripts = new PostgresTranscriptStore(db);
 const feedback = new PostgresFeedbackRepository(db);
@@ -124,9 +126,7 @@ const server = buildServer({
   proposals: new PostgresProposalStore(db),
   strategies: new StaticStrategyRegistry(),
   transcriber,
-  renderer: queueProvider === "cloudflare"
-    ? new CloudflareQueueRenderQueue({ accountId: required("CF_ACCOUNT_ID"), queueId: required("CF_QUEUE_ID"), apiToken: requiredSecret("CF_QUEUES_API_TOKEN") }, assets, renderJobs)
-    : new BullMqRenderQueue(renderQueue, assets, renderJobs),
+  renderer: cloudflareQueue ?? new BullMqRenderQueue(bullmqQueue!, assets, renderJobs),
   authenticate: authenticator,
   authorize: authorizer,
   audit,
