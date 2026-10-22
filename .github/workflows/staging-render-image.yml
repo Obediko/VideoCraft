@@ -1,9 +1,11 @@
-name: Staging render worker image
+name: Staging container images
 
 on:
   push:
     branches: ["main"]
     paths:
+      - "apps/api/**"
+      - "apps/web/**"
       - "workers/render/**"
       - "packages/**"
       - "package.json"
@@ -16,7 +18,7 @@ permissions:
   packages: write
 
 concurrency:
-  group: videocraft-render-image-${{ github.ref }}
+  group: videocraft-container-images-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -32,7 +34,31 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
+
+      - name: Publish API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/videocraft-api:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/videocraft-api:staging
+
+      - name: Publish web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/videocraft-web:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/videocraft-web:staging
+
+      - name: Publish render worker image
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: workers/render/Dockerfile
