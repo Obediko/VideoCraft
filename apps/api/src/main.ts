@@ -83,10 +83,6 @@ const malwareScanner = createMalwareScanner();
 const sceneDetector = secretEnvironment.SCENE_WORKER_PATH ? new PySceneDetectWorker({ workerPath: secretEnvironment.SCENE_WORKER_PATH, storage, ...(secretEnvironment.SCENE_PYTHON ? { pythonCommand: secretEnvironment.SCENE_PYTHON } : {}) }) : undefined;
 const metrics = new MetricsRegistry();
 const redisOptions = redisConnection(required("REDIS_URL"));
-const queueProvider = secretEnvironment.JOB_QUEUE_PROVIDER ?? "bullmq";
-const renderQueue = queueProvider === "cloudflare"
-  ? new CloudflareQueueRenderQueue({ accountId: required("CF_ACCOUNT_ID"), queueId: required("CF_QUEUE_ID"), apiToken: requiredSecret("CF_QUEUES_API_TOKEN") }, assets, renderJobs)
-  : new Queue("videocraft-render", { connection: redisOptions });
 const rateLimitRedis = new Redis(redisOptions);
 const providerQuota = new RedisProviderQuota(rateLimitRedis);
 const transcriber = new FasterWhisperWorker({
@@ -108,6 +104,10 @@ const authenticator = new JwtAuthenticator(jwtSecrets, {
 const authorizer = new PostgresProjectAuthorizer(projects, db);
 const revisions = new PostgresRevisionRepository(db);
 const renderJobs = new PostgresRenderJobRepository(db);
+const queueProvider = secretEnvironment.JOB_QUEUE_PROVIDER ?? "bullmq";
+const renderQueue = queueProvider === "cloudflare"
+  ? new CloudflareQueueRenderQueue({ accountId: required("CF_ACCOUNT_ID"), queueId: required("CF_QUEUE_ID"), apiToken: requiredSecret("CF_QUEUES_API_TOKEN") }, assets, renderJobs)
+  : new Queue("videocraft-render", { connection: redisOptions });
 const timelineService = new ProjectService(projects, assets, revisions, { next: () => randomUUID() }, { now: () => new Date().toISOString() });
 const transcripts = new PostgresTranscriptStore(db);
 const feedback = new PostgresFeedbackRepository(db);
