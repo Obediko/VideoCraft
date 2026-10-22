@@ -5,7 +5,7 @@ ENV PORT=8080
 
 WORKDIR /app
 COPY . .
-RUN npm install --ignore-scripts && npm run build
+RUN npm install --include=dev --ignore-scripts && npm run build
 
 USER node
 EXPOSE 8080
