@@ -16,12 +16,16 @@ docker compose version >/dev/null || die "docker compose plugin missing"
 echo "arch: $(uname -m)"
 mkdir -p "$APP_DIR"
 docker ps --format '{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}' | tee "$APP_DIR/preflight-containers.txt"
+avail_mb=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
+echo "memory available: ${avail_mb} MB"
+[ "$avail_mb" -ge 2300 ] || [ "${FORCE_LOW_MEMORY:-0}" = 1 ] || die "only ${avail_mb} MB available; VideoCraft needs ~2.3 GB (ClamAV ~1.5 GB). Set FORCE_LOW_MEMORY=1 to override."
 for p in 18080 18081; do
   if ss -ltn "( sport = :$p )" | grep -q ":$p" && ! docker ps --format '{{.Names}}' | grep -q '^videocraft-'; then die "port $p already in use"; fi
 done
 
 log "Detecting reverse proxy"
-CADDY_CONTAINER="$(docker ps --format '{{.Names}} {{.Image}}' | awk 'tolower($2) ~ /caddy/ {print $1; exit}')"
+# Pick the Caddy container that actually publishes :443 (other Caddy containers may exist, e.g. internal portals).
+CADDY_CONTAINER="${CADDY_CONTAINER:-$(docker ps --format '{{.Names}}\t{{.Image}}\t{{.Ports}}' | awk -F'\t' 'tolower($2) ~ /caddy/ && $3 ~ /:443->443/ {print $1; exit}')}"
 if [ -n "$CADDY_CONTAINER" ]; then
   PROXY_MODE=docker
   CADDYFILE="$(docker inspect "$CADDY_CONTAINER" --format '{{range .Mounts}}{{if eq .Destination "/etc/caddy/Caddyfile"}}{{.Source}}{{end}}{{end}}')"
