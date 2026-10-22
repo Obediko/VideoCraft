@@ -10,6 +10,7 @@ import { FasterWhisperWorker } from "@videocraft/transcription";
 import { LocalObjectStorage, S3ObjectStorage, type ObjectStorage } from "@videocraft/storage";
 import { StaticStrategyRegistry } from "@videocraft/strategies";
 import { PySceneDetectWorker } from "@videocraft/scene-detection";
+import { FfprobeMediaAnalyzer } from "@videocraft/media-analysis";
 import { OpenAiCompatibleIntentAnalyzer, RuleBasedIntentAnalyzer } from "@videocraft/intent-analysis";
 import { ClamAvScanner, EnvironmentSecretProvider, loadSecretEnvironment, RedisProviderQuota, requireSecret, type MalwareScanner } from "@videocraft/security";
 import { configureTracing, MetricsRegistry } from "@videocraft/observability";
@@ -82,6 +83,11 @@ const mediaRoot = required("MEDIA_ROOT");
 const storage = createStorage();
 const malwareScanner = createMalwareScanner();
 const sceneDetector = secretEnvironment.SCENE_WORKER_PATH ? new PySceneDetectWorker({ workerPath: secretEnvironment.SCENE_WORKER_PATH, storage, ...(secretEnvironment.SCENE_PYTHON ? { pythonCommand: secretEnvironment.SCENE_PYTHON } : {}) }) : undefined;
+const mediaAnalyzer = new FfprobeMediaAnalyzer({
+  ...(secretEnvironment.FFPROBE_BIN ? { ffprobeCommand: secretEnvironment.FFPROBE_BIN } : {}),
+  ...(secretEnvironment.FFMPEG_BIN ? { ffmpegCommand: secretEnvironment.FFMPEG_BIN } : {}),
+  ...(secretEnvironment.MEDIA_ANALYSIS_TIMEOUT_MS ? { timeoutMs: Number(secretEnvironment.MEDIA_ANALYSIS_TIMEOUT_MS) } : {}),
+});
 const metrics = new MetricsRegistry();
 const redisOptions = redisConnection(required("REDIS_URL"));
 const rateLimitRedis = new Redis(redisOptions);
@@ -150,7 +156,7 @@ registerFeedbackRoutes(server, { feedback, revisions, proposals: new PostgresPro
 registerIntentRoutes(server, { analyzer: intentAnalyzer, assets, transcripts, quota: providerQuota, providerRateLimitMax: boundedInteger("INTENT_PROVIDER_MAX_PER_MINUTE", 20, 1, 1_000), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
 registerRenderRoutes(server, { jobs: renderJobs, storage, signingSecret: requiredSecret("DOWNLOAD_SIGNING_SECRET"), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
 registerUploadRoutes(server, {
-  assets, storage, authorize: authorizer, authenticate: (request) => authenticator.authenticate(request),
+  assets, storage, mediaAnalyzer, authorize: authorizer, authenticate: (request) => authenticator.authenticate(request),
   clock: () => new Date().toISOString(), ...(malwareScanner ? { scanner: malwareScanner } : {}),
 });
 
