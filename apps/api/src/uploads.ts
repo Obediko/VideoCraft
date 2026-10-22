@@ -10,11 +10,13 @@ import type { Asset, UUID } from "@videocraft/domain";
 import type { AssetRepository } from "@videocraft/application";
 import type { ObjectStorage } from "@videocraft/storage";
 import type { MalwareScanner } from "@videocraft/security";
+import type { MediaAnalyzer } from "@videocraft/media-analysis";
 
 export interface UploadDependencies {
   assets: AssetRepository;
   storage: ObjectStorage;
   scanner?: MalwareScanner;
+  mediaAnalyzer?: MediaAnalyzer;
   authorize: { canAccess(principal: { userId: UUID }, projectId: UUID, minimumRole: "viewer" | "editor"): Promise<boolean> };
   authenticate(request: FastifyRequest): Promise<{ userId: UUID } | null>;
   clock(): string;
@@ -47,10 +49,12 @@ export function registerUploadRoutes(server: FastifyInstance, dependencies: Uplo
         catch (caught) { return error(reply, 503, "malware_scanner_unavailable", caught instanceof Error ? caught.message : "Malware scanner unavailable"); }
         if (!scan.clean) return error(reply, 422, "malware_detected", "The uploaded file was rejected by malware scanning");
       }
+      const analysis = dependencies.mediaAnalyzer ? await dependencies.mediaAnalyzer.analyze(temporaryPath) : undefined;
       const stored = await dependencies.storage.putFile(temporaryPath, storageKey);
       const asset: Asset = {
         id: assetId, projectId, kind, storageKey: stored.key, checksumSha256: stored.checksumSha256,
-        metadata: { filename: part.filename.slice(0, 255), mimeType: part.mimetype },
+        ...(analysis ? { durationUs: analysis.durationUs } : {}),
+        metadata: { filename: part.filename.slice(0, 255), mimeType: part.mimetype, ...(analysis?.metadata ?? {}) },
         createdAt: dependencies.clock(),
       };
       try {
