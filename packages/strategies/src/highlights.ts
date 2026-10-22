@@ -248,7 +248,9 @@ export class HighlightReelStrategy implements EditingStrategy {
       const cuts = tightCuts(candidate, { prevEndUs: earlier, nextStartUs: later }, { pauseCutUs: policy.pauseCutUs, leadUs: 150_000, tailUs: 220_000 });
       const removedUs = (candidate.endUs - candidate.startUs) - cuts.reduce((sum, cut) => sum + (cut.endUs - cut.startUs), 0);
       const reason = describe(candidate, index + 1, selected.length, cuts.length > 1 ? removedUs : 0);
-      cuts.forEach((cut) => {
+      const shotCuts = (signals?.scenes ?? []).map((scene) => scene.startUs).filter((at) => at > 0);
+      cuts.forEach((rawCut) => {
+        const cut = snapToShotCuts(rawCut, shotCuts, allWords);
         const clampedStart = Math.max(sourceRange.startUs, cut.startUs);
         const clampedEnd = Math.min(sourceRange.endUs, cut.endUs);
         if (clampedEnd <= clampedStart) return;
@@ -272,6 +274,23 @@ export class HighlightReelStrategy implements EditingStrategy {
       status: "proposed",
     };
   }
+}
+
+/**
+ * Moves a clip edge onto a nearby shot change so a clip does not open or close on a stray frame of the
+ * neighbouring shot. An edge only moves when no spoken word would be clipped or exposed by the move.
+ */
+export function snapToShotCuts(cut: { startUs: number; endUs: number }, shotCutsUs: number[], words: Array<{ startUs: number; endUs: number }>, maxMoveUs = 350_000): { startUs: number; endUs: number } {
+  if (shotCutsUs.length === 0) return cut;
+  const nearest = (edge: number) => shotCutsUs.filter((at) => Math.abs(at - edge) <= maxMoveUs).sort((a, b) => Math.abs(a - edge) - Math.abs(b - edge))[0];
+  const startsWordIn = (from: number, to: number) => words.some((word) => word.endUs > from && word.startUs < to);
+  let { startUs, endUs } = cut;
+  const startCut = nearest(startUs);
+  // Moving the start between the old and new position must not drop or add any speech.
+  if (startCut !== undefined && startCut !== startUs && !startsWordIn(Math.min(startCut, startUs), Math.max(startCut, startUs))) startUs = startCut;
+  const endCut = nearest(endUs);
+  if (endCut !== undefined && endCut !== endUs && !startsWordIn(Math.min(endCut, endUs), Math.max(endCut, endUs))) endUs = endCut;
+  return endUs - startUs >= 300_000 ? { startUs, endUs } : cut;
 }
 
 function wholeSource(transcript: TranscriptSegment[], range: { startUs: number; endUs: number }, candidates: HighlightCandidate[]): HighlightCandidate {

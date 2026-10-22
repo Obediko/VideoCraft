@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 type TimelineClip = {
   id: string;
@@ -55,17 +55,60 @@ export function App() {
   const [captionDrafts, setCaptionDrafts] = useState<Record<string, string>>({});
   const [segmentStart, setSegmentStart] = useState("0");
   const [segmentEnd, setSegmentEnd] = useState("10");
+  const [previewMode, setPreviewMode] = useState<"source" | "render">("source");
+  const [sourceUrls, setSourceUrls] = useState<Record<string, string>>({});
+  const playerRef = useRef<HTMLVideoElement | null>(null);
 
   const videoTrack = useMemo(() => timeline.tracks.find((track) => track.kind === "video"), [timeline]);
   const videoClips = useMemo(() => [...(videoTrack?.clips ?? [])].sort((a, b) => a.timelineStartUs - b.timelineStartUs), [videoTrack]);
   const captionCues = useMemo(() => timeline.tracks.filter((track) => track.kind === "caption").flatMap((track) => track.clips).sort((a, b) => a.timelineStartUs - b.timelineStartUs), [timeline]);
   const selectedClip = videoClips.find((clip) => clip.id === selectedClipId);
+  const sourceAssetId = selectedClip?.assetId ?? videoClips[0]?.assetId ?? "";
+  const sourceUrl = sourceUrls[sourceAssetId] ?? "";
+
+  // Signed playback URLs for the original upload; fetched once per asset (they last an hour).
+  useEffect(() => {
+    if (!token || !projectId || !sourceAssetId || sourceUrls[sourceAssetId]) return;
+    let cancelled = false;
+    request("/v1/projects/" + projectId + "/assets/" + sourceAssetId + "/playback-url")
+      .then((result) => { if (!cancelled) setSourceUrls((current) => ({ ...current, [sourceAssetId]: /^https?:\/\//.test(result.url) ? result.url : API + result.url })); })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [token, projectId, sourceAssetId, sourceUrls]);
+
+  // Selecting a clip cues the player to the start of that clip's source range.
+  useEffect(() => {
+    const player = playerRef.current;
+    if (player && selectedClip && sourceUrl && previewMode === "source") player.currentTime = selectedClip.sourceStartUs / 1_000_000;
+  }, [selectedClipId, sourceUrl, previewMode]);
+
+  function playSelectedClip() {
+    const player = playerRef.current;
+    if (!player || !selectedClip) { setStatus("Select a clip to play it"); return; }
+    player.currentTime = selectedClip.sourceStartUs / 1_000_000;
+    void player.play().catch(() => undefined);
+  }
+  function stopAtClipEnd() {
+    const player = playerRef.current;
+    if (player && selectedClip && !player.paused && player.currentTime * 1_000_000 >= selectedClip.sourceEndUs) player.pause();
+  }
+  function trimToPlayhead(edge: "start" | "end") {
+    const player = playerRef.current;
+    if (!player || !selectedClip) { setStatus("Select a clip first"); return; }
+    const at = Math.round(player.currentTime * 1_000_000);
+    if (edge === "start") trimSelectedClip(at - selectedClip.sourceStartUs, 0); else trimSelectedClip(0, at - selectedClip.sourceEndUs);
+  }
+  function markSegmentFromPlayhead(edge: "start" | "end") {
+    const player = playerRef.current;
+    if (!player) return;
+    (edge === "start" ? setSegmentStart : setSegmentEnd)(player.currentTime.toFixed(2));
+  }
 
   async function request(path: string, init: RequestInit = {}, accessToken = token, retried = false): Promise<any> {
     const response = await fetch(API + path, {
       ...init,
       credentials: "include",
-      headers: { "content-type": "application/json", ...(accessToken ? { authorization: "Bearer " + accessToken } : {}), ...init.headers },
+      headers: { ...(init.body ? { "content-type": "application/json" } : {}), ...(accessToken ? { authorization: "Bearer " + accessToken } : {}), ...init.headers },
     });
     if (response.status === 401 && accessToken && !retried && !path.startsWith("/auth/")) {
       // The 15-minute access token expired: rotate the refresh session once and retry.
@@ -156,7 +199,8 @@ export function App() {
   }
 
   async function uploadAsset(event: { currentTarget: HTMLInputElement }) {
-    const file = event.currentTarget.files?.[0];
+    const input = event.currentTarget; // React clears currentTarget once the handler yields
+    const file = input.files?.[0];
     if (!file || !projectId) { setStatus(projectId ? "Choose a media file first" : "Create a project first"); return; }
     setBusy(true);
     try {
@@ -167,19 +211,22 @@ export function App() {
       setAssets((current) => [...current.filter((asset) => asset.id !== body.asset.id), body.asset]);
       setAssetId(body.asset.id); setStatus("Uploaded asset " + body.asset.id.slice(0, 8));
     } catch (error) { setStatus(errorMessage(error)); }
-    finally { setBusy(false); event.currentTarget.value = ""; }
+    finally { setBusy(false); input.value = ""; }
   }
 
   async function pollRender(id: string) {
-    for (let attempt = 0; attempt < 60; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+    // Renders of long videos take minutes: poll for up to 20 minutes, easing off after the first minute.
+    const started = Date.now();
+    while (Date.now() - started < 20 * 60_000) {
+      await new Promise((resolve) => setTimeout(resolve, Date.now() - started < 60_000 ? 2000 : 5000));
       try {
         const result = await request("/v1/projects/" + projectId + "/renders/" + id);
         setRenderJobStatus(result.job.status + " " + result.job.progress + "%");
-        if (result.job.status === "succeeded") { const download = await request("/v1/projects/" + projectId + "/renders/" + id + "/download-url"); setRenderUrl(/^https?:\/\//.test(download.url) ? download.url : API + download.url); setStatus("Render succeeded"); return; }
-        if (["failed", "cancelled"].includes(result.job.status)) { setStatus("Render " + result.job.status); return; }
+        if (result.job.status === "succeeded") { const download = await request("/v1/projects/" + projectId + "/renders/" + id + "/download-url"); setRenderUrl(/^https?:\/\//.test(download.url) ? download.url : API + download.url); setStatus("Render succeeded"); setPreviewMode("render"); return; }
+        if (["failed", "cancelled"].includes(result.job.status)) { setStatus("Render " + result.job.status + (result.job.errorMessage ? ": " + String(result.job.errorMessage).slice(0, 200) : "")); return; }
       } catch (error) { setStatus(errorMessage(error)); return; }
     }
+    setStatus("Render is still running; check back in a moment");
   }
 
   function addClip() {
@@ -431,7 +478,7 @@ export function App() {
           <ul className="cue-list">{captionCues.map((cue) => { const original = String(cue.transform?.text ?? ""); const draft = captionDrafts[cue.id] ?? original; return <li key={cue.id}><span className="cue-time">{formatSeconds(cue.timelineStartUs)}</span><input aria-label={"Caption at " + formatSeconds(cue.timelineStartUs)} value={draft} onChange={(event) => setCaptionDrafts((current) => ({ ...current, [cue.id]: event.target.value }))} /><button className="secondary" onClick={() => saveCaption(cue)} disabled={busy || revision === 0 || draft.trim() === original}>Save</button></li>; })}</ul>
         </section>}
         <div className="lower-grid">
-          <section className="panel preview-panel"><div className="panel-heading"><h2>Preview</h2><span className="badge">Non-destructive</span></div><div className="preview-screen">{renderUrl ? <video controls src={renderUrl} /> : <span>{renderJobId ? "Render " + renderJobStatus : "Playback preview connects to the selected revision"}</span>}</div></section>
+          <section className="panel preview-panel"><div className="panel-heading"><h2>Preview</h2><span className="badge">Non-destructive</span></div><div className="preview-tabs" role="tablist"><button role="tab" aria-selected={previewMode === "source"} className={previewMode === "source" ? "" : "secondary"} onClick={() => setPreviewMode("source")}>Source</button><button role="tab" aria-selected={previewMode === "render"} className={previewMode === "render" ? "" : "secondary"} onClick={() => setPreviewMode("render")}>Rendered export</button></div><div className="preview-screen">{previewMode === "render" ? (renderUrl ? <video controls src={renderUrl} /> : <span>{renderJobId ? "Render " + renderJobStatus : "Render a platform export to preview it here"}</span>) : (sourceUrl ? <video ref={playerRef} controls src={sourceUrl} onTimeUpdate={stopAtClipEnd} /> : <span>Sign in and add a video to scrub the source here</span>)}</div>{previewMode === "source" && sourceUrl && <div className="player-actions"><button className="secondary" onClick={playSelectedClip} disabled={!selectedClip}>Play selected clip</button><button className="secondary" onClick={() => trimToPlayhead("start")} disabled={busy || !selectedClip || revision === 0}>Trim start to playhead</button><button className="secondary" onClick={() => trimToPlayhead("end")} disabled={busy || !selectedClip || revision === 0}>Trim end to playhead</button><button className="secondary" onClick={() => markSegmentFromPlayhead("start")}>Segment start = playhead</button><button className="secondary" onClick={() => markSegmentFromPlayhead("end")}>Segment end = playhead</button></div>}</section>
           <section className="panel proposal-panel"><div className="panel-heading"><h2>AI proposal</h2>{proposal && <span className="badge">{Math.round(proposal.confidence * 100)}% confidence</span>}</div>{proposal ? <><p>{proposal.rationale}</p>{proposal.operations.some((operation) => operation.type === "insert-clip") && <ol className="highlight-list">{proposal.operations.filter((operation) => operation.type === "insert-clip").map((operation, index) => <li key={index}><strong>{formatSeconds(operation.sourceStartUs ?? 0)}–{formatSeconds(operation.sourceEndUs ?? 0)}</strong>{typeof operation.score === "number" && <span className="badge">score {Math.round(operation.score * 100)}</span>}<p>{operation.reason}</p></li>)}</ol>}<div className="evidence">{proposal.evidence.map((item) => <div key={item.reference}><span>{item.source}</span><code>{item.reference}{typeof item.startUs === "number" && typeof item.endUs === "number" ? " · " + formatSeconds(item.startUs) + "–" + formatSeconds(item.endUs) : ""}</code>{item.excerpt && <p>{item.excerpt}</p>}</div>)}</div>{proposal.status === "proposed" && <div className="decision-actions"><button className="secondary" onClick={() => decideProposal("rejected")} disabled={busy}>Reject</button><button onClick={() => decideProposal("accepted")} disabled={busy}>Accept as revision</button></div>}</> : <p className="muted">Save a revision to request an explainable tailoring proposal.</p>}</section>
         </div>
       </section>

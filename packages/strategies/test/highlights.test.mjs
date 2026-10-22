@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { applyTimelineOperations } from "@videocraft/domain";
-import { HighlightReelStrategy, stem, findCandidates, selectHighlights, goalTerms, tightCuts, scoreWindow, policyFor } from "../dist/index.js";
+import { snapToShotCuts, HighlightReelStrategy, stem, findCandidates, selectHighlights, goalTerms, tightCuts, scoreWindow, policyFor } from "../dist/index.js";
 
 // Builds a transcript from [text, pauseBeforeSeconds] sentences at ~2.6 words/second.
 function transcript(sentences, assetId = "asset") {
@@ -101,4 +101,15 @@ test("goal terms still match compounds that a recognizer split into two words", 
   const unrelated = scoreWindow("why do people abandon gym memberships quickly", [], 10_000_000, 0, true, false, goal, policyFor(profile));
   assert.ok(split.matchedTerms.includes(stem("onboarding")));
   assert.ok(split.features.relevance > unrelated.features.relevance);
+});
+
+test("clip edges snap to a nearby shot change only when no speech is clipped", () => {
+  const words = [{ startUs: 1_000_000, endUs: 1_300_000 }, { startUs: 5_000_000, endUs: 5_400_000 }];
+  // Edge 0.2s after the cut with silence in between: snapped onto the cut.
+  assert.deepEqual(snapToShotCuts({ startUs: 4_800_000, endUs: 9_000_000 }, [4_700_000], words), { startUs: 4_700_000, endUs: 9_000_000 });
+  // A word sits between the edge and the cut: left alone.
+  assert.deepEqual(snapToShotCuts({ startUs: 5_100_000, endUs: 9_000_000 }, [4_900_000], words), { startUs: 5_100_000, endUs: 9_000_000 });
+  // Cuts farther than the tolerance are ignored; end edges snap too.
+  assert.deepEqual(snapToShotCuts({ startUs: 2_000_000, endUs: 3_000_000 }, [3_200_000, 8_000_000], words), { startUs: 2_000_000, endUs: 3_200_000 });
+  assert.deepEqual(snapToShotCuts({ startUs: 2_000_000, endUs: 3_000_000 }, [], words), { startUs: 2_000_000, endUs: 3_000_000 });
 });

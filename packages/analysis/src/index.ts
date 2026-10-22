@@ -169,3 +169,40 @@ export function mergeSpans<T extends { startUs: number; endUs: number }>(spans: 
   }
   return out;
 }
+
+export interface SubjectFocus { x: number; y: number; confidence: number; }
+export interface FocusOptions extends ToolOptions { script: string; }
+
+/** Finds the main subject (largest face) in a clip range via the OpenCV focus worker. Null when none is found. */
+export async function detectFocus(path: string, startUs: Microseconds, endUs: Microseconds, options: FocusOptions): Promise<SubjectFocus | null> {
+  const { stdout } = await run(options.executable ?? "python3", [options.script, path, (startUs / 1e6).toFixed(3), (endUs / 1e6).toFixed(3)], { ...options, timeoutMs: options.timeoutMs ?? 60_000 });
+  return parseFocus(stdout);
+}
+
+export function parseFocus(output: string): SubjectFocus | null {
+  const value = JSON.parse(output) as { x: number | null; y: number | null; confidence: number };
+  if (value.x === null || value.y === null || typeof value.x !== "number" || typeof value.y !== "number") return null;
+  const clamp = (n: number) => Math.min(1, Math.max(0, n));
+  return { x: clamp(value.x), y: clamp(value.y), confidence: clamp(Number(value.confidence) || 0) };
+}
+
+export interface SceneOptions extends ToolOptions { threshold?: number; }
+
+/** Visual cut points (shot changes) via FFmpeg's scene score. Dependency-free alternative to PySceneDetect. */
+export async function detectSceneCuts(path: string, options: SceneOptions = {}): Promise<Microseconds[]> {
+  const threshold = options.threshold ?? 0.35;
+  const { stderr } = await run(options.executable ?? "ffmpeg", ["-hide_banner", "-nostats", "-i", path, "-an", "-vf", "select='gt(scene," + threshold + ")',showinfo", "-f", "null", "-"], options);
+  return parseSceneCuts(stderr);
+}
+
+export function parseSceneCuts(output: string): Microseconds[] {
+  const cuts: Microseconds[] = [];
+  for (const match of output.matchAll(/pts_time:([0-9.]+)/g)) cuts.push(Math.round(Number(match[1]) * 1_000_000));
+  return [...new Set(cuts)].sort((a, b) => a - b);
+}
+
+/** Turns cut points into contiguous scene spans covering [0, durationUs]. */
+export function scenesFromCuts(cuts: Microseconds[], durationUs: Microseconds): Array<{ startUs: Microseconds; endUs: Microseconds }> {
+  const bounds = [0, ...cuts.filter((cut) => cut > 0 && cut < durationUs), durationUs];
+  return bounds.slice(0, -1).map((startUs, index) => ({ startUs, endUs: bounds[index + 1] as number }));
+}
