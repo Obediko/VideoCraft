@@ -27,7 +27,7 @@ const k = new TextEncoder().encode(process.env.AUTH_JWT_SECRET);
 const t = await new SignJWT({}).setProtectedHeader({ alg: "HS256" }).setSubject("staging-smoke-test")
   .setIssuer(process.env.AUTH_ISSUER).setAudience(process.env.AUTH_AUDIENCE).setIssuedAt().setExpirationTime("15m").sign(k);
 process.stdout.write("Authorization: Bearer " + t);' > "$TMP/auth"
-H=(-H @"$TMP/auth")
+H=(-H "$(cat "$TMP/auth")")
 
 c="$(code -X POST "${H[@]}" -H 'content-type: application/json' -d '{"name":"staging smoke test"}' "$API/v1/projects")"
 if [ "$c" = 201 ]; then PID="$(js 'd["project"]["id"]' < "$TMP/body")"; ok "project created $PID"; else bad "create project -> $c $(cat "$TMP/body")"; exit 1; fi
