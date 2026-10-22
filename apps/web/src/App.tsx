@@ -16,7 +16,7 @@ type Asset = { id: string; kind: string; storageKey: string; metadata: Record<st
 const API = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
 
 export function App() {
-  const [token, setToken] = useState(() => localStorage.getItem("videocraft_access_token") ?? "");
+  const [token, setToken] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
@@ -52,11 +52,6 @@ export function App() {
     if (!response.ok) throw new Error(body.error?.message ?? "Request failed");
     return body;
   }
-
-  useEffect(() => {
-    if (token) localStorage.setItem("videocraft_access_token", token);
-    else localStorage.removeItem("videocraft_access_token");
-  }, [token]);
 
   async function authenticate() {
     setBusy(true);
