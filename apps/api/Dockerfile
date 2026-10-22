@@ -5,7 +5,7 @@ ENV PORT=8080
 
 WORKDIR /app
 COPY . .
-RUN npm install --include=dev --ignore-scripts && npm run build
+RUN npm install --include=dev --ignore-scripts   && npm run build --workspace=@videocraft/domain   && npm run build --workspace=@videocraft/storage   && npm run build --workspace=@videocraft/application   && npm run build --workspace=@videocraft/security   && npm run build --workspace=@videocraft/observability   && npm run build --workspace=@videocraft/strategies   && npm run build --workspace=@videocraft/transcription   && npm run build --workspace=@videocraft/intent-analysis   && npm run build --workspace=@videocraft/timeline-interchange   && npm run build --workspace=@videocraft/scene-detection   && npm run build --workspace=@videocraft/jobs   && npm run build --workspace=@videocraft/persistence   && npm run build --workspace=@videocraft/api
 
 USER node
 EXPOSE 8080
