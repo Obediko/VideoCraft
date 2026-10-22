@@ -49,7 +49,9 @@ export function registerUploadRoutes(server: FastifyInstance, dependencies: Uplo
         catch (caught) { return error(reply, 503, "malware_scanner_unavailable", caught instanceof Error ? caught.message : "Malware scanner unavailable"); }
         if (!scan.clean) return error(reply, 422, "malware_detected", "The uploaded file was rejected by malware scanning");
       }
-      const analysis = dependencies.mediaAnalyzer ? await dependencies.mediaAnalyzer.analyze(temporaryPath) : undefined;
+      const analysis = dependencies.mediaAnalyzer && (kind === "video" || kind === "audio")
+        ? await dependencies.mediaAnalyzer.analyze(temporaryPath)
+        : undefined;
       const stored = await dependencies.storage.putFile(temporaryPath, storageKey);
       const asset: Asset = {
         id: assetId, projectId, kind, storageKey: stored.key, checksumSha256: stored.checksumSha256,
