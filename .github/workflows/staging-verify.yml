@@ -1,0 +1,35 @@
+name: Staging verify
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: ${{ vars.S3_REGION }}
+      S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
+      S3_BUCKET: ${{ secrets.S3_BUCKET }}
+      CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+      CF_QUEUE_ID: ${{ secrets.CF_QUEUE_ID }}
+      CF_QUEUES_API_TOKEN: ${{ secrets.CF_QUEUES_API_TOKEN }}
+    steps:
+      - name: R2 write/read/delete
+        run: |
+          KEY="healthcheck/${GITHUB_RUN_ID}.txt"
+          echo "ok" > hc.txt
+          aws s3 cp hc.txt "s3://$S3_BUCKET/$KEY" --endpoint-url "$S3_ENDPOINT"
+          aws s3 cp "s3://$S3_BUCKET/$KEY" - --endpoint-url "$S3_ENDPOINT" | grep -q ok
+          aws s3 rm "s3://$S3_BUCKET/$KEY" --endpoint-url "$S3_ENDPOINT"
+
+      - name: Queue pull (auth check)
+        run: |
+          curl -fsS -X POST \
+            "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/queues/$CF_QUEUE_ID/messages/pull" \
+            -H "Authorization: Bearer $CF_QUEUES_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"batch_size":1,"visibility_timeout_ms":30000}' \
+            | jq -e '.success == true'
