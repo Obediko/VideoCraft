@@ -116,7 +116,7 @@ export function App() {
       try {
         const result = await request("/v1/projects/" + projectId + "/renders/" + id);
         setRenderJobStatus(result.job.status + " " + result.job.progress + "%");
-        if (result.job.status === "succeeded") { const download = await request("/v1/projects/" + projectId + "/renders/" + id + "/download-url"); setRenderUrl(API + download.url); setStatus("Render succeeded"); return; }
+        if (result.job.status === "succeeded") { const download = await request("/v1/projects/" + projectId + "/renders/" + id + "/download-url"); setRenderUrl(/^https?:\/\//.test(download.url) ? download.url : API + download.url); setStatus("Render succeeded"); return; }
         if (["failed", "cancelled"].includes(result.job.status)) { setStatus("Render " + result.job.status); return; }
       } catch (error) { setStatus(errorMessage(error)); return; }
     }
