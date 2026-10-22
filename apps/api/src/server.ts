@@ -27,7 +27,7 @@ export interface AuditWriter {
 export interface ApiDependencies {
   projects: ProjectRepository; assets: AssetRepository; revisions: RevisionRepository; members?: ProjectMemberRepository; storage?: ObjectStorage;
   authenticate: Authenticator; authorize: ProjectAuthorizer;
-  renderer?: RendererPort; transcriber?: TranscriptionPort; sceneDetector?: SceneDetector; scenes?: SceneRepository; transcripts?: TranscriptStore; silenceDetector?: { detect(storageKey: string): Promise<Array<{ startUs: number; endUs: number }>> }; strategies?: StrategyRegistry; proposals?: ProposalStore;
+  renderer?: RendererPort; transcriber?: TranscriptionPort; sceneDetector?: SceneDetector; scenes?: SceneRepository; transcripts?: TranscriptStore; silenceDetector?: { detect(storageKey: string): Promise<Array<{ startUs: number; endUs: number }>>; detectScenes?(storageKey: string): Promise<Array<{ startUs: number; endUs: number }>> }; strategies?: StrategyRegistry; proposals?: ProposalStore;
   clock?: Clock; ids?: IdFactory; audit?: AuditWriter; metrics?: MetricsRegistry; metricsToken?: string; readiness?: ReadinessCheck[];
 }
 
@@ -332,7 +332,13 @@ export function buildServer(dependencies: ApiDependencies): FastifyInstance {
       if (dependencies.silenceDetector) {
         const sourceAssetId = revision.timeline.tracks.find((track) => track.kind === "video")?.clips[0]?.assetId;
         const sourceAsset = sourceAssetId ? (await dependencies.assets.listForProject(projectId)).find((candidate) => candidate.id === sourceAssetId) : undefined;
-        if (sourceAsset) signals = { silences: await dependencies.silenceDetector.detect(sourceAsset.storageKey).catch((caught) => { requestLog(reply, caught, "Silence detection failed; continuing with word gaps"); return []; }) };
+        if (sourceAsset) {
+          const silences = await dependencies.silenceDetector.detect(sourceAsset.storageKey).catch((caught) => { requestLog(reply, caught, "Silence detection failed; continuing with word gaps"); return []; });
+          const scenes = dependencies.silenceDetector.detectScenes
+            ? await dependencies.silenceDetector.detectScenes(sourceAsset.storageKey).catch((caught) => { requestLog(reply, caught, "Scene detection failed; continuing without shot boundaries"); return []; })
+            : [];
+          signals = { silences, ...(scenes.length > 1 ? { scenes } : {}) };
+        }
       }
       const result = await strategy.propose({
         project,
@@ -497,5 +503,6 @@ function isRenderSettings(value: unknown): value is RenderSettings {
   const codecs = (value.videoCodec === "libx264" || value.videoCodec === "libvpx-vp9") && (value.audioCodec === "aac" || value.audioCodec === "libopus");
   const fit = value.fit === undefined || value.fit === "contain" || value.fit === "cover";
   const captionStyle = value.captionStyle === undefined || (typeof value.captionStyle === "string" && /^[a-z0-9-]{1,40}$/.test(value.captionStyle));
-  return formats && codecs && fit && captionStyle && Number.isInteger(value.width) && Number.isInteger(value.height) && Number.isInteger(value.frameRate) && (value.width as number) >= 2 && (value.height as number) >= 2 && (value.frameRate as number) > 0 && (value.frameRate as number) <= 120;
+  const loudness = (value.normalizeLoudness === undefined || typeof value.normalizeLoudness === "boolean") && (value.loudnessLufs === undefined || (typeof value.loudnessLufs === "number" && value.loudnessLufs >= -30 && value.loudnessLufs <= -5));
+  return formats && codecs && fit && captionStyle && loudness && Number.isInteger(value.width) && Number.isInteger(value.height) && Number.isInteger(value.frameRate) && (value.width as number) >= 2 && (value.height as number) >= 2 && (value.frameRate as number) > 0 && (value.frameRate as number) <= 120;
 }

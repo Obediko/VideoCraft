@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseSilenceDetect, parseProbe, speechSpans, pausesFromWords, validateMedia, probeMedia, detectSilence } from "../dist/index.js";
+import { detectSceneCuts, parseSceneCuts, scenesFromCuts, detectFocus, parseFocus, parseSilenceDetect, parseProbe, speechSpans, pausesFromWords, validateMedia, probeMedia, detectSilence } from "../dist/index.js";
 
 test("parses silencedetect output including a trailing open silence", () => {
   const out = "[silencedetect @ 0x1] silence_start: 1.5\n[silencedetect @ 0x1] silence_end: 2.25 | silence_duration: 0.75\n[silencedetect @ 0x1] silence_start: 9.0\n";
@@ -44,5 +44,28 @@ test("real ffmpeg: probes a generated file and finds its silence", async () => {
     assert.equal(silences.length, 1);
     assert.ok(Math.abs(silences[0].startUs - 2_000_000) < 200_000, JSON.stringify(silences));
     assert.ok(Math.abs(silences[0].endUs - 3_500_000) < 200_000, JSON.stringify(silences));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("parses scene cut timestamps and builds contiguous scenes", () => {
+  const out = "[Parsed_showinfo_1 @ 0x1] n:   0 pts:  60 pts_time:2.5 pos: 1\n[Parsed_showinfo_1 @ 0x1] n:   1 pts: 120 pts_time:5 pos: 2\n";
+  assert.deepEqual(parseSceneCuts(out), [2_500_000, 5_000_000]);
+  assert.deepEqual(scenesFromCuts([2_500_000, 5_000_000], 8_000_000), [{ startUs: 0, endUs: 2_500_000 }, { startUs: 2_500_000, endUs: 5_000_000 }, { startUs: 5_000_000, endUs: 8_000_000 }]);
+  assert.deepEqual(scenesFromCuts([], 3_000_000), [{ startUs: 0, endUs: 3_000_000 }]);
+});
+
+test("parseFocus returns null when no subject was found and clamps coordinates", () => {
+  assert.equal(parseFocus('{"x":null,"y":null,"confidence":0,"samples":4}'), null);
+  assert.deepEqual(parseFocus('{"x":1.4,"y":0.3,"confidence":0.8,"samples":4}'), { x: 1, y: 0.3, confidence: 0.8 });
+});
+
+test("real ffmpeg: finds the shot changes in a video made of three colour shots", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vc-scenes-"));
+  try {
+    const path = join(dir, "shots.mp4");
+    execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=red:s=320x240:d=2:r=25", "-f", "lavfi", "-i", "color=c=blue:s=320x240:d=2:r=25", "-f", "lavfi", "-i", "color=c=lime:s=320x240:d=2:r=25", "-filter_complex", "[0][1][2]concat=n=3:v=1:a=0", "-pix_fmt", "yuv420p", path]);
+    const cuts = await detectSceneCuts(path);
+    assert.equal(cuts.length, 2);
+    assert.ok(Math.abs(cuts[0] - 2_000_000) < 80_000 && Math.abs(cuts[1] - 4_000_000) < 80_000, JSON.stringify(cuts));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

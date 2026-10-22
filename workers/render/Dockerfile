@@ -4,7 +4,13 @@ ENV NODE_ENV=production
 ENV RENDER_ROOT=/tmp/videocraft-render
 ENV RENDER_WORK_ROOT=/tmp/videocraft-render
 
-RUN apt-get update   && apt-get install -y --no-install-recommends ffmpeg ca-certificates fontconfig fonts-dejavu-core   && rm -rf /var/lib/apt/lists/*
+RUN apt-get update   && apt-get install -y --no-install-recommends ffmpeg ca-certificates fontconfig fonts-dejavu-core python3 python3-venv   && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir -r /dev/stdin <<'REQ'
+opencv-python-headless>=4.8,<5
+REQ
+ENV REFRAME_PYTHON=/opt/venv/bin/python
+ENV REFRAME_SCRIPT=/app/workers/reframe/focus.py
 
 WORKDIR /app
 COPY . .

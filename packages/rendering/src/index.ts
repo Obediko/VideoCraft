@@ -8,6 +8,8 @@ export interface AssetPathResolver {
   resolve(assetId: string): Promise<string>;
   /** Whether the staged asset has an audio stream. When omitted, assets are assumed silent. */
   hasAudio?(assetId: string): Promise<boolean>;
+  /** Subject position (0..1) within a source range, used to aim cover-crops. Null means "use the centre". */
+  focus?(assetId: string, startUs: number, endUs: number): Promise<{ x: number; y: number; confidence: number } | null>;
 }
 export interface RenderPlan { args: string[]; outputPath: string; /** Side files (e.g. caption documents) written before FFmpeg starts. */ files: Array<{ path: string; content: string }>; }
 
@@ -68,16 +70,27 @@ export class FfmpegCommandPlanner {
       args.push("-i", await this.assets.resolve(externalAudio.assetId));
     }
 
-    const fit = settings.fit === "cover"
-      ? "scale=" + width + ":" + height + ":force_original_aspect_ratio=increase,crop=" + width + ":" + height
-      : "scale=" + width + ":" + height + ":force_original_aspect_ratio=decrease,pad=" + width + ":" + height + ":(ow-iw)/2:(oh-ih)/2:color=black";
+    const contain = "scale=" + width + ":" + height + ":force_original_aspect_ratio=decrease,pad=" + width + ":" + height + ":(ow-iw)/2:(oh-ih)/2:color=black";
+    const fitFor = async (clip: TimelineClip): Promise<string> => {
+      if (settings.fit !== "cover") return contain;
+      // A manual focus on the clip wins; otherwise ask the resolver to find the subject.
+      const manualX = Number(clip.transform?.focusX);
+      const manualY = Number(clip.transform?.focusY);
+      let focus: { x: number; y: number } | null = Number.isFinite(manualX) && Number.isFinite(manualY) ? { x: manualX, y: manualY } : null;
+      if (!focus && this.assets.focus) {
+        const found = await this.assets.focus(clip.assetId, clip.sourceStartUs, clip.sourceEndUs);
+        if (found && found.confidence >= 0.3) focus = found;
+      }
+      return "scale=" + width + ":" + height + ":force_original_aspect_ratio=increase," + coverCrop(width, height, focus);
+    };
+    const fits = await Promise.all(clips.map(fitFor));
 
     const useEmbeddedAudio = !externalAudio && [...audioPresent.values()].some(Boolean);
     const filters: string[] = [];
     const concatInputs: string[] = [];
     clips.forEach((clip, index) => {
       const length = (clip.sourceEndUs - clip.sourceStartUs) / 1_000_000;
-      filters.push("[" + index + ":v]setpts=PTS-STARTPTS," + fit + ",fps=" + fps + ",setsar=1,format=yuv420p[v" + index + "]");
+      filters.push("[" + index + ":v]setpts=PTS-STARTPTS," + fits[index] + ",fps=" + fps + ",setsar=1,format=yuv420p[v" + index + "]");
       concatInputs.push("[v" + index + "]");
       if (useEmbeddedAudio) {
         if (audioPresent.get(clip.assetId)) {
@@ -102,11 +115,17 @@ export class FfmpegCommandPlanner {
       videoLabel = "[vout]";
     }
 
+    let audioLabel = "[acat]";
+    if (useEmbeddedAudio && settings.normalizeLoudness !== false) {
+      // Single-pass EBU R128 normalisation so clips cut from quiet and loud parts of a source sound consistent.
+      filters.push("[acat]loudnorm=I=" + (settings.loudnessLufs ?? -16) + ":TP=-1.5:LRA=11[anorm]");
+      audioLabel = "[anorm]";
+    }
     args.push("-filter_complex", filters.join(";"), "-map", videoLabel);
     if (externalAudio) {
       args.push("-map", externalIndex + ":a:0", "-af", "atrim=start=" + seconds(externalAudio.sourceStartUs) + ":end=" + seconds(externalAudio.sourceEndUs) + ",asetpts=PTS-STARTPTS", "-shortest");
     } else if (useEmbeddedAudio) {
-      args.push("-map", "[acat]");
+      args.push("-map", audioLabel);
     }
     args.push("-r", String(fps), "-c:v", settings.videoCodec);
     if (settings.videoCodec === "libx264") args.push("-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p");
@@ -157,6 +176,14 @@ export class FfmpegProcess {
       });
     });
   }
+}
+
+/** Crop to width×height after an "increase" scale, centred on the subject (clamped to the frame). */
+export function coverCrop(width: number, height: number, focus: { x: number; y: number } | null): string {
+  if (!focus) return "crop=" + width + ":" + height;
+  const fx = Math.min(1, Math.max(0, focus.x)).toFixed(4);
+  const fy = Math.min(1, Math.max(0, focus.y)).toFixed(4);
+  return "crop=" + width + ":" + height + ":x='min(max(iw*" + fx + "-" + width + "/2,0),iw-" + width + ")':y='min(max(ih*" + fy + "-" + height + "/2,0),ih-" + height + ")'";
 }
 
 function seconds(microseconds: number): string {

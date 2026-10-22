@@ -77,3 +77,73 @@ test("real ffmpeg: renders a playable 9:16 video with joined clips, audio and bu
     execFileSync("ffmpeg", ["-v", "error", "-i", out, "-f", "null", "-"]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("cover crop follows the detected subject, a manual focus wins, and weak detections are ignored", async () => {
+  const cover = { ...PLATFORM_PRESETS.tiktok.settings };
+  const graphOf = async (resolver, c = clip("c", 0, 5_000_000, 0)) => {
+    const plan = await new FfmpegCommandPlanner({ resolve: async () => "/media/s.mp4", ...resolver }).plan(revision([c]), cover, "/r/o.mp4");
+    return plan.args[plan.args.indexOf("-filter_complex") + 1];
+  };
+  assert.match(await graphOf({ focus: async () => ({ x: 0.8, y: 0.4, confidence: 0.9 }) }), /crop=1080:1920:x='min\(max\(iw\*0\.8000-1080\/2,0\),iw-1080\)'/);
+  assert.match(await graphOf({ focus: async () => ({ x: 0.8, y: 0.4, confidence: 0.1 }) }), /crop=1080:1920,fps/);
+  assert.match(await graphOf({ focus: async () => ({ x: 0.8, y: 0.4, confidence: 0.9 }) }, { ...clip("c", 0, 5_000_000, 0), transform: { focusX: 0.2, focusY: 0.5 } }), /iw\*0\.2000/);
+  assert.match(await graphOf({}), /crop=1080:1920,fps/);
+});
+
+const python = process.env.REFRAME_PYTHON ?? "python3";
+const focusScript = new URL("../../../workers/reframe/focus.py", import.meta.url).pathname;
+const haveCv = (() => { try { execFileSync(python, ["-c", "import cv2, skimage; assert not cv2.CascadeClassifier(cv2.data.haarcascades + \"haarcascade_frontalface_default.xml\").empty()"], { stdio: "ignore" }); return true; } catch { return false; } })();
+
+test("real video: face-aware 9:16 keeps a off-centre speaker in frame where a centre crop loses them", { skip: !haveCv }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vc-reframe-"));
+  try {
+    const frame = join(dir, "frame.png");
+    const source = join(dir, "wide.mp4");
+    execFileSync(python, ["-c", `
+import cv2, numpy as np
+from skimage import data
+img = cv2.cvtColor(data.astronaut(), cv2.COLOR_RGB2BGR)
+img = cv2.resize(img, (400, 400))
+canvas = np.full((720, 1280, 3), 40, np.uint8)
+canvas[160:560, 880:1280] = img
+cv2.imwrite(${JSON.stringify(frame)}, canvas)`]);
+    execFileSync("ffmpeg", ["-v", "error", "-y", "-loop", "1", "-framerate", "30", "-t", "4", "-i", frame, "-pix_fmt", "yuv420p", "-c:v", "libx264", source]);
+    const focusOf = (path, s, e) => JSON.parse(execFileSync(python, [focusScript, path, String(s), String(e)]).toString());
+    const found = focusOf(source, 0, 3);
+    assert.ok(found.x > 0.75 && found.confidence >= 0.5, "speaker detected on the right: " + JSON.stringify(found));
+
+    const render = async (withFocus) => {
+      const out = join(dir, withFocus ? "focus.mp4" : "centre.mp4");
+      const resolver = { resolve: async () => source, ...(withFocus ? { focus: async (_a, s, e) => focusOf(source, s / 1e6, e / 1e6) } : {}) };
+      const plan = await new FfmpegCommandPlanner(resolver).plan(revision([clip("c", 0, 3_000_000, 0)]), { ...PLATFORM_PRESETS.tiktok.settings, captionStyle: undefined }, out);
+      await new FfmpegProcess().run(plan);
+      return out;
+    };
+    const centre = focusOf(await render(false), 0, 2);
+    const aimed = focusOf(await render(true), 0, 2);
+    assert.equal(centre.x, null, "a centre crop of the wide frame loses the speaker");
+    assert.ok(aimed.x !== null && aimed.confidence >= 0.5, "the aimed crop keeps the speaker: " + JSON.stringify(aimed));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("real ffmpeg: audio is loudness-normalised so a quiet source reaches the target", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vc-loud-"));
+  try {
+    const source = join(dir, "quiet.mp4");
+    execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=gray:s=320x240:d=12:r=25", "-f", "lavfi", "-i", "sine=f=220:d=12", "-af", "volume=-30dB", "-pix_fmt", "yuv420p", "-shortest", source]);
+    const measure = (path) => {
+      const out = (() => { try { return execFileSync("ffmpeg", ["-nostats", "-i", path, "-af", "ebur128", "-f", "null", "-"], { stdio: ["ignore", "pipe", "pipe"] }).toString(); } catch (e) { return String(e.stderr); } })();
+      return execFileSync("sh", ["-c", "ffmpeg -nostats -i " + JSON.stringify(path) + " -af ebur128 -f null - 2>&1 | grep -A1 'Integrated loudness' | grep -o 'I: *-\\?[0-9.]*' | tail -1"]).toString().trim() || out.slice(-200);
+    };
+    const render = async (extra, name) => {
+      const out = join(dir, name);
+      const plan = await new FfmpegCommandPlanner({ resolve: async () => source, hasAudio: async () => true }).plan(revision([clip("c", 0, 12_000_000, 0)]), { ...settings, width: 320, height: 240, ...extra }, out);
+      await new FfmpegProcess().run(plan);
+      return Number(measure(out).replace(/[^0-9.-]/g, ""));
+    };
+    const raw = await render({ normalizeLoudness: false }, "raw.mp4");
+    const normalised = await render({}, "norm.mp4");
+    assert.ok(raw < -28, "source stays quiet without normalisation: " + raw);
+    assert.ok(Math.abs(normalised - -16) < 2.5, "normalised near -16 LUFS: " + normalised);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
