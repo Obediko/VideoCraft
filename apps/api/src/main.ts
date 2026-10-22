@@ -4,7 +4,7 @@ import { Queue } from "bullmq";
 import { Redis } from "ioredis";
 import type { FastifyRequest } from "fastify";
 import { createDatabase, createPool, PostgresAssetRepository, PostgresProjectMemberRepository, PostgresProjectRepository, PostgresProposalStore, PostgresSceneRepository, PostgresRevisionRepository, PostgresTranscriptStore, PostgresRenderJobRepository, PostgresFeedbackRepository, PostgresAuditRepository, type Database } from "@videocraft/persistence";
-import { BullMqRenderQueue } from "@videocraft/jobs";
+import { BullMqRenderQueue, CloudflareQueueRenderQueue } from "@videocraft/jobs";
 import { ProjectService } from "@videocraft/application";
 import { FasterWhisperWorker } from "@videocraft/transcription";
 import { LocalObjectStorage, S3ObjectStorage, type ObjectStorage } from "@videocraft/storage";
@@ -83,7 +83,10 @@ const malwareScanner = createMalwareScanner();
 const sceneDetector = secretEnvironment.SCENE_WORKER_PATH ? new PySceneDetectWorker({ workerPath: secretEnvironment.SCENE_WORKER_PATH, storage, ...(secretEnvironment.SCENE_PYTHON ? { pythonCommand: secretEnvironment.SCENE_PYTHON } : {}) }) : undefined;
 const metrics = new MetricsRegistry();
 const redisOptions = redisConnection(required("REDIS_URL"));
-const renderQueue = new Queue("videocraft-render", { connection: redisOptions });
+const queueProvider = secretEnvironment.JOB_QUEUE_PROVIDER ?? "bullmq";
+const renderQueue = queueProvider === "cloudflare"
+  ? new CloudflareQueueRenderQueue({ accountId: required("CF_ACCOUNT_ID"), queueId: required("CF_QUEUE_ID"), apiToken: requiredSecret("CF_QUEUES_API_TOKEN") }, assets, renderJobs)
+  : new Queue("videocraft-render", { connection: redisOptions });
 const rateLimitRedis = new Redis(redisOptions);
 const providerQuota = new RedisProviderQuota(rateLimitRedis);
 const transcriber = new FasterWhisperWorker({
@@ -121,7 +124,9 @@ const server = buildServer({
   proposals: new PostgresProposalStore(db),
   strategies: new StaticStrategyRegistry(),
   transcriber,
-  renderer: new BullMqRenderQueue(renderQueue, assets, renderJobs),
+  renderer: queueProvider === "cloudflare"
+    ? new CloudflareQueueRenderQueue({ accountId: required("CF_ACCOUNT_ID"), queueId: required("CF_QUEUE_ID"), apiToken: requiredSecret("CF_QUEUES_API_TOKEN") }, assets, renderJobs)
+    : new BullMqRenderQueue(renderQueue, assets, renderJobs),
   authenticate: authenticator,
   authorize: authorizer,
   audit,
