@@ -116,7 +116,7 @@ export class ClamAvScanner implements MalwareScanner {
 }
 
 export function parseClamAvResponse(response: string): MalwareScanResult | undefined {
-  const value = response.trim();
+  const value = response.replace(/\0/g, "").trim();
   if (value.endsWith("stream: OK")) return { clean: true };
   const match = value.match(/stream: (.+) FOUND$/);
   return match?.[1] ? { clean: false, signature: match[1] } : undefined;
