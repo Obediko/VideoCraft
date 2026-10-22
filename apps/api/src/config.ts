@@ -13,6 +13,10 @@ export interface ProductionEnvironment {
   INTENT_PROVIDER_API_KEY?: string;
   INTENT_PROVIDER_URL?: string;
   INTENT_PROVIDER_MODEL?: string;
+  JOB_QUEUE_PROVIDER?: string;
+  CF_ACCOUNT_ID?: string;
+  CF_QUEUE_ID?: string;
+  CF_QUEUES_API_TOKEN?: string;
 }
 
 export function validateProductionConfiguration(env: ProductionEnvironment): void {
@@ -29,6 +33,14 @@ export function validateProductionConfiguration(env: ProductionEnvironment): voi
   if (!env.CLAMAV_HOST) missing.push("CLAMAV_HOST");
   if (!env.OTEL_EXPORTER_OTLP_ENDPOINT) missing.push("OTEL_EXPORTER_OTLP_ENDPOINT");
   if (!env.METRICS_AUTH_TOKEN || env.METRICS_AUTH_TOKEN.length < 32) missing.push("METRICS_AUTH_TOKEN (32+ characters)");
+
+  const queueProvider = env.JOB_QUEUE_PROVIDER ?? "bullmq";
+  if (queueProvider !== "bullmq" && queueProvider !== "cloudflare") missing.push("JOB_QUEUE_PROVIDER=bullmq|cloudflare");
+  if (queueProvider === "cloudflare") {
+    if (!env.CF_ACCOUNT_ID) missing.push("CF_ACCOUNT_ID");
+    if (!env.CF_QUEUE_ID) missing.push("CF_QUEUE_ID");
+    if (!env.CF_QUEUES_API_TOKEN || env.CF_QUEUES_API_TOKEN.length < 32) missing.push("CF_QUEUES_API_TOKEN (32+ characters)");
+  }
 
   const providerMode = env.INTENT_PROVIDER_MODE ?? (env.INTENT_PROVIDER_API_KEY ? "external" : "rule-based");
   if (providerMode !== "rule-based" && providerMode !== "external") {
