@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import type { ProjectRevision, UUID } from "@videocraft/domain";
+import { applyTimelineOperations, parseTimelineOperations, type ProjectRevision, type UUID } from "@videocraft/domain";
 import { exportOtio, importOtio } from "@videocraft/timeline-interchange";
 import type { ProjectRepository, RevisionRepository } from "@videocraft/application";
 
@@ -7,7 +7,7 @@ export interface TimelineRouteDependencies {
   projects: ProjectRepository; revisions: RevisionRepository;
   authenticate(request: FastifyRequest): Promise<{ userId: UUID } | null>;
   authorize: { canAccess(principal: { userId: UUID }, projectId: UUID, role: "viewer" | "editor"): Promise<boolean> };
-  saveRevision(input: { projectId: UUID; createdBy: UUID; timeline: ProjectRevision["timeline"]; acceptedProposalIds: UUID[] }): Promise<ProjectRevision>;
+  saveRevision(input: { projectId: UUID; createdBy: UUID; timeline: ProjectRevision["timeline"]; acceptedProposalIds: UUID[]; tailoring?: NonNullable<ProjectRevision["tailoring"]> }): Promise<ProjectRevision>;
 }
 export function registerTimelineRoutes(server: FastifyInstance, dependencies: TimelineRouteDependencies): void {
   server.post("/v1/projects/:projectId/timeline/export", async (request, reply) => {
@@ -20,6 +20,34 @@ export function registerTimelineRoutes(server: FastifyInstance, dependencies: Ti
     const revision = await dependencies.revisions.get(params.projectId, body.revision as number);
     if (!revision) return error(reply, 404, "not_found", "Revision not found");
     return { format: "otio", document: exportOtio(revision.timeline, (await dependencies.projects.get(params.projectId))?.name ?? "VideoCraft timeline") };
+  });
+  /**
+   * Applies editor operations (trim, split, remove, insert, reorder, caption corrections) to a
+   * stored revision and saves the result as a new revision. The base revision is never mutated.
+   */
+  server.post("/v1/projects/:projectId/revisions/:revision/edit", async (request, reply) => {
+    const principal = await dependencies.authenticate(request);
+    if (!principal) return error(reply, 401, "unauthorized", "Authentication required");
+    const params = request.params as { projectId?: string; revision?: string };
+    if (!params.projectId || !(await dependencies.authorize.canAccess(principal, params.projectId, "editor"))) return error(reply, 403, "forbidden", "Project access denied");
+    if (!params.revision || !/^\d+$/.test(params.revision) || Number(params.revision) < 1) return error(reply, 400, "invalid_request", "revision must be a positive integer");
+    const base = await dependencies.revisions.get(params.projectId, Number(params.revision));
+    if (!base) return error(reply, 404, "not_found", "Revision not found");
+    const project = await dependencies.projects.get(params.projectId);
+    if (project && project.revision !== base.revision) return error(reply, 409, "revision_conflict", "Revision " + project.revision + " is newer; reload before editing");
+    try {
+      const operations = parseTimelineOperations((request.body as { operations?: unknown } | undefined)?.operations);
+      const revision = await dependencies.saveRevision({
+        projectId: params.projectId,
+        createdBy: principal.userId,
+        timeline: applyTimelineOperations(base.timeline, operations),
+        acceptedProposalIds: base.acceptedProposalIds,
+        ...(base.tailoring === undefined ? {} : { tailoring: base.tailoring }),
+      });
+      return reply.code(201).send({ revision });
+    } catch (caught) {
+      return error(reply, 400, "invalid_edit", caught instanceof Error ? caught.message : "Invalid edit");
+    }
   });
   server.post("/v1/projects/:projectId/timeline/import", async (request, reply) => {
     const principal = await dependencies.authenticate(request);

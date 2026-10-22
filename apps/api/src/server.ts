@@ -1,8 +1,8 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { stat } from "node:fs/promises";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
-import { validateProposal } from "@videocraft/domain";
-import type { Asset, EditingProposal, ProjectRevision, RenderSettings, RendererPort, StrategyRegistry, TailoringProfile, Timeline, TimelineClip, TimelineOperation, TranscriptSegment, TranscriptionPort, UUID } from "@videocraft/domain";
+import { applyTimelineOperations, validateProposal } from "@videocraft/domain";
+import type { Asset, EditingProposal, ProjectRevision, RenderSettings, RendererPort, StrategyRegistry, TailoringProfile, Timeline, TimelineSignals, TranscriptSegment, TranscriptionPort, UUID } from "@videocraft/domain";
 import type { SceneDetector } from "@videocraft/scene-detection";
 import { ProjectService, type Clock, type IdFactory, type ProjectMemberRepository, type ProjectRepository, type AssetRepository, type RevisionRepository, type SceneRepository } from "@videocraft/application";
 import type { ObjectStorage } from "@videocraft/storage";
@@ -27,7 +27,7 @@ export interface AuditWriter {
 export interface ApiDependencies {
   projects: ProjectRepository; assets: AssetRepository; revisions: RevisionRepository; members?: ProjectMemberRepository; storage?: ObjectStorage;
   authenticate: Authenticator; authorize: ProjectAuthorizer;
-  renderer?: RendererPort; transcriber?: TranscriptionPort; sceneDetector?: SceneDetector; scenes?: SceneRepository; transcripts?: TranscriptStore; strategies?: StrategyRegistry; proposals?: ProposalStore;
+  renderer?: RendererPort; transcriber?: TranscriptionPort; sceneDetector?: SceneDetector; scenes?: SceneRepository; transcripts?: TranscriptStore; silenceDetector?: { detect(storageKey: string): Promise<Array<{ startUs: number; endUs: number }>> }; strategies?: StrategyRegistry; proposals?: ProposalStore;
   clock?: Clock; ids?: IdFactory; audit?: AuditWriter; metrics?: MetricsRegistry; metricsToken?: string; readiness?: ReadinessCheck[];
 }
 
@@ -327,11 +327,19 @@ export function buildServer(dependencies: ApiDependencies): FastifyInstance {
       );
       const assetIds = new Set(revision.timeline.tracks.flatMap((track) => track.clips.map((clip) => clip.assetId)));
       const transcriptLists = await Promise.all([...assetIds].map((assetId) => dependencies.transcripts!.listForAsset(assetId)));
+      // Audio-level silence is an optional extra signal; word gaps still work when it is unavailable.
+      let signals: TimelineSignals | undefined;
+      if (dependencies.silenceDetector) {
+        const sourceAssetId = revision.timeline.tracks.find((track) => track.kind === "video")?.clips[0]?.assetId;
+        const sourceAsset = sourceAssetId ? (await dependencies.assets.listForProject(projectId)).find((candidate) => candidate.id === sourceAssetId) : undefined;
+        if (sourceAsset) signals = { silences: await dependencies.silenceDetector.detect(sourceAsset.storageKey).catch((caught) => { requestLog(reply, caught, "Silence detection failed; continuing with word gaps"); return []; }) };
+      }
       const result = await strategy.propose({
         project,
         revision,
         profile: body.profile,
         transcript: transcriptLists.flat(),
+        ...(signals ? { signals } : {}),
       });
       const proposal: EditingProposal = {
         id: ids.next(),
@@ -476,55 +484,6 @@ function isTimeline(value: unknown): value is Timeline {
   if (!isJsonObject(value) || typeof value.durationUs !== "number" || !Array.isArray(value.tracks)) return false;
   return value.tracks.every((track) => isJsonObject(track) && typeof track.id === "string" && typeof track.kind === "string" && Array.isArray(track.clips));
 }
-function applyTimelineOperations(timeline: Timeline, operations: TimelineOperation[]): Timeline {
-  const tracks = timeline.tracks.map((track) => ({ ...track, clips: [...track.clips] }));
-  for (const operation of operations) {
-    if (operation.type === "add-caption") {
-      const captionTrack = tracks.find((track) => track.kind === "caption");
-      const clip: TimelineClip = {
-        id: "caption-" + operation.atUs + "-" + operation.durationUs,
-        assetId: "generated:caption",
-        sourceStartUs: 0,
-        sourceEndUs: operation.durationUs,
-        timelineStartUs: operation.atUs,
-        timelineEndUs: operation.atUs + operation.durationUs,
-        transform: { text: operation.text },
-      };
-      if (captionTrack) captionTrack.clips.push(clip);
-      else tracks.push({ id: "captions", kind: "caption", clips: [clip] });
-      continue;
-    }
-    let found = false;
-    for (const track of tracks) {
-      const index = track.clips.findIndex((clip) => clip.id === operation.clipId);
-      if (index < 0) continue;
-      found = true;
-      const clip = track.clips[index];
-      if (!clip) continue;
-      if (operation.type === "remove-clip") track.clips.splice(index, 1);
-      if (operation.type === "trim-clip") {
-        if (operation.sourceEndUs <= operation.sourceStartUs) throw new Error("Trim range is invalid");
-        track.clips[index] = {
-          ...clip,
-          sourceStartUs: operation.sourceStartUs,
-          sourceEndUs: operation.sourceEndUs,
-          timelineEndUs: clip.timelineStartUs + operation.sourceEndUs - operation.sourceStartUs,
-        };
-      }
-      if (operation.type === "split-clip") {
-        if (operation.atUs <= clip.sourceStartUs || operation.atUs >= clip.sourceEndUs) throw new Error("Split point is invalid");
-        const sourceRatio = (operation.atUs - clip.sourceStartUs) / (clip.sourceEndUs - clip.sourceStartUs);
-        const timelineAt = clip.timelineStartUs + Math.round((clip.timelineEndUs - clip.timelineStartUs) * sourceRatio);
-        const first: TimelineClip = { ...clip, id: clip.id + ":a", sourceEndUs: operation.atUs, timelineEndUs: timelineAt };
-        const second: TimelineClip = { ...clip, id: clip.id + ":b", sourceStartUs: operation.atUs, timelineStartUs: timelineAt };
-        track.clips.splice(index, 1, first, second);
-      }
-      break;
-    }
-    if (!found) throw new Error("Proposal references an unknown clip");
-  }
-  return { ...timeline, tracks };
-}
 function isTailoringProfile(value: unknown): value is TailoringProfile {
   if (!isJsonObject(value) || typeof value.intent !== "string" || typeof value.audience !== "string" || typeof value.channel !== "string" || !Array.isArray(value.constraints)) return false;
   if (!value.constraints.every((entry) => typeof entry === "string")) return false;
@@ -536,5 +495,7 @@ function isRenderSettings(value: unknown): value is RenderSettings {
   if (!isJsonObject(value)) return false;
   const formats = value.format === "mp4" || value.format === "webm";
   const codecs = (value.videoCodec === "libx264" || value.videoCodec === "libvpx-vp9") && (value.audioCodec === "aac" || value.audioCodec === "libopus");
-  return formats && codecs && Number.isInteger(value.width) && Number.isInteger(value.height) && Number.isInteger(value.frameRate) && (value.width as number) >= 2 && (value.height as number) >= 2 && (value.frameRate as number) > 0 && (value.frameRate as number) <= 120;
+  const fit = value.fit === undefined || value.fit === "contain" || value.fit === "cover";
+  const captionStyle = value.captionStyle === undefined || (typeof value.captionStyle === "string" && /^[a-z0-9-]{1,40}$/.test(value.captionStyle));
+  return formats && codecs && fit && captionStyle && Number.isInteger(value.width) && Number.isInteger(value.height) && Number.isInteger(value.frameRate) && (value.width as number) >= 2 && (value.height as number) >= 2 && (value.frameRate as number) > 0 && (value.frameRate as number) <= 120;
 }

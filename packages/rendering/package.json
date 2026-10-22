@@ -11,9 +11,11 @@
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@videocraft/domain": "0.1.0"
+    "@videocraft/domain": "0.1.0",
+    "@videocraft/captions": "0.1.0"
   },
   "devDependencies": {
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "@types/node": "^22.10.2"
   }
 }

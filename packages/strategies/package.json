@@ -10,6 +10,12 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test test/*.test.mjs"
   },
-  "dependencies": {"@videocraft/domain": "0.1.0"},
-  "devDependencies": {"typescript": "^5.7.2"}
+  "dependencies": {
+    "@videocraft/domain": "0.1.0",
+    "@videocraft/analysis": "0.1.0",
+    "@videocraft/captions": "0.1.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
 }

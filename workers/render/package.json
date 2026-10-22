@@ -15,7 +15,8 @@
     "@videocraft/rendering": "0.1.0",
     "@videocraft/storage": "0.1.0",
     "@videocraft/transcription": "0.1.0",
-    "bullmq": "^5.34.10"
+    "bullmq": "^5.34.10",
+    "@videocraft/analysis": "0.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

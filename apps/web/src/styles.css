@@ -76,3 +76,11 @@ h2 { margin-bottom: 14px; font-size: 14px; letter-spacing: .02em; }
   input, textarea, select { min-height: 44px; }
   .preview-screen { min-height: 210px; }
 }
+
+.clip-actions, .segment-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
+.segment-row label { max-width: 120px; }
+.highlight-list { margin: 8px 0; padding-left: 20px; display: grid; gap: 8px; }
+.highlight-list p { margin: 2px 0 0; font-size: 0.9em; }
+.cue-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; max-height: 260px; overflow: auto; }
+.cue-list li { display: grid; grid-template-columns: 52px 1fr auto; gap: 8px; align-items: center; }
+.cue-time { font-variant-numeric: tabular-nums; opacity: 0.7; font-size: 0.85em; }
