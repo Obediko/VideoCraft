@@ -42,12 +42,17 @@ export function App() {
 
   const videoTrack = useMemo(() => timeline.tracks.find((track) => track.kind === "video"), [timeline]);
 
-  async function request(path: string, init: RequestInit = {}) {
+  async function request(path: string, init: RequestInit = {}, accessToken = token, retried = false): Promise<any> {
     const response = await fetch(API + path, {
       ...init,
       credentials: "include",
-      headers: { "content-type": "application/json", ...(token ? { authorization: "Bearer " + token } : {}), ...init.headers },
+      headers: { "content-type": "application/json", ...(accessToken ? { authorization: "Bearer " + accessToken } : {}), ...init.headers },
     });
+    if (response.status === 401 && accessToken && !retried && !path.startsWith("/auth/")) {
+      // The 15-minute access token expired: rotate the refresh session once and retry.
+      const refreshed = await fetch(API + "/auth/refresh", { method: "POST", credentials: "include" });
+      if (refreshed.ok) { const session = await refreshed.json(); setToken(session.accessToken); return request(path, init, session.accessToken, true); }
+    }
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.error?.message ?? "Request failed");
     return body;
