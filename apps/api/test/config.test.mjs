@@ -58,6 +58,20 @@ test("production external intent providers require explicit secure credentials",
   );
 });
 
+test("Cloudflare queue configuration requires scoped credentials", () => {
+  assert.throws(
+    () => validateProductionConfiguration({ ...safe, JOB_QUEUE_PROVIDER: "cloudflare" }),
+    /CF_ACCOUNT_ID/
+  );
+  assert.doesNotThrow(() => validateProductionConfiguration({
+    ...safe,
+    JOB_QUEUE_PROVIDER: "cloudflare",
+    CF_ACCOUNT_ID: "account",
+    CF_QUEUE_ID: "queue",
+    CF_QUEUES_API_TOKEN: "t".repeat(32)
+  }));
+});
+
 test("non-production configuration remains usable for local development", () => {
   assert.doesNotThrow(() => validateProductionConfiguration({ NODE_ENV: "development" }));
 });
