@@ -86,6 +86,7 @@ services:
       AUTH_JWT_SECRET: ${AUTH_JWT_SECRET}
       AUTH_ISSUER: https://videocraft.emancipationdevelopment.org
       AUTH_AUDIENCE: videocraft-staging
+      AUTH_ALLOWED_EMAILS: ${AUTH_ALLOWED_EMAILS:-}
       DOWNLOAD_SIGNING_SECRET: ${DOWNLOAD_SIGNING_SECRET}
       METRICS_AUTH_TOKEN: ${METRICS_AUTH_TOKEN}
       MALWARE_SCAN_REQUIRED: "true"

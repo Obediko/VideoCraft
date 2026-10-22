@@ -21,6 +21,7 @@ import { registerFeedbackRoutes } from "./feedback-routes.js";
 import { registerTimelineRoutes } from "./timeline-routes.js";
 import { JwtAuthenticator, PostgresProjectAuthorizer } from "./auth.js";
 import { validateProductionConfiguration } from "./config.js";
+import { parseAllowedEmails, registerAuthRoutes } from "./auth-routes.js";
 
 const secretEnvironment = await loadSecretEnvironment(process.env);
 const secrets = new EnvironmentSecretProvider(secretEnvironment);
@@ -136,7 +137,14 @@ const server = buildServer({
     { name: "redis", check: async () => { await renderQueue.getJobCounts(); return true; } },
   ],
 });
-server.register(rateLimit, { max: 120, timeWindow: "1 minute", redis: rateLimitRedis, skipOnError: false, keyGenerator: rateLimitKey });
+await server.register(rateLimit, { max: 120, timeWindow: "1 minute", redis: rateLimitRedis, skipOnError: false, keyGenerator: rateLimitKey });
+registerAuthRoutes(server, {
+  database: db,
+  secret: requiredSecret("AUTH_JWT_SECRET"),
+  allowedEmails: parseAllowedEmails(secretEnvironment.AUTH_ALLOWED_EMAILS, secretEnvironment.NODE_ENV === "production"),
+  ...(secretEnvironment.AUTH_ISSUER ? { issuer: secretEnvironment.AUTH_ISSUER } : {}),
+  ...(secretEnvironment.AUTH_AUDIENCE ? { audience: secretEnvironment.AUTH_AUDIENCE } : {}),
+});
 registerTimelineRoutes(server, { projects, revisions, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, saveRevision: (input) => timelineService.saveRevision(input) });
 registerFeedbackRoutes(server, { feedback, revisions, proposals: new PostgresProposalStore(db), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, now: () => new Date().toISOString() });
 registerIntentRoutes(server, { analyzer: intentAnalyzer, assets, transcripts, quota: providerQuota, providerRateLimitMax: boundedInteger("INTENT_PROVIDER_MAX_PER_MINUTE", 20, 1, 1_000), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });

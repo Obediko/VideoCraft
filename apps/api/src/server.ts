@@ -32,7 +32,8 @@ export interface ApiDependencies {
 }
 
 export function buildServer(dependencies: ApiDependencies): FastifyInstance {
-  const server = Fastify({ logger: true, bodyLimit: 1_000_000 });
+  // Trust X-Forwarded-For only from loopback/private networks (the host reverse proxy), so request.ip is the real client IP for rate limiting.
+  const server = Fastify({ logger: true, bodyLimit: 1_000_000, trustProxy: ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"] });
   const clock = dependencies.clock ?? { now: () => new Date().toISOString() };
   const ids = dependencies.ids ?? { next: () => randomUUID() };
   const metrics = dependencies.metrics ?? new MetricsRegistry();

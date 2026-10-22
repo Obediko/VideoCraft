@@ -1,4 +1,4 @@
-import { useMemo, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 
 type TimelineClip = {
   id: string;
@@ -17,6 +17,10 @@ const API = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
 
 export function App() {
   const [token, setToken] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [userEmail, setUserEmail] = useState("");
   const [projectId, setProjectId] = useState("");
   const [projectName, setProjectName] = useState("My first cut");
   const [projects, setProjects] = useState<Project[]>([]);
@@ -38,14 +42,51 @@ export function App() {
 
   const videoTrack = useMemo(() => timeline.tracks.find((track) => track.kind === "video"), [timeline]);
 
-  async function request(path: string, init: RequestInit = {}) {
+  async function request(path: string, init: RequestInit = {}, accessToken = token, retried = false): Promise<any> {
     const response = await fetch(API + path, {
       ...init,
-      headers: { "content-type": "application/json", ...(token ? { authorization: "Bearer " + token } : {}), ...init.headers },
+      credentials: "include",
+      headers: { "content-type": "application/json", ...(accessToken ? { authorization: "Bearer " + accessToken } : {}), ...init.headers },
     });
+    if (response.status === 401 && accessToken && !retried && !path.startsWith("/auth/")) {
+      // The 15-minute access token expired: rotate the refresh session once and retry.
+      const refreshed = await fetch(API + "/auth/refresh", { method: "POST", credentials: "include" });
+      if (refreshed.ok) { const session = await refreshed.json(); setToken(session.accessToken); return request(path, init, session.accessToken, true); }
+    }
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.error?.message ?? "Request failed");
     return body;
+  }
+
+  async function authenticate() {
+    setBusy(true);
+    try {
+      const result = await request(authMode === "login" ? "/auth/login" : "/auth/register", { method: "POST", body: JSON.stringify({ email, password }) });
+      setToken(result.accessToken);
+      setUserEmail(result.user.email);
+      setPassword("");
+      setStatus(authMode === "login" ? "Signed in" : "Account created");
+    } catch (error) { setStatus(errorMessage(error)); }
+    finally { setBusy(false); }
+  }
+
+  async function restoreSession() {
+    try {
+      const result = await request("/auth/refresh", { method: "POST" });
+      setToken(result.accessToken);
+      setUserEmail(result.user.email);
+    } catch { /* A first visit has no refresh session. */ }
+  }
+
+  useEffect(() => { if (!token) void restoreSession(); }, []);
+
+  async function signOut() {
+    await request("/auth/logout", { method: "POST" }).catch(() => undefined);
+    setToken("");
+    setUserEmail("");
+    setProjects([]);
+    setProjectId("");
+    setStatus("Signed out");
   }
 
   async function createProject() {
@@ -245,7 +286,7 @@ export function App() {
       <aside className="sidebar">
         <section className="panel">
           <h2>Project</h2>
-          <label>API token<input type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="Bearer token" /></label>
+          {userEmail ? <div className="auth-session"><span>Signed in as {userEmail}</span><button className="secondary" onClick={signOut} disabled={busy}>Sign out</button></div> : <><div className="auth-tabs"><button className={authMode === "login" ? "" : "secondary"} onClick={() => setAuthMode("login")}>Sign in</button><button className={authMode === "register" ? "" : "secondary"} onClick={() => setAuthMode("register")}>Create account</button></div><label>Email<input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label><label>Password<input type="password" autoComplete={authMode === "login" ? "current-password" : "new-password"} value={password} onChange={(event) => setPassword(event.target.value)} minLength={10} /></label><button onClick={authenticate} disabled={busy || !email || password.length < 10}>{authMode === "login" ? "Sign in" : "Create account"}</button></>}
           <label>Project name<input value={projectName} onChange={(event) => setProjectName(event.target.value)} /></label>
           <button onClick={createProject} disabled={busy}>{projectId ? "Project " + projectId.slice(0, 8) : "Create project"}</button>
           <button className="secondary" onClick={refreshProjects} disabled={busy || !token}>Refresh projects</button>
