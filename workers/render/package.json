@@ -13,6 +13,7 @@
     "@videocraft/jobs": "0.1.0",
     "@videocraft/persistence": "0.1.0",
     "@videocraft/rendering": "0.1.0",
+    "@videocraft/storage": "0.1.0",
     "@videocraft/transcription": "0.1.0",
     "bullmq": "^5.34.10"
   },
