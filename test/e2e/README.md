@@ -9,6 +9,15 @@ Flow: upload (junk and audio-only files rejected) → transcript with word times
 Renders are checked with ffprobe (dimensions, duration), a full decode, an SSIM check of the caption band, and
 a re-transcription of the exported audio (must contain the on-topic content and none of the cut content).
 
+## Browser UI test
+
+`ui.e2e.test.mjs` drives the real web editor in Chromium against the same real stack: sign up, upload, transcribe,
+find highlights (reasons, scores and timestamped evidence are asserted), accept, trim, correct a caption, check the
+signed source-playback URL and byte-range seeking, then export 9:16 and verify the downloaded file with ffprobe and
+a full decode. It found two real bugs when first run (body-less POSTs rejected by the API; upload handler crash).
+Playwright's open-source Chromium cannot decode H.264, so in-browser *playback* is asserted only where the browser
+supports it (the test says so when it skips that step). Set `PLAYWRIGHT_CHROMIUM` to use another browser binary.
+
 ## Running it
 
 The test is skipped unless offline speech models are available, because the production transcriber
@@ -31,7 +40,9 @@ Verified by this test and the package suites: upload validation, transcription p
 highlight scoring and explanations, timeline edits (ripple, reorder, trim, captions follow cuts), caption
 correction, platform renders with burned-in captions, playable output.
 
+Also verified in the package suites: face-aware reframing (needs OpenCV 4.x with Haar cascades; the test skips
+where they are missing), loudness normalisation measured with EBU R128, shot-change detection, edge snapping.
+
 Not verified in this environment: the production faster-whisper worker, Docker image builds, the Postgres/Redis
-backed queue and render-worker path, deployment to the staging server, face-aware reframing (render uses a
-centre crop), LLM-based scoring (scoring is heuristic and deterministic), learning from feedback (feedback is
+backed queue and render-worker path, deployment to the staging server, in-browser H.264 playback, LLM-based scoring (scoring is heuristic and deterministic), learning from feedback (feedback is
 stored only), B-roll, music and motion graphics.

@@ -1,8 +1,8 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { createReadStream } from "node:fs";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { RenderJobRepository, UUID } from "@videocraft/domain";
 import type { ObjectStorage } from "@videocraft/storage";
+import { sendRanged } from "./media-routes.js";
 
 export interface RenderRouteDependencies {
   jobs: RenderJobRepository; storage: ObjectStorage; signingSecret: string;
@@ -43,7 +43,7 @@ export function registerRenderRoutes(server: FastifyInstance, dependencies: Rend
     const query = request.query as { expires?: string; signature?: string };
     const signed = typeof query.expires === "string" && typeof query.signature === "string" && Number.isSafeInteger(Number(query.expires)) && Number(query.expires) >= Math.floor(Date.now() / 1000) && verify(params.projectId + ":" + params.renderId + ":" + output.storageKey + ":" + query.expires, query.signature, dependencies.signingSecret);
     if (!signed) return error(reply, 401, "invalid_download_signature", "Download URL is missing or expired");
-    return reply.type(output.mimeType).send(createReadStream(dependencies.storage.resolve(output.storageKey)));
+    return sendRanged(request, reply, dependencies.storage.resolve(output.storageKey), output.mimeType);
   });
   server.post("/v1/projects/:projectId/renders/:renderId/cancel", async (request, reply) => {
     const principal = await dependencies.authenticate(request);
