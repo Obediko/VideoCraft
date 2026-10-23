@@ -83,6 +83,18 @@ export function applyTimelineOperations(timeline: Timeline, operations: Timeline
         video.clips = ordered;
         break;
       }
+      case "set-music": {
+        const audio = ensureTrack(tracks, "audio", "music");
+        audio.clips = audio.clips.filter((clip) => clip.transform?.role !== "music");
+        const start = operation.sourceStartUs ?? 0;
+        // The span is re-laid to cover the whole cut by normalizeTimeline; the renderer loops the track.
+        audio.clips.push({ id: "music", assetId: operation.assetId, sourceStartUs: start, sourceEndUs: start + 1, timelineStartUs: 0, timelineEndUs: 1, transform: { role: "music", volumeDb: operation.volumeDb ?? -16, duck: operation.duck ?? true } });
+        break;
+      }
+      case "clear-music": {
+        for (const track of tracks) if (track.kind === "audio") track.clips = track.clips.filter((clip) => clip.transform?.role !== "music");
+        break;
+      }
       case "reorder-clips": {
         const video = tracks.find((track) => track.kind === "video");
         if (!video) throw new Error("Timeline has no video track");
@@ -148,6 +160,13 @@ export function normalizeTimeline(timeline: Timeline): Timeline {
     }
     track.clips = retimed.sort((a, b) => a.timelineStartUs - b.timelineStartUs);
   }
+
+  // A music bed always spans the whole cut, however the video track was edited.
+  for (const track of tracks) {
+    if (track.kind !== "audio") continue;
+    track.clips = track.clips.flatMap((clip) => clip.transform?.role !== "music" ? [clip] : videoEnd > 0 ? [{ ...clip, timelineStartUs: 0, timelineEndUs: videoEnd, sourceEndUs: clip.sourceStartUs + videoEnd }] : []);
+  }
+  for (let index = tracks.length - 1; index >= 0; index -= 1) if (tracks[index]!.kind === "audio" && tracks[index]!.clips.length === 0) tracks.splice(index, 1);
 
   let durationUs = videoEnd;
   if (!video || video.clips.length === 0) {
@@ -223,6 +242,14 @@ export function parseTimelineOperations(value: unknown): TimelineOperation[] {
       case "add-caption":
         if (!isText(op.text) || !isUs(op.atUs) || !isUs(op.durationUs) || op.durationUs <= 0) return fail("add-caption needs text, atUs and durationUs");
         return { type: "add-caption", text: op.text, atUs: op.atUs, durationUs: op.durationUs };
+      case "set-music":
+        if (!isId(op.assetId)) return fail("set-music needs assetId");
+        if (op.sourceStartUs !== undefined && !isUs(op.sourceStartUs)) return fail("set-music sourceStartUs must be a non-negative integer");
+        if (op.volumeDb !== undefined && !(typeof op.volumeDb === "number" && op.volumeDb >= -40 && op.volumeDb <= 0)) return fail("set-music volumeDb must be between -40 and 0");
+        if (op.duck !== undefined && typeof op.duck !== "boolean") return fail("set-music duck must be a boolean");
+        return { type: "set-music", assetId: op.assetId, ...(op.sourceStartUs === undefined ? {} : { sourceStartUs: op.sourceStartUs as number }), ...(op.volumeDb === undefined ? {} : { volumeDb: op.volumeDb as number }), ...(op.duck === undefined ? {} : { duck: op.duck as boolean }) };
+      case "clear-music":
+        return { type: "clear-music" };
       default:
         return fail("unknown operation type");
     }

@@ -152,7 +152,7 @@ registerAuthRoutes(server, {
   ...(secretEnvironment.AUTH_ISSUER ? { issuer: secretEnvironment.AUTH_ISSUER } : {}),
   ...(secretEnvironment.AUTH_AUDIENCE ? { audience: secretEnvironment.AUTH_AUDIENCE } : {}),
 });
-registerTimelineRoutes(server, { projects, revisions, preferences, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, saveRevision: (input) => timelineService.saveRevision(input) });
+registerTimelineRoutes(server, { projects, revisions, preferences, assets, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, saveRevision: (input) => timelineService.saveRevision(input) });
 registerFeedbackRoutes(server, { feedback, revisions, proposals: new PostgresProposalStore(db), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, now: () => new Date().toISOString() });
 registerIntentRoutes(server, { analyzer: intentAnalyzer, assets, transcripts, quota: providerQuota, providerRateLimitMax: boundedInteger("INTENT_PROVIDER_MAX_PER_MINUTE", 20, 1, 1_000), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
 registerRenderRoutes(server, { jobs: renderJobs, storage, signingSecret: requiredSecret("DOWNLOAD_SIGNING_SECRET"), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });

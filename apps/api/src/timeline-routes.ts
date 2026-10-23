@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { applyTimelineOperations, parseTimelineOperations, type PreferenceRepository, type ProjectRevision, type UUID } from "@videocraft/domain";
 import { record, removedSamples } from "./learning.js";
 import { exportOtio, importOtio } from "@videocraft/timeline-interchange";
-import type { ProjectRepository, RevisionRepository } from "@videocraft/application";
+import type { AssetRepository, ProjectRepository, RevisionRepository } from "@videocraft/application";
 
 export interface TimelineRouteDependencies {
   projects: ProjectRepository; revisions: RevisionRepository;
@@ -10,6 +10,8 @@ export interface TimelineRouteDependencies {
   authorize: { canAccess(principal: { userId: UUID }, projectId: UUID, role: "viewer" | "editor"): Promise<boolean> };
   /** When present, clips the person removes teach the highlight strategy. */
   preferences?: PreferenceRepository;
+  /** When present, operations may only reference this project's assets, of a kind that fits the operation. */
+  assets?: Pick<AssetRepository, "listForProject">;
   saveRevision(input: { projectId: UUID; createdBy: UUID; timeline: ProjectRevision["timeline"]; acceptedProposalIds: UUID[]; tailoring?: NonNullable<ProjectRevision["tailoring"]> }): Promise<ProjectRevision>;
 }
 export function registerTimelineRoutes(server: FastifyInstance, dependencies: TimelineRouteDependencies): void {
@@ -40,6 +42,13 @@ export function registerTimelineRoutes(server: FastifyInstance, dependencies: Ti
     if (project && project.revision !== base.revision) return error(reply, 409, "revision_conflict", "Revision " + project.revision + " is newer; reload before editing");
     try {
       const operations = parseTimelineOperations((request.body as { operations?: unknown } | undefined)?.operations);
+      if (dependencies.assets) {
+        const owned = new Map((await dependencies.assets.listForProject(params.projectId)).map((asset) => [asset.id, asset.kind]));
+        for (const operation of operations) {
+          if (operation.type === "insert-clip" && owned.get(operation.assetId) !== "video") return error(reply, 400, "invalid_edit", "insert-clip must reference a video asset in this project");
+          if (operation.type === "set-music" && owned.get(operation.assetId) !== "audio" && owned.get(operation.assetId) !== "video") return error(reply, 400, "invalid_edit", "set-music must reference an audio or video asset in this project");
+        }
+      }
       const revision = await dependencies.saveRevision({
         projectId: params.projectId,
         createdBy: principal.userId,

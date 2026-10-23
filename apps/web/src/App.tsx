@@ -59,6 +59,8 @@ export function App() {
   const [sourceUrls, setSourceUrls] = useState<Record<string, string>>({});
   const playerRef = useRef<HTMLVideoElement | null>(null);
   const [sourceRetry, setSourceRetry] = useState(0);
+  const [musicVolume, setMusicVolume] = useState(-16);
+  const [musicDuck, setMusicDuck] = useState(true);
   const [learned, setLearned] = useState<{ samples: number; summary: string; counts: Record<string, number> } | null>(null);
   const [sourceNote, setSourceNote] = useState("");
 
@@ -66,6 +68,10 @@ export function App() {
   const videoClips = useMemo(() => [...(videoTrack?.clips ?? [])].sort((a, b) => a.timelineStartUs - b.timelineStartUs), [videoTrack]);
   const captionCues = useMemo(() => timeline.tracks.filter((track) => track.kind === "caption").flatMap((track) => track.clips).sort((a, b) => a.timelineStartUs - b.timelineStartUs), [timeline]);
   const selectedClip = videoClips.find((clip) => clip.id === selectedClipId);
+  const musicClip = timeline.tracks.find((track) => track.kind === "audio")?.clips.find((clip) => clip.transform?.role === "music");
+  const musicName = musicClip ? String(assets.find((asset) => asset.id === musicClip.assetId)?.metadata.filename ?? musicClip.assetId.slice(0, 8)) : "";
+  const audioAssets = assets.filter((asset) => asset.kind === "audio");
+  const [musicAssetId, setMusicAssetId] = useState("");
   const sourceAssetId = selectedClip?.assetId ?? videoClips[0]?.assetId ?? "";
   const sourceUrl = sourceUrls[sourceAssetId] ?? "";
 
@@ -458,6 +464,15 @@ export function App() {
           <button className="secondary" onClick={analyzeBrief} disabled={busy || !projectId}>Analyze brief</button>
           <label>Target length (seconds)<input type="number" min={5} max={600} value={targetSeconds} onChange={(event) => setTargetSeconds(Math.max(5, Number(event.target.value) || 30))} /></label>
           <button className="secondary" onClick={previewProposal} disabled={busy || !revision}>Find highlights</button>
+        </section>
+        <section className="panel music-panel" aria-label="Background music">
+          <h2>Background music</h2>
+          {musicClip ? <p>Playing <strong>{musicName}</strong> at {String(musicClip.transform?.volumeDb)} dB{musicClip.transform?.duck === false ? "" : ", ducked under speech"}.</p> : <p className="muted">Upload an audio file, then lay it under the whole cut. It loops, fades and dips while people speak.</p>}
+          <label>Music track<select value={musicAssetId} onChange={(event) => setMusicAssetId(event.target.value)}><option value="">Choose an audio asset</option>{audioAssets.map((asset) => <option key={asset.id} value={asset.id}>{String(asset.metadata.filename ?? asset.id.slice(0, 8))}</option>)}</select></label>
+          <label>Music volume ({musicVolume} dB)<input type="range" min={-30} max={-4} step={1} value={musicVolume} onChange={(event) => setMusicVolume(Number(event.target.value))} /></label>
+          <label className="checkbox"><input type="checkbox" checked={musicDuck} onChange={(event) => setMusicDuck(event.target.checked)} /> Duck under speech</label>
+          <button className="secondary" onClick={() => void applyEdit([{ type: "set-music", assetId: musicAssetId, volumeDb: musicVolume, duck: musicDuck }], "Music set")} disabled={busy || revision === 0 || !musicAssetId}>{musicClip ? "Replace music" : "Add music"}</button>
+          {musicClip && <button className="secondary" onClick={() => void applyEdit([{ type: "clear-music" }], "Music removed")} disabled={busy}>Remove music</button>}
         </section>
         {learned && <section className="panel learned-panel" aria-label="Learned preferences">
           <h2>Learned from your edits</h2>
