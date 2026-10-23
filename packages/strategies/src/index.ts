@@ -79,6 +79,7 @@ function captionText(profile: TailoringProfile): string {
 }
 
 export * from "./highlights.js";
+export * from "./rerank.js";
 import { HighlightReelStrategy } from "./highlights.js";
 
 export class StaticStrategyRegistry {

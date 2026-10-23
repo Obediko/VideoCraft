@@ -44,5 +44,4 @@ Also verified in the package suites: face-aware reframing (needs OpenCV 4.x with
 where they are missing), loudness normalisation measured with EBU R128, shot-change detection, edge snapping.
 
 Not verified in this environment: the production faster-whisper worker, Docker image builds, the Postgres/Redis
-backed queue and render-worker path, deployment to the staging server, in-browser H.264 playback, LLM-based scoring (scoring is heuristic and deterministic), learning from feedback (feedback is
-stored only), B-roll, music and motion graphics.
+backed queue and render-worker path, deployment to the staging server, in-browser H.264 playback, the LLM re-ranker against a real provider (tested against a local mock of the API) Postgres migration 005 (preferences) against a real database, and motion graphics (not built).

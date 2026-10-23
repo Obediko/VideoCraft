@@ -1,13 +1,14 @@
 import { mergeSpans, pausesFromWords } from "@videocraft/analysis";
 import { buildCues, cueOperations } from "@videocraft/captions";
 import { describePreferences, type LearnedPreferences } from "@videocraft/domain";
+import type { HighlightReranker } from "./rerank.js";
 import type { EditingProposal, EditingStrategy, Evidence, TailoringProfile, TimelineOperation, TimelineSignals, TranscriptSegment, TranscriptWord } from "@videocraft/domain";
 
 export interface HighlightWeights { relevance: number; hook: number; density: number; completeness: number; length: number; delivery: number; }
 export type HighlightFeatures = Record<keyof HighlightWeights, number>;
 
 export interface HighlightScore { score: number; features: HighlightFeatures; matchedTerms: string[]; }
-export interface HighlightCandidate { startUs: number; endUs: number; text: string; unitIds: string[]; words: TranscriptWord[]; score: number; features: HighlightFeatures; matchedTerms: string[]; }
+export interface HighlightCandidate { startUs: number; endUs: number; text: string; unitIds: string[]; words: TranscriptWord[]; score: number; features: HighlightFeatures; matchedTerms: string[]; /** Why an AI judge rated this clip as it did, when re-ranking ran. */ judgeReason?: string; }
 
 interface Unit { id: string; startUs: number; endUs: number; text: string; words: TranscriptWord[]; }
 interface Policy { minUs: number; maxUs: number; idealUs: number; defaultTargetUs: number; weights: HighlightWeights; pauseCutUs: number; }
@@ -212,9 +213,12 @@ export function tightCuts(candidate: HighlightCandidate, bounds: { prevEndUs?: n
 
 function excerpt(text: string): string { return text.length > 240 ? text.slice(0, 237) + "…" : text; }
 
+export interface HighlightReelOptions { reranker?: HighlightReranker; /** Weight of the AI judgement in the final score (default 0.5). */ blend?: number; topK?: number; }
+
 export class HighlightReelStrategy implements EditingStrategy {
   readonly id = "highlight-reel";
   readonly version = "1.0.0";
+  constructor(private readonly options: HighlightReelOptions = {}) {}
 
   async propose(input: Parameters<EditingStrategy["propose"]>[0]): ReturnType<EditingStrategy["propose"]> {
     const { revision, profile, transcript, signals, learned } = input;
@@ -235,7 +239,39 @@ export class HighlightReelStrategy implements EditingStrategy {
     const policy = policyFor(profile, learned);
     const targetUs = profile.targetDurationUs && profile.targetDurationUs > 0 ? profile.targetDurationUs : policy.defaultTargetUs;
     const sourceDurationUs = sourceRange.endUs - sourceRange.startUs;
-    const candidates = findCandidates(relevant, profile, signals, sourceRange, learned);
+    let candidates = findCandidates(relevant, profile, signals, sourceRange, learned);
+    const rerankEvidence: Evidence[] = [];
+    if (this.options.reranker && candidates.length > 1) {
+      // The judge sees the strongest distinct windows; everything else keeps its heuristic score.
+      const pool: HighlightCandidate[] = [];
+      for (const candidate of candidates) {
+        if (pool.length >= (this.options.topK ?? 12)) break;
+        const overlapping = pool.some((other) => Math.min(other.endUs, candidate.endUs) - Math.max(other.startUs, candidate.startUs) > 0.5 * Math.min(other.endUs - other.startUs, candidate.endUs - candidate.startUs));
+        if (!overlapping) pool.push(candidate);
+      }
+      try {
+        const judged = await this.options.reranker.rerank({ profile, candidates: pool.map((candidate, index) => ({ id: "c" + index, text: candidate.text, startUs: candidate.startUs, endUs: candidate.endUs })) });
+        const blend = Math.min(1, Math.max(0, this.options.blend ?? 0.5));
+        const rated = judged.scores.flatMap((score) => { const window = pool[Number(score.id.slice(1))]; return window ? [{ window, score }] : []; });
+        // Every window gets the overlap-weighted judgement of the judged windows it shares time with, so
+        // a window the judge did not see cannot beat one it rated low just by being unseen.
+        candidates = candidates.map((candidate) => {
+          const length = candidate.endUs - candidate.startUs;
+          let weight = 0; let total = 0; let reason: string | undefined; let bestOverlap = 0;
+          for (const { window, score } of rated) {
+            const overlap = Math.max(0, Math.min(window.endUs, candidate.endUs) - Math.max(window.startUs, candidate.startUs)) / length;
+            if (overlap <= 0) continue;
+            weight += overlap; total += overlap * score.relevance;
+            if (overlap > bestOverlap && score.reason) { bestOverlap = overlap; reason = score.reason; }
+          }
+          if (weight < 0.3) return candidate;
+          return { ...candidate, score: round((1 - blend) * candidate.score + blend * (total / weight)), ...(reason ? { judgeReason: reason } : {}) };
+        }).sort((a, b) => b.score - a.score || a.startUs - b.startUs);
+        rerankEvidence.push({ source: "model", reference: "llm-rerank:" + judged.model.slice(0, 80), excerpt: "An AI judge (" + judged.model.slice(0, 80) + ") rated the " + pool.length + " strongest candidates for this goal and audience; its rating is " + Math.round(blend * 100) + "% of each score." });
+      } catch (error) {
+        rerankEvidence.push({ source: "model", reference: "llm-rerank", excerpt: "AI re-ranking was unavailable (" + (error instanceof Error ? error.message : "error").slice(0, 160) + "); heuristic scores were used." });
+      }
+    }
 
     // A source that already fits the target needs tightening, not selection.
     const wantsAll = sourceDurationUs <= targetUs * 1.05;
@@ -268,6 +304,7 @@ export class HighlightReelStrategy implements EditingStrategy {
     });
 
     for (const op of cueOperations(assetId, buildCues(allWords, { ranges: kept }))) operations.push(op);
+    evidence.push(...rerankEvidence);
     const learnedNote = learned ? describePreferences(learned, LABELS) : undefined;
     if (learned && learnedNote) evidence.push({ source: "model", reference: "learned-preferences", excerpt: "From " + learned.samples + " of your past edits: " + learnedNote + ". Multipliers: " + Object.entries(learned.multipliers).map(([key, value]) => key + " ×" + value).join(", ") });
 
@@ -311,6 +348,6 @@ function describe(candidate: HighlightCandidate, index: number, total: number, r
   const f = candidate.features;
   const strengths = (Object.entries(f) as Array<[keyof HighlightFeatures, number]>).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([key]) => LABELS[key]);
   const weak = (Object.entries(f) as Array<[keyof HighlightFeatures, number]>).sort((a, b) => a[1] - b[1])[0];
-  return "Highlight " + index + "/" + total + " (score " + candidate.score + "): strongest on " + strengths.join(" and ") + (weak && weak[1] < 0.5 ? "; weakest on " + LABELS[weak[0]] : "") + (candidate.matchedTerms.length ? "; speaks to " + candidate.matchedTerms.slice(0, 5).join(", ") : "") + (removedUs > 0 ? "; " + (removedUs / 1_000_000).toFixed(1) + "s of pauses removed" : "") + ".";
+  return "Highlight " + index + "/" + total + " (score " + candidate.score + "): strongest on " + strengths.join(" and ") + (weak && weak[1] < 0.5 ? "; weakest on " + LABELS[weak[0]] : "") + (candidate.matchedTerms.length ? "; speaks to " + candidate.matchedTerms.slice(0, 5).join(", ") : "") + (removedUs > 0 ? "; " + (removedUs / 1_000_000).toFixed(1) + "s of pauses removed" : "") + "." + (candidate.judgeReason ? " AI judge: " + candidate.judgeReason : "");
 }
 const LABELS: Record<keyof HighlightWeights, string> = { relevance: "relevance to the goal", hook: "opening hook", density: "information density", completeness: "self-contained wording", length: "length for the platform", delivery: "delivery pace" };
