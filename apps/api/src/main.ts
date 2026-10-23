@@ -4,7 +4,7 @@ import { Queue } from "bullmq";
 import { Redis } from "ioredis";
 import type { FastifyRequest } from "fastify";
 import { createDatabase, createPool, PostgresAssetRepository, PostgresProjectMemberRepository, PostgresProjectRepository, PostgresProposalStore, PostgresSceneRepository, PostgresRevisionRepository, PostgresTranscriptStore, PostgresRenderJobRepository, PostgresFeedbackRepository, PostgresPreferenceRepository, PostgresAuditRepository, type Database } from "@videocraft/persistence";
-import { BullMqRenderQueue, CloudflareQueueRenderQueue } from "@videocraft/jobs";
+import { BullMqMediaQueue, BullMqRenderQueue, CloudflareMediaQueue, CloudflareQueueRenderQueue, type MediaQueuePort } from "@videocraft/jobs";
 import { ProjectService } from "@videocraft/application";
 import { FasterWhisperWorker } from "@videocraft/transcription";
 import { LocalObjectStorage, S3ObjectStorage, type ObjectStorage } from "@videocraft/storage";
@@ -115,6 +115,11 @@ const cloudflareQueue = queueProvider === "cloudflare"
   : undefined;
 const bullmqQueue = queueProvider === "bullmq" ? new Queue("videocraft-render", { connection: redisOptions }) : undefined;
 const renderQueue = cloudflareQueue ?? bullmqQueue!;
+// Preview proxies go to the worker (MEDIA_JOBS=inline keeps them in the API process, e.g. for local development).
+const bullmqMediaQueue = queueProvider === "bullmq" && secretEnvironment.MEDIA_JOBS !== "inline" ? new Queue("videocraft-media", { connection: redisOptions }) : undefined;
+const mediaQueue: MediaQueuePort | undefined = secretEnvironment.MEDIA_JOBS === "inline" ? undefined
+  : queueProvider === "cloudflare" ? new CloudflareMediaQueue({ accountId: required("CF_ACCOUNT_ID"), queueId: required("CF_QUEUE_ID"), apiToken: requiredSecret("CF_QUEUES_API_TOKEN") })
+  : bullmqMediaQueue ? new BullMqMediaQueue(bullmqMediaQueue as never) : undefined;
 const timelineService = new ProjectService(projects, assets, revisions, { next: () => randomUUID() }, { now: () => new Date().toISOString() });
 const transcripts = new PostgresTranscriptStore(db);
 const feedback = new PostgresFeedbackRepository(db);
@@ -172,12 +177,13 @@ registerUploadRoutes(server, {
   imageInspector: (path) => isStillImage(path, secretEnvironment.FFPROBE_BIN ? { executable: secretEnvironment.FFPROBE_BIN } : {}),
   // Preview proxies for formats browsers cannot play (PREVIEW_PROXIES=false disables).
   ...(secretEnvironment.PREVIEW_PROXIES === "false" ? {} : { proxy: (input: string, output: string) => createProxy(input, output, secretEnvironment.FFMPEG_BIN ? { executable: secretEnvironment.FFMPEG_BIN } : {}) }),
+  ...(mediaQueue ? { proxyQueue: mediaQueue } : {}),
   onBackgroundDone: (assetId, outcome, caught) => { if (outcome === "failed") server.log.warn({ assetId, err: caught }, "Preview proxy failed"); },
 });
 
 const port = Number(secretEnvironment.PORT ?? "8080");
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("PORT must be a valid TCP port");
-const shutdown = async () => { await server.close(); await renderQueue.close(); await rateLimitRedis.quit(); await tracing.shutdown(); await pool.end(); };
+const shutdown = async () => { await server.close(); await renderQueue.close(); await bullmqMediaQueue?.close(); await rateLimitRedis.quit(); await tracing.shutdown(); await pool.end(); };
 process.once("SIGTERM", () => void shutdown());
 process.once("SIGINT", () => void shutdown());
 await server.listen({ host: "0.0.0.0", port });

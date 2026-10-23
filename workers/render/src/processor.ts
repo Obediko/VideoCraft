@@ -18,7 +18,7 @@ function outputExtension(format: RenderTask["settings"]["format"]): string {
   return format === "webm" ? "webm" : "mp4";
 }
 
-function createStorage(): ObjectStorage {
+export function createStorage(): ObjectStorage {
   if ((process.env.OBJECT_STORAGE_PROVIDER ?? "local") === "s3") {
     return new S3ObjectStorage({
       bucket: required("S3_BUCKET"),
