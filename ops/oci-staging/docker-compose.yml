@@ -96,7 +96,10 @@ services:
       INTENT_PROVIDER_MODE: rule-based
       MEDIA_ROOT: /tmp/videocraft-media
       WHISPER_WORKER_PATH: /app/workers/transcription/worker.py
+      WHISPER_MODEL: small
     tmpfs: ["/tmp:size=1g"]
+    # Downloaded once and kept across restarts; keeping it off the RAM-backed /tmp avoids out-of-memory kills.
+    volumes: [hfcache:/opt/hf-cache]
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -136,6 +139,7 @@ services:
     networks: [edge]
 
 volumes:
+  hfcache:
   pgdata:
   redisdata:
   clamdb:
