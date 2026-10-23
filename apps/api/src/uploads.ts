@@ -10,7 +10,7 @@ import type { Asset, UUID } from "@videocraft/domain";
 import type { AssetRepository } from "@videocraft/application";
 import type { ObjectStorage } from "@videocraft/storage";
 import type { MalwareScanner } from "@videocraft/security";
-import { validateMedia, type MediaInfo } from "@videocraft/analysis";
+import { isBrowserPlayable, validateMedia, type MediaInfo } from "@videocraft/analysis";
 
 export interface UploadDependencies {
   assets: AssetRepository;
@@ -21,6 +21,10 @@ export interface UploadDependencies {
   authorize: { canAccess(principal: { userId: UUID }, projectId: UUID, minimumRole: "viewer" | "editor"): Promise<boolean> };
   authenticate(request: FastifyRequest): Promise<{ userId: UUID } | null>;
   clock(): string;
+  /** Builds a browser-playable preview for uploads browsers cannot play directly. Runs after the upload responds. */
+  proxy?: (inputPath: string, outputPath: string) => Promise<void>;
+  /** Called when background work finishes or fails (for logging and tests). */
+  onBackgroundDone?: (assetId: UUID, outcome: "ready" | "failed", error?: unknown) => void;
 }
 
 export function registerUploadRoutes(server: FastifyInstance, dependencies: UploadDependencies): void {
@@ -63,12 +67,14 @@ export function registerUploadRoutes(server: FastifyInstance, dependencies: Uplo
           if (kind === "audio" && !info.hasAudio) throw new Error("File has no audio stream");
         } catch (caught) { return error(reply, 422, "invalid_media", caught instanceof Error ? caught.message : "Invalid media"); }
       }
+      const needsProxy = Boolean(dependencies.proxy && dependencies.assets.updateMetadata && info && kind === "video" && !isBrowserPlayable(info));
       const stored = await dependencies.storage.putFile(temporaryPath, storageKey);
       const asset: Asset = {
         id: assetId, projectId, kind, storageKey: stored.key, checksumSha256: stored.checksumSha256,
         ...(info ? { durationUs: info.durationUs } : {}),
         metadata: {
           filename: part.filename.slice(0, 255), mimeType: part.mimetype,
+          ...(needsProxy ? { proxyStatus: "pending" } : {}),
           ...(info ? { hasVideo: info.hasVideo, hasAudio: info.hasAudio, container: info.formatName.slice(0, 80), ...(info.width ? { width: info.width } : {}), ...(info.height ? { height: info.height } : {}), ...(info.frameRate ? { frameRate: info.frameRate } : {}), ...(info.videoCodec ? { videoCodec: info.videoCodec } : {}), ...(info.audioCodec ? { audioCodec: info.audioCodec } : {}) } : {}),
         },
         createdAt: dependencies.clock(),
@@ -79,6 +85,7 @@ export function registerUploadRoutes(server: FastifyInstance, dependencies: Uplo
         await dependencies.storage.remove(storageKey).catch(() => undefined);
         throw assetError;
       }
+      if (needsProxy) void buildProxy(dependencies, asset);
       return reply.code(201).send({ asset });
     } catch (caught) {
       return error(reply, 400, "upload_failed", caught instanceof Error ? caught.message : "Upload failed");
@@ -86,6 +93,27 @@ export function registerUploadRoutes(server: FastifyInstance, dependencies: Uplo
       await rm(temporaryPath, { force: true }).catch(() => undefined);
     }
   });
+}
+
+/** Generates the playback proxy from the stored original, then records its key on the asset. */
+async function buildProxy(dependencies: UploadDependencies, asset: Asset): Promise<void> {
+  const directory = join(tmpdir(), "videocraft-proxy", asset.id);
+  const proxyKey = "projects/" + asset.projectId + "/assets/" + asset.id + ".proxy.mp4";
+  try {
+    await mkdir(directory, { recursive: true });
+    let inputPath = dependencies.storage.resolve(asset.storageKey);
+    if (dependencies.storage.downloadToFile) { inputPath = join(directory, "input.media"); await dependencies.storage.downloadToFile(asset.storageKey, inputPath); }
+    const outputPath = join(directory, "proxy.mp4");
+    await dependencies.proxy!(inputPath, outputPath);
+    await dependencies.storage.putFile(outputPath, proxyKey);
+    await dependencies.assets.updateMetadata!(asset.id, { ...asset.metadata, proxyStatus: "ready", proxyKey });
+    dependencies.onBackgroundDone?.(asset.id, "ready");
+  } catch (caught) {
+    await dependencies.assets.updateMetadata!(asset.id, { ...asset.metadata, proxyStatus: "failed" }).catch(() => undefined);
+    dependencies.onBackgroundDone?.(asset.id, "failed", caught);
+  } finally {
+    await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+  }
 }
 
 function isKind(value: unknown): value is Asset["kind"] {

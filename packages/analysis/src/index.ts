@@ -206,3 +206,18 @@ export function scenesFromCuts(cuts: Microseconds[], durationUs: Microseconds): 
   const bounds = [0, ...cuts.filter((cut) => cut > 0 && cut < durationUs), durationUs];
   return bounds.slice(0, -1).map((startUs, index) => ({ startUs, endUs: bounds[index + 1] as number }));
 }
+
+/** Whether a typical browser can play the file directly: H.264 in MP4/MOV with AAC/MP3 (or no) audio, at most 1080p. */
+export function isBrowserPlayable(info: MediaInfo): boolean {
+  if (!info.hasVideo) return true;
+  const container = info.formatName.toLowerCase();
+  const audioOk = !info.hasAudio || info.audioCodec === "aac" || info.audioCodec === "mp3";
+  const sizeOk = (info.height ?? 0) <= 1080 && (info.width ?? 0) <= 1920 || (info.height ?? 0) <= 1920 && (info.width ?? 0) <= 1080;
+  return container.includes("mp4") && info.videoCodec === "h264" && audioOk && sizeOk;
+}
+
+/** Writes a browser-friendly H.264/AAC proxy (at most 720p, fast-start) for previewing in the editor. */
+export async function createProxy(inputPath: string, outputPath: string, options: ToolOptions & { maxHeight?: number } = {}): Promise<void> {
+  const maxHeight = options.maxHeight ?? 720;
+  await run(options.executable ?? "ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", "-i", inputPath, "-map", "0:v:0", "-map", "0:a:0?", "-vf", "scale=-2:'min(" + maxHeight + ",ih)':flags=bicubic,format=yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-crf", "26", "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-movflags", "+faststart", "-f", "mp4", outputPath], { ...options, timeoutMs: options.timeoutMs ?? 60 * 60_000 });
+}
