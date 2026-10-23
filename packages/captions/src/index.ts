@@ -176,3 +176,11 @@ export function assTime(us: number): string {
 export function escapeAss(text: string): string {
   return text.replace(/\\/g, "\\\\").replace(/\{/g, "(").replace(/\}/g, ")").replace(/[\r\n]+/g, " ");
 }
+export * from "./graphics.js";
+
+/** The vertical band (in pixels) captions of this style can occupy, assuming up to `lines` lines. */
+export function captionBand(style: CaptionStyle, height: number, lines = 3): { topY: number; bottomY: number } {
+  const fontSize = Math.max(12, Math.round(height * style.sizeRatio));
+  const bottomY = Math.round(height * (1 - style.bottomRatio));
+  return { topY: Math.max(0, bottomY - Math.round(lines * fontSize * 1.25)), bottomY };
+}

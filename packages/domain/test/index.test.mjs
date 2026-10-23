@@ -160,3 +160,27 @@ test("b-roll stays on its anchored moment through reorders, is clipped at cuts a
   assert.deepEqual(at(regrown), [[5_000_000, 7_000_000, "pip"]], "regains its full length when the host grows back");
   assert.throws(() => parse2([{ type: "add-broll", assetId: "x", anchorAssetId: "t", anchorSourceUs: 0, durationUs: 1_000_000, mode: "corner" }]), /mode/);
 });
+
+test("graphics anchor like b-roll, can be edited, and the progress bar spans the cut", () => {
+  const base = { durationUs: 10_000_000, tracks: [{ id: "v", kind: "video", clips: [
+    { id: "a", assetId: "talk", sourceStartUs: 0, sourceEndUs: 4_000_000, timelineStartUs: 0, timelineEndUs: 4_000_000 },
+    { id: "b", assetId: "talk", sourceStartUs: 10_000_000, sourceEndUs: 16_000_000, timelineStartUs: 4_000_000, timelineEndUs: 10_000_000 },
+  ] }] };
+  const ops = parse2([
+    { type: "add-graphic", kind: "lower-third", text: "Ada Obi", subtitle: "Founder, EDI", anchorAssetId: "talk", anchorSourceUs: 10_500_000, durationUs: 3_000_000, color: "#ff00ff" },
+    { type: "set-progress-bar", enabled: true, color: "#00ff00" },
+  ]);
+  const t = apply2(base, ops);
+  const overlay = (tl) => tl.tracks.find((track) => track.kind === "overlay")?.clips ?? [];
+  const gfx = overlay(t).find((c) => c.transform.role === "graphic");
+  assert.deepEqual([gfx.timelineStartUs, gfx.timelineEndUs, gfx.transform.kind, gfx.transform.subtitle, gfx.transform.color, gfx.transform.position], [4_500_000, 7_500_000, "lower-third", "Founder, EDI", "#FF00FF", "bottom"]);
+  assert.deepEqual(overlay(t).filter((c) => c.transform.role === "progress").map((c) => [c.timelineStartUs, c.timelineEndUs]), [[0, 10_000_000]]);
+  const moved = apply2(t, [{ type: "reorder-clips", clipIds: ["b", "a"] }, { type: "update-graphic", clipId: gfx.id, text: "Ada N. Obi", subtitle: "" }]);
+  const g2 = overlay(moved).find((c) => c.transform.role === "graphic");
+  assert.deepEqual([g2.timelineStartUs, g2.transform.text, g2.transform.subtitle], [500_000, "Ada N. Obi", undefined]);
+  const cut = apply2(t, [{ type: "remove-clip", clipId: "a" }, { type: "set-progress-bar", enabled: false }]);
+  assert.deepEqual(overlay(cut).map((c) => [c.transform.role, c.timelineStartUs]), [["graphic", 500_000]]);
+  assert.throws(() => parse2([{ type: "add-graphic", kind: "title", text: "x".repeat(121), anchorAssetId: "talk", anchorSourceUs: 0, durationUs: 1_000_000 }]), /1-120/);
+  assert.throws(() => parse2([{ type: "add-graphic", kind: "banner", text: "x", anchorAssetId: "talk", anchorSourceUs: 0, durationUs: 1_000_000 }]), /kind/);
+  assert.throws(() => parse2([{ type: "set-progress-bar", enabled: true, color: "red" }]), /RRGGBB/);
+});

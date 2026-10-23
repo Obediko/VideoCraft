@@ -76,6 +76,16 @@ export function App() {
   const [brollSeconds, setBrollSeconds] = useState(3);
   const [brollMode, setBrollMode] = useState<"full" | "pip">("full");
   const brollAssets = assets.filter((asset) => asset.kind === "image" || (asset.kind === "video" && !videoClips.some((clip) => clip.assetId === asset.id)));
+  const [gfxKind, setGfxKind] = useState<"title" | "callout" | "lower-third">("title");
+  const [gfxText, setGfxText] = useState("");
+  const [gfxSubtitle, setGfxSubtitle] = useState("");
+  const [gfxSeconds, setGfxSeconds] = useState(3);
+  const [gfxPosition, setGfxPosition] = useState<"top" | "center" | "bottom">("top");
+  const [gfxColor, setGfxColor] = useState("#F5A524");
+  const [gfxDrafts, setGfxDrafts] = useState<Record<string, string>>({});
+  const overlayClips = timeline.tracks.filter((track) => track.kind === "overlay").flatMap((track) => track.clips);
+  const graphicsClips = overlayClips.filter((clip) => clip.transform?.role === "graphic");
+  const progressClip = overlayClips.find((clip) => clip.transform?.role === "progress");
   const brolls = timeline.tracks.filter((track) => track.kind === "overlay").flatMap((track) => track.clips).filter((clip) => clip.transform?.role === "broll");
   const sourceAssetId = selectedClip?.assetId ?? videoClips[0]?.assetId ?? "";
   const sourceUrl = sourceUrls[sourceAssetId] ?? "";
@@ -142,6 +152,21 @@ export function App() {
     const host = videoClips.find((clip) => clip.assetId === anchorClip.assetId && playheadUs >= clip.sourceStartUs && playheadUs < clip.sourceEndUs);
     const anchorUs = host ? playheadUs : anchorClip.sourceStartUs;
     void applyEdit([{ type: "add-broll", assetId: brollAssetId, anchorAssetId: anchorClip.assetId, anchorSourceUs: anchorUs, durationUs: Math.round(brollSeconds * 1_000_000), mode: brollMode }], host ? "B-roll added" : "B-roll added at the start of the selected clip");
+  }
+  /** Anchor point under the playhead (or the selected clip's start), shared by b-roll and graphics. */
+  function playheadAnchor(): { anchorAssetId: string; anchorSourceUs: number; atPlayhead: boolean } | undefined {
+    const anchorClip = selectedClip ?? videoClips[0];
+    if (!anchorClip) return undefined;
+    const player = playerRef.current;
+    const playheadUs = player && previewMode === "source" && sourceUrl ? Math.round(player.currentTime * 1_000_000) : anchorClip.sourceStartUs;
+    const inside = videoClips.some((clip) => clip.assetId === anchorClip.assetId && playheadUs >= clip.sourceStartUs && playheadUs < clip.sourceEndUs);
+    return { anchorAssetId: anchorClip.assetId, anchorSourceUs: inside ? playheadUs : anchorClip.sourceStartUs, atPlayhead: inside };
+  }
+  function addGraphic() {
+    const anchor = playheadAnchor();
+    if (!anchor) { setStatus("Add a video clip first"); return; }
+    if (!gfxText.trim()) { setStatus("Enter the graphic's text"); return; }
+    void applyEdit([{ type: "add-graphic", kind: gfxKind, text: gfxText.trim(), ...(gfxSubtitle.trim() ? { subtitle: gfxSubtitle.trim() } : {}), anchorAssetId: anchor.anchorAssetId, anchorSourceUs: anchor.anchorSourceUs, durationUs: Math.round(gfxSeconds * 1_000_000), position: gfxKind === "lower-third" ? "bottom" : gfxPosition, color: gfxColor }], anchor.atPlayhead ? "Graphic added" : "Graphic added at the start of the selected clip").then((ok) => { if (ok) { setGfxText(""); setGfxSubtitle(""); } });
   }
   function markSegmentFromPlayhead(edge: "start" | "end") {
     const player = playerRef.current;
@@ -498,6 +523,18 @@ export function App() {
           <label>Style<select value={brollMode} onChange={(event) => setBrollMode(event.target.value as "full" | "pip")}><option value="full">Full frame</option><option value="pip">Corner inset</option></select></label>
           <button className="secondary" onClick={addBroll} disabled={busy || revision === 0 || !brollAssetId}>Add B-roll at playhead</button>
           {brolls.length > 0 && <ul className="broll-list">{brolls.map((clip) => <li key={clip.id}><span>{formatSeconds(clip.timelineStartUs)}–{formatSeconds(clip.timelineEndUs)} · {String(assets.find((asset) => asset.id === clip.assetId)?.metadata.filename ?? clip.assetId.slice(0, 8))} · {clip.transform?.mode === "pip" ? "inset" : "full"}</span><button className="secondary" onClick={() => void applyEdit([{ type: "remove-clip", clipId: clip.id, reason: "B-roll removed" }], "B-roll removed")} disabled={busy}>Remove</button></li>)}</ul>}
+        </section>
+        <section className="panel graphics-panel" aria-label="Motion graphics">
+          <h2>Motion graphics</h2>
+          <label>Graphic<select value={gfxKind} onChange={(event) => setGfxKind(event.target.value as "title" | "callout" | "lower-third")}><option value="title">Title card</option><option value="callout">Callout</option><option value="lower-third">Lower third (name + role)</option></select></label>
+          <label>{gfxKind === "lower-third" ? "Name" : "Text"}<input value={gfxText} maxLength={120} onChange={(event) => setGfxText(event.target.value)} /></label>
+          {gfxKind !== "callout" && <label>{gfxKind === "lower-third" ? "Role" : "Subtitle"} (optional)<input value={gfxSubtitle} maxLength={120} onChange={(event) => setGfxSubtitle(event.target.value)} /></label>}
+          {gfxKind !== "lower-third" && <label>Position<select value={gfxPosition} onChange={(event) => setGfxPosition(event.target.value as "top" | "center" | "bottom")}><option value="top">Top</option><option value="center">Centre</option><option value="bottom">Bottom</option></select></label>}
+          <label>On screen for (seconds)<input type="number" min={0.5} max={60} step={0.5} value={gfxSeconds} onChange={(event) => setGfxSeconds(Math.max(0.5, Number(event.target.value) || 3))} /></label>
+          <label>Accent colour<input type="color" value={gfxColor} onChange={(event) => setGfxColor(event.target.value)} /></label>
+          <button className="secondary" onClick={addGraphic} disabled={busy || revision === 0 || !gfxText.trim()}>Add graphic at playhead</button>
+          {graphicsClips.length > 0 && <ul className="broll-list graphics-list">{graphicsClips.map((clip) => { const original = String(clip.transform?.text ?? ""); const draft = gfxDrafts[clip.id] ?? original; return <li key={clip.id}><span>{formatSeconds(clip.timelineStartUs)} · {String(clip.transform?.kind)}</span><input aria-label={"Graphic text at " + formatSeconds(clip.timelineStartUs)} value={draft} maxLength={120} onChange={(event) => setGfxDrafts((current) => ({ ...current, [clip.id]: event.target.value }))} /><button className="secondary" onClick={() => void applyEdit([{ type: "update-graphic", clipId: clip.id, text: draft.trim() }], "Graphic updated").then((ok) => { if (ok) setGfxDrafts((current) => { const { [clip.id]: _done, ...rest } = current; return rest; }); })} disabled={busy || !draft.trim() || draft.trim() === original}>Save</button><button className="secondary" onClick={() => void applyEdit([{ type: "remove-clip", clipId: clip.id, reason: "Graphic removed" }], "Graphic removed")} disabled={busy}>Remove</button></li>; })}</ul>}
+          <label className="checkbox"><input type="checkbox" checked={Boolean(progressClip)} disabled={busy || revision === 0} onChange={(event) => void applyEdit([{ type: "set-progress-bar", enabled: event.target.checked, color: gfxColor }], event.target.checked ? "Progress bar on" : "Progress bar off")} /> Progress bar across the top</label>
         </section>
         {learned && <section className="panel learned-panel" aria-label="Learned preferences">
           <h2>Learned from your edits</h2>

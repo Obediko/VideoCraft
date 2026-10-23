@@ -101,6 +101,31 @@ export function applyTimelineOperations(timeline: Timeline, operations: Timeline
         overlay.clips.push({ id, assetId: operation.assetId, sourceStartUs: start, sourceEndUs: start + operation.durationUs, timelineStartUs: 0, timelineEndUs: operation.durationUs, transform: { role: "broll", mode: operation.mode ?? "full", anchorAssetId: operation.anchorAssetId, anchorSourceUs: operation.anchorSourceUs, durationUs: operation.durationUs } });
         break;
       }
+      case "add-graphic": {
+        if (operation.durationUs < 300_000) throw new Error("A graphic must be at least 0.3s long");
+        const overlay = ensureTrack(tracks, "overlay", "graphics");
+        const base = "gfx-" + operation.anchorSourceUs;
+        let id = base;
+        for (let n = 2; tracks.some((track) => track.clips.some((clip) => clip.id === id)); n += 1) id = base + "-" + n;
+        overlay.clips.push({ id, assetId: GENERATED_PREFIX + "graphic", sourceStartUs: 0, sourceEndUs: operation.durationUs, timelineStartUs: 0, timelineEndUs: operation.durationUs, transform: {
+          role: "graphic", kind: operation.kind, text: operation.text, ...(operation.subtitle ? { subtitle: operation.subtitle } : {}), position: operation.position ?? (operation.kind === "lower-third" ? "bottom" : "center"),
+          ...(operation.color ? { color: operation.color } : {}), anchorAssetId: operation.anchorAssetId, anchorSourceUs: operation.anchorSourceUs, durationUs: operation.durationUs,
+        } });
+        break;
+      }
+      case "update-graphic": {
+        const found = findClip(tracks, operation.clipId);
+        if (!found || found.clip.transform?.role !== "graphic") throw new Error("update-graphic references an unknown graphic");
+        const transform = { ...found.clip.transform, ...(operation.text !== undefined ? { text: operation.text } : {}) } as Record<string, string | number | boolean>;
+        if (operation.subtitle !== undefined) { if (operation.subtitle) transform.subtitle = operation.subtitle; else delete transform.subtitle; }
+        found.track.clips[found.index] = { ...found.clip, transform };
+        break;
+      }
+      case "set-progress-bar": {
+        for (const track of tracks) if (track.kind === "overlay") track.clips = track.clips.filter((clip) => clip.transform?.role !== "progress");
+        if (operation.enabled) ensureTrack(tracks, "overlay", "graphics").clips.push({ id: "progress", assetId: GENERATED_PREFIX + "progress", sourceStartUs: 0, sourceEndUs: 1, timelineStartUs: 0, timelineEndUs: 1, transform: { role: "progress", ...(operation.color ? { color: operation.color } : {}) } });
+        break;
+      }
       case "clear-music": {
         for (const track of tracks) if (track.kind === "audio") track.clips = track.clips.filter((clip) => clip.transform?.role !== "music");
         break;
@@ -175,7 +200,8 @@ export function normalizeTimeline(timeline: Timeline): Timeline {
   for (const track of tracks) {
     if (track.kind !== "overlay") continue;
     track.clips = track.clips.flatMap((clip) => {
-      if (clip.transform?.role !== "broll") return [clip];
+      if (clip.transform?.role === "progress") return videoEnd > 0 ? [{ ...clip, timelineStartUs: 0, timelineEndUs: videoEnd, sourceStartUs: 0, sourceEndUs: videoEnd }] : [];
+      if (clip.transform?.role !== "broll" && clip.transform?.role !== "graphic") return [clip];
       const anchorAsset = String(clip.transform.anchorAssetId);
       const anchor = Number(clip.transform.anchorSourceUs);
       const wanted = Number(clip.transform.durationUs);
@@ -277,6 +303,24 @@ export function parseTimelineOperations(value: unknown): TimelineOperation[] {
         return { type: "set-music", assetId: op.assetId, ...(op.sourceStartUs === undefined ? {} : { sourceStartUs: op.sourceStartUs as number }), ...(op.volumeDb === undefined ? {} : { volumeDb: op.volumeDb as number }), ...(op.duck === undefined ? {} : { duck: op.duck as boolean }) };
       case "clear-music":
         return { type: "clear-music" };
+      case "add-graphic": {
+        if (op.kind !== "title" && op.kind !== "callout" && op.kind !== "lower-third") return fail("add-graphic kind must be title, callout or lower-third");
+        if (!isGraphicText(op.text)) return fail("add-graphic text must be 1-120 characters");
+        if (op.subtitle !== undefined && op.subtitle !== "" && !isGraphicText(op.subtitle)) return fail("add-graphic subtitle must be at most 120 characters");
+        if (!isId(op.anchorAssetId) || !isUs(op.anchorSourceUs) || !isUs(op.durationUs) || (op.durationUs as number) < 300_000 || (op.durationUs as number) > 600_000_000) return fail("add-graphic needs anchorAssetId, anchorSourceUs and a duration of 0.3s-10min");
+        if (op.position !== undefined && op.position !== "top" && op.position !== "center" && op.position !== "bottom") return fail("add-graphic position must be top, center or bottom");
+        if (op.color !== undefined && !isHexColor(op.color)) return fail("color must be #RRGGBB");
+        return { type: "add-graphic", kind: op.kind, text: (op.text as string).trim(), ...(op.subtitle ? { subtitle: (op.subtitle as string).trim() } : {}), anchorAssetId: op.anchorAssetId, anchorSourceUs: op.anchorSourceUs as number, durationUs: op.durationUs as number, ...(op.position === undefined ? {} : { position: op.position as "top" | "center" | "bottom" }), ...(op.color === undefined ? {} : { color: (op.color as string).toUpperCase() }) };
+      }
+      case "update-graphic":
+        if (!isId(op.clipId) || (op.text === undefined && op.subtitle === undefined)) return fail("update-graphic needs clipId and text or subtitle");
+        if (op.text !== undefined && !isGraphicText(op.text)) return fail("update-graphic text must be 1-120 characters");
+        if (op.subtitle !== undefined && op.subtitle !== "" && !isGraphicText(op.subtitle)) return fail("update-graphic subtitle must be at most 120 characters");
+        return { type: "update-graphic", clipId: op.clipId, ...(op.text === undefined ? {} : { text: (op.text as string).trim() }), ...(op.subtitle === undefined ? {} : { subtitle: (op.subtitle as string).trim() }) };
+      case "set-progress-bar":
+        if (typeof op.enabled !== "boolean") return fail("set-progress-bar needs enabled");
+        if (op.color !== undefined && !isHexColor(op.color)) return fail("color must be #RRGGBB");
+        return { type: "set-progress-bar", enabled: op.enabled, ...(op.color === undefined ? {} : { color: (op.color as string).toUpperCase() }) };
       case "add-broll":
         if (!isId(op.assetId) || !isId(op.anchorAssetId) || !isUs(op.anchorSourceUs) || !isUs(op.durationUs) || (op.durationUs as number) < 200_000 || (op.durationUs as number) > 600_000_000) return fail("add-broll needs assetId, anchorAssetId, anchorSourceUs and a duration of 0.2s-10min");
         if (op.sourceStartUs !== undefined && !isUs(op.sourceStartUs)) return fail("add-broll sourceStartUs must be a non-negative integer");
@@ -287,6 +331,9 @@ export function parseTimelineOperations(value: unknown): TimelineOperation[] {
     }
   });
 }
+
+function isGraphicText(value: unknown): value is string { return typeof value === "string" && value.trim().length > 0 && value.trim().length <= 120 && !/[\u0000-\u001f]/.test(value); }
+function isHexColor(value: unknown): value is string { return typeof value === "string" && /^#[0-9a-fA-F]{6}$/.test(value); }
 
 function redistribute(totalCs: number, words: string[]): number[] {
   const weights = words.map((word) => Math.max(1, word.length));

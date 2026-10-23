@@ -91,3 +91,5 @@ h2 { margin-bottom: 14px; font-size: 14px; letter-spacing: .02em; }
 .checkbox input { width: auto; }
 .broll-list { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 6px; }
 .broll-list li { display: flex; justify-content: space-between; gap: 8px; align-items: center; font-size: 0.9em; }
+.graphics-list li { display: grid; grid-template-columns: auto 1fr auto auto; }
+input[type="color"] { padding: 0; height: 32px; }
