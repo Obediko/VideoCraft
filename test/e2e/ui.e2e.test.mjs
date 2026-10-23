@@ -180,15 +180,16 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
     await waitStatus(/Uploaded asset/);
     await videoClips.first().click();
     await page.getByLabel("B-roll media").selectOption({ label: "image · cutaway.png" });
-    await page.getByLabel("On screen for (seconds)").fill("2");
+    await page.locator(".broll-panel").getByLabel("On screen for (seconds)").fill("2");
     await page.getByRole("button", { name: "Add B-roll at playhead" }).click();
     await waitStatus(/B-roll added.*\(revision \d+\)/);
     await page.locator(".broll-list li").filter({ hasText: /cutaway\.png · full/ }).waitFor({ timeout: 10_000 });
 
     // Motion graphics: a title card (edited after adding) and a progress bar.
-    await page.getByLabel("Graphic", { exact: true }).selectOption("title");
-    await page.getByLabel("Text", { exact: true }).fill("Why onboarding fails");
-    await page.getByLabel("Accent colour").fill("#00ff00");
+    const gfxPanel = page.locator(".graphics-panel");
+    await gfxPanel.getByLabel("Graphic", { exact: true }).selectOption("title");
+    await gfxPanel.getByLabel("Text", { exact: true }).fill("Why onboarding fails");
+    await gfxPanel.getByLabel("Accent colour").fill("#00ff00");
     await page.getByRole("button", { name: "Add graphic at playhead" }).click();
     await waitStatus(/Graphic added.*\(revision \d+\)/);
     const gfxInput = page.locator(".graphics-list input").first();
