@@ -11,6 +11,7 @@ import type { AssetRepository } from "@videocraft/application";
 import type { ObjectStorage } from "@videocraft/storage";
 import type { MalwareScanner } from "@videocraft/security";
 import { isBrowserPlayable, validateMedia, type MediaInfo } from "@videocraft/analysis";
+import { processProxyTask, proxyTask, type MediaQueuePort } from "@videocraft/jobs";
 
 export interface UploadDependencies {
   assets: AssetRepository;
@@ -27,6 +28,8 @@ export interface UploadDependencies {
   proxy?: (inputPath: string, outputPath: string) => Promise<void>;
   /** Called when background work finishes or fails (for logging and tests). */
   onBackgroundDone?: (assetId: UUID, outcome: "ready" | "failed", error?: unknown) => void;
+  /** When set, proxies are built by the media worker instead of the API process. */
+  proxyQueue?: MediaQueuePort;
 }
 
 export function registerUploadRoutes(server: FastifyInstance, dependencies: UploadDependencies): void {
@@ -75,7 +78,7 @@ export function registerUploadRoutes(server: FastifyInstance, dependencies: Uplo
         catch (caught) { if ((caught as NodeJS.ErrnoException)?.code === "ENOENT") return error(reply, 503, "media_inspector_unavailable", "Media inspection is not available on this server"); }
         if (!still) return error(reply, 422, "invalid_media", "The file could not be read as an image");
       }
-      const needsProxy = Boolean(dependencies.proxy && dependencies.assets.updateMetadata && info && kind === "video" && !isBrowserPlayable(info));
+      const needsProxy = Boolean((dependencies.proxy || dependencies.proxyQueue) && dependencies.assets.updateMetadata && info && kind === "video" && !isBrowserPlayable(info));
       const stored = await dependencies.storage.putFile(temporaryPath, storageKey);
       const asset: Asset = {
         id: assetId, projectId, kind, storageKey: stored.key, checksumSha256: stored.checksumSha256,
@@ -103,24 +106,17 @@ export function registerUploadRoutes(server: FastifyInstance, dependencies: Uplo
   });
 }
 
-/** Generates the playback proxy from the stored original, then records its key on the asset. */
+/** Hands the proxy to the media queue when there is one; otherwise builds it here, after the response. */
 async function buildProxy(dependencies: UploadDependencies, asset: Asset): Promise<void> {
-  const directory = join(tmpdir(), "videocraft-proxy", asset.id);
-  const proxyKey = "projects/" + asset.projectId + "/assets/" + asset.id + ".proxy.mp4";
+  if (dependencies.proxyQueue) {
+    try { await dependencies.proxyQueue.enqueueProxy(asset); return; }
+    catch (caught) { dependencies.onBackgroundDone?.(asset.id, "failed", caught); }
+  }
   try {
-    await mkdir(directory, { recursive: true });
-    let inputPath = dependencies.storage.resolve(asset.storageKey);
-    if (dependencies.storage.downloadToFile) { inputPath = join(directory, "input.media"); await dependencies.storage.downloadToFile(asset.storageKey, inputPath); }
-    const outputPath = join(directory, "proxy.mp4");
-    await dependencies.proxy!(inputPath, outputPath);
-    await dependencies.storage.putFile(outputPath, proxyKey);
-    await dependencies.assets.updateMetadata!(asset.id, { ...asset.metadata, proxyStatus: "ready", proxyKey });
+    await processProxyTask(proxyTask(asset), { storage: dependencies.storage, assets: dependencies.assets, makeProxy: dependencies.proxy! });
     dependencies.onBackgroundDone?.(asset.id, "ready");
   } catch (caught) {
-    await dependencies.assets.updateMetadata!(asset.id, { ...asset.metadata, proxyStatus: "failed" }).catch(() => undefined);
     dependencies.onBackgroundDone?.(asset.id, "failed", caught);
-  } finally {
-    await rm(directory, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 

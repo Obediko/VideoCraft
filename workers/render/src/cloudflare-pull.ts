@@ -1,5 +1,8 @@
-import type { RenderTask } from "@videocraft/jobs";
+import { isMediaTask, type MediaTask, type RenderTask } from "@videocraft/jobs";
 import type { RenderTaskProcessor } from "./processor.js";
+import type { MediaTaskProcessor } from "./media.js";
+
+const MEDIA_MAX_ATTEMPTS = 3;
 
 type PulledMessage = { body: unknown; lease_id: string; id: string; attempts?: number };
 type PullResponse = { success?: boolean; result?: { messages?: PulledMessage[]; message_backlog_count?: number } };
@@ -32,17 +35,18 @@ async function requestJson<T>(url: string, token: string, init: RequestInit): Pr
   return payload;
 }
 
-function parseTask(body: unknown): RenderTask {
+export function parseTask(body: unknown): RenderTask | MediaTask {
   const value = typeof body === "string" ? JSON.parse(body) : body;
   const unwrapped = value && typeof value === "object" && "body" in value ? (value as { body: unknown }).body : value;
   const task = typeof unwrapped === "string" ? JSON.parse(unwrapped) : unwrapped;
+  if (isMediaTask(task)) return task;
   if (!task || typeof task !== "object" || typeof (task as { jobId?: unknown }).jobId !== "string") {
     throw new Error("Cloudflare queue message is not a render task");
   }
   return task as RenderTask;
 }
 
-export async function runCloudflarePullConsumer(processor: RenderTaskProcessor, signal: AbortSignal): Promise<void> {
+export async function runCloudflarePullConsumer(processor: RenderTaskProcessor, signal: AbortSignal, media?: MediaTaskProcessor): Promise<void> {
   const accountId = required("CF_ACCOUNT_ID");
   const queueId = required("CF_QUEUE_ID");
   const token = required("CF_QUEUES_API_TOKEN");
@@ -66,6 +70,20 @@ export async function runCloudflarePullConsumer(processor: RenderTaskProcessor, 
     for (const message of messages) {
       try {
         const task = parseTask(message.body);
+        if (isMediaTask(task)) {
+          // Media tasks get a bounded number of attempts; the last one records the failure and is acknowledged.
+          const final = (message.attempts ?? 1) >= MEDIA_MAX_ATTEMPTS;
+          try {
+            const outcome = media ? await media.process(task, { final }) : "skipped";
+            console.log(JSON.stringify({ event: "media.acknowledged", jobId: task.jobId, outcome }));
+            acks.push({ lease_id: message.lease_id });
+          } catch (error) {
+            if (!final) throw error;
+            console.error(JSON.stringify({ event: "media.failed", jobId: task.jobId, error: error instanceof Error ? error.message : "unknown error" }));
+            acks.push({ lease_id: message.lease_id });
+          }
+          continue;
+        }
         const result = await processor.process(task, { update: async () => undefined });
         if (result.status === "failed") throw new Error(result.errorMessage ?? "Render failed");
         acks.push({ lease_id: message.lease_id });

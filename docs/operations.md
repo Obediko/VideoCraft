@@ -20,6 +20,15 @@ Set OBJECT_STORAGE_PROVIDER=local for development. Set OBJECT_STORAGE_PROVIDER=s
 
 Set CLAMAV_HOST and optionally CLAMAV_PORT to enable the ClamAV INSTREAM adapter. Set MALWARE_SCAN_REQUIRED=true in production; the API then refuses to start without CLAMAV_HOST. Files are scanned while still in the temporary upload location and are promoted to object storage only after a clean result. Scanner outages return a 503 and never promote the file.
 
+## Background media jobs
+
+Uploads that browsers cannot play get a 720p H.264 preview proxy. The API never builds it itself when a queue is
+configured: it enqueues a `proxy` task (BullMQ queue `videocraft-media`, or a typed message on the Cloudflare render
+queue) and the render worker processes it with up to three attempts; only the last failed attempt marks the asset
+`proxyStatus: "failed"`. If enqueueing fails the API falls back to building the proxy in-process so uploads still
+preview. `MEDIA_JOBS=inline` forces in-process proxies (local development); `MEDIA_CONCURRENCY` sets worker parallelism.
+The render worker image therefore needs FFmpeg (it has it) and must see the same object storage as the API.
+
 ## Health endpoints
 
 - `GET /healthz` is a liveness check and does not require external dependencies.

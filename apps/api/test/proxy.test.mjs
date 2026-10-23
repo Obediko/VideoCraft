@@ -104,3 +104,39 @@ test("image uploads must decode as a still image", async () => {
     assert.equal(await send(Buffer.from("not an image"), "fake.png"), 422);
   } finally { await server.close(); rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("with a media queue the API only enqueues the proxy; if the queue is down it builds it in-process", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vc-q-"));
+  const source = join(dir, "clip.mkv");
+  execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=320x240:d=1:r=25", "-c:v", "mpeg4", source]);
+  const run = async (proxyQueue) => {
+    const assets = new InMemoryAssetRepository();
+    let inline = 0;
+    const outcome = new Promise((resolve) => { globalThis.__q = resolve; });
+    const server = Fastify();
+    registerUploadRoutes(server, { authenticate: async () => ({ userId: "u" }), authorize: { canAccess: async () => true }, assets, storage: new LocalObjectStorage(join(dir, "m" + Math.random())), clock: () => new Date().toISOString(), inspector: (p) => probeMedia(p), proxy: async (i, o) => { inline += 1; await createProxy(i, o); }, proxyQueue, onBackgroundDone: (id, result) => globalThis.__q(result) });
+    await server.listen({ host: "127.0.0.1", port: 0 });
+    try {
+      const form = new FormData();
+      form.append("file", new Blob([readFileSync(source)]), "clip.mkv");
+      const { asset } = await (await fetch("http://127.0.0.1:" + server.server.address().port + "/v1/projects/p1/assets/upload?kind=video", { method: "POST", body: form })).json();
+      return { asset, inline: () => inline, outcome, assets };
+    } finally { await server.close(); }
+  };
+  try {
+    const queued = [];
+    const viaQueue = await run({ enqueueProxy: async (asset) => { queued.push(asset.id); } });
+    await new Promise((r) => setTimeout(r, 300));
+    assert.deepEqual(queued, [viaQueue.asset.id]);
+    assert.equal(viaQueue.inline(), 0, "no proxy work in the API process");
+    assert.equal(viaQueue.asset.metadata.proxyStatus, "pending");
+
+    const queueDown = await run({ enqueueProxy: async () => { throw new Error("redis unavailable"); } });
+    assert.equal(await queueDown.outcome, "failed", "the enqueue failure is reported");
+    const start = Date.now();
+    while ((await queueDown.assets.listForProject("p1"))[0].metadata.proxyStatus === "pending" && Date.now() - start < 30_000) await new Promise((r) => setTimeout(r, 100));
+    const stored = (await queueDown.assets.listForProject("p1"))[0];
+    assert.equal(stored.metadata.proxyStatus, "ready", "and the proxy is still built in-process");
+    assert.equal(queueDown.inline(), 1);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
