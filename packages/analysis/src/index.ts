@@ -221,3 +221,18 @@ export async function createProxy(inputPath: string, outputPath: string, options
   const maxHeight = options.maxHeight ?? 720;
   await run(options.executable ?? "ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", "-i", inputPath, "-map", "0:v:0", "-map", "0:a:0?", "-vf", "scale=-2:'min(" + maxHeight + ",ih)':flags=bicubic,format=yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-crf", "26", "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-movflags", "+faststart", "-f", "mp4", outputPath], { ...options, timeoutMs: options.timeoutMs ?? 60 * 60_000 });
 }
+
+const STILL_CODECS = new Set(["png", "mjpeg", "jpegls", "webp", "bmp", "tiff", "gif"]);
+
+/** Whether the file decodes as a single still image (PNG, JPEG, WebP…). Throws if it is not decodable media. */
+export async function isStillImage(path: string, options: ToolOptions = {}): Promise<boolean> {
+  const { stdout } = await run(options.executable ?? "ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_name,nb_frames:format=format_name", "-of", "json", path], options);
+  const data = JSON.parse(stdout) as { streams?: Array<{ codec_name?: string; nb_frames?: string }>; format?: { format_name?: string } };
+  const stream = data.streams?.[0];
+  if (!stream?.codec_name) throw new Error("No image stream found");
+  const format = data.format?.format_name ?? "";
+  const frames = Number(stream.nb_frames ?? "1");
+  // ffprobe trusts the file extension; decoding one frame proves the bytes really are an image.
+  await run(options.executable === undefined ? "ffmpeg" : options.executable.replace(/ffprobe$/, "ffmpeg"), ["-v", "error", "-xerror", "-i", path, "-frames:v", "1", "-f", "null", "-"], options);
+  return STILL_CODECS.has(stream.codec_name) && (/image2|_pipe/.test(format) || !Number.isFinite(frames) || frames <= 1);
+}

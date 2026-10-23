@@ -9,6 +9,8 @@ export interface AssetPathResolver {
   /** Whether the staged asset has an audio stream. When omitted, assets are assumed silent. */
   hasAudio?(assetId: string): Promise<boolean>;
   /** Subject position (0..1) within a source range, used to aim cover-crops. Null means "use the centre". */
+  /** Whether the asset is a still image (looped for its on-screen time). Without it, assets are treated as video. */
+  isStill?(assetId: string): Promise<boolean>;
   focus?(assetId: string, startUs: number, endUs: number): Promise<{ x: number; y: number; confidence: number } | null>;
 }
 export interface RenderPlan { args: string[]; outputPath: string; /** Side files (e.g. caption documents) written before FFmpeg starts. */ files: Array<{ path: string; content: string }>; }
@@ -81,6 +83,17 @@ export class FfmpegCommandPlanner {
       // Looped so a short track covers a long cut; trimmed to the timeline in the graph.
       args.push("-stream_loop", "-1", "-ss", seconds(music.sourceStartUs), "-i", await this.assets.resolve(music.assetId));
     }
+    // B-roll inputs: stills are looped for their on-screen time, videos are seeked to their start.
+    const brolls = tracks.filter((track) => track.kind === "overlay").flatMap((track) => track.clips).filter((clip) => clip.transform?.role === "broll" && clip.timelineEndUs > clip.timelineStartUs).sort((a, b) => a.timelineStartUs - b.timelineStartUs);
+    if (brolls.length > 20) throw new Error("Renderer supports at most 20 B-roll overlays");
+    const brollInputs: number[] = [];
+    for (const broll of brolls) {
+      const length = ((broll.timelineEndUs - broll.timelineStartUs) / 1_000_000).toFixed(6);
+      const still = this.assets.isStill ? await this.assets.isStill(broll.assetId) : false;
+      brollInputs.push(nextInput++);
+      if (still) args.push("-loop", "1", "-framerate", String(fps), "-t", length, "-i", await this.assets.resolve(broll.assetId));
+      else args.push("-ss", seconds(broll.sourceStartUs), "-t", length, "-i", await this.assets.resolve(broll.assetId));
+    }
     const totalSeconds = clips.reduce((sum, clip) => sum + (clip.sourceEndUs - clip.sourceStartUs), 0) / 1_000_000;
 
     const contain = "scale=" + width + ":" + height + ":force_original_aspect_ratio=decrease,pad=" + width + ":" + height + ":(ow-iw)/2:(oh-ih)/2:color=black";
@@ -121,10 +134,23 @@ export class FfmpegCommandPlanner {
     const style = resolveCaptionStyle(settings.captionStyle);
     const cues = style ? captionCues(tracks, videoTrack, revision.timeline.durationUs) : [];
     let videoLabel = "[vcat]";
+    brolls.forEach((broll, index) => {
+      const start = (broll.timelineStartUs / 1_000_000).toFixed(6);
+      const end = (broll.timelineEndUs / 1_000_000).toFixed(6);
+      const pip = broll.transform?.mode === "pip";
+      const insetWidth = even(Math.max(2, Math.round(width * (width < height ? 0.5 : 0.32))));
+      const margin = Math.round(Math.min(width, height) * 0.04);
+      const scale = pip ? "scale=" + insetWidth + ":-2" : "scale=" + width + ":" + height + ":force_original_aspect_ratio=increase,crop=" + width + ":" + height;
+      filters.push("[" + brollInputs[index] + ":v]" + scale + ",fps=" + fps + ",setsar=1,format=yuva420p,setpts=PTS-STARTPTS+" + start + "/TB[b" + index + "]");
+      // Inset sits top-right, clear of the bottom caption band.
+      const position = pip ? "x=W-w-" + margin + ":y=" + margin : "x=0:y=0";
+      filters.push(videoLabel + "[b" + index + "]overlay=" + position + ":enable='between(t," + start + "," + end + ")':eof_action=pass[ov" + index + "]");
+      videoLabel = "[ov" + index + "]";
+    });
     if (style && cues.length > 0) {
       const assPath = outputPath + ".captions.ass";
       files.push({ path: assPath, content: renderAss(cues, style, { width, height }) });
-      filters.push("[vcat]ass=filename='" + escapeFilterPath(assPath) + "'[vout]");
+      filters.push(videoLabel + "ass=filename='" + escapeFilterPath(assPath) + "'[vout]");
       videoLabel = "[vout]";
     }
 

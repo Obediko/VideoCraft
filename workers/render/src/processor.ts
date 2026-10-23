@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import { safeMediaPath } from "@videocraft/transcription";
 import { FfmpegCommandPlanner, FfmpegProcess } from "@videocraft/rendering";
-import { detectFocus, probeMedia } from "@videocraft/analysis";
+import { detectFocus, isStillImage, probeMedia } from "@videocraft/analysis";
 import { LocalObjectStorage, S3ObjectStorage, type ObjectStorage } from "@videocraft/storage";
 import { PostgresRenderJobRepository, type Database } from "@videocraft/persistence";
 import type { RenderTask } from "@videocraft/jobs";
@@ -96,6 +96,12 @@ export class RenderTaskProcessor {
           const path = stagedAssets[assetId];
           if (!path) return false;
           return (await probeMedia(path, process.env.FFPROBE_BIN ? { executable: process.env.FFPROBE_BIN } : {})).hasAudio;
+        },
+        isStill: async (assetId: string): Promise<boolean> => {
+          const path = stagedAssets[assetId];
+          if (!path) return false;
+          try { return await isStillImage(path, process.env.FFPROBE_BIN ? { executable: process.env.FFPROBE_BIN } : {}); }
+          catch { return false; }
         },
         // Face-aware reframing is optional: without REFRAME_SCRIPT (or on any detector failure) crops stay centred.
         focus: async (assetId: string, startUs: number, endUs: number) => {

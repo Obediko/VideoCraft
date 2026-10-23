@@ -29,7 +29,9 @@ export class BullMqRenderQueue implements RendererPort {
       return job;
     }
     const projectAssets = this.assets ? await this.assets.listForProject(input.project.id) : [];
-    const assetStorageKeys = Object.fromEntries(projectAssets.map((asset) => [asset.id, asset.storageKey]));
+    // Only the assets this revision uses are staged; a project's unused uploads are never downloaded.
+    const used = new Set(input.revision.timeline.tracks.flatMap((track) => track.clips.map((clip) => clip.assetId)));
+    const assetStorageKeys = Object.fromEntries(projectAssets.filter((asset) => used.has(asset.id)).map((asset) => [asset.id, asset.storageKey]));
     await this.queue.add("render", { jobId, project: input.project, revision: input.revision, settings: input.settings, idempotencyKey: input.idempotencyKey, assetStorageKeys }, { jobId, removeOnComplete: 1000, removeOnFail: 5000 });
     const job: RenderJob = { id: jobId, projectId: input.project.id, revision: input.revision.revision, settings: input.settings, idempotencyKey: input.idempotencyKey, status: "queued", progress: 0 };
     await this.renderJobs?.save(job);

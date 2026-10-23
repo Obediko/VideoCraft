@@ -20,6 +20,11 @@ export type TimelineOperation =
   /** Background music under the whole cut (looped, faded, ducked under speech unless duck is false). */
   | { type: "set-music"; assetId: UUID; sourceStartUs?: Microseconds; volumeDb?: number; duck?: boolean }
   | { type: "clear-music" }
+  /**
+   * B-roll over the main video, anchored to a moment of a source video (anchorAssetId at anchorSourceUs)
+   * so it moves with that moment through cuts and reorders. "full" covers the frame, "pip" is a corner inset.
+   */
+  | { type: "add-broll"; assetId: UUID; anchorAssetId: UUID; anchorSourceUs: Microseconds; durationUs: Microseconds; sourceStartUs?: Microseconds; mode?: "full" | "pip" }
   /** Append (or insert at `index`) a segment of a source asset on the video track. */
   | { type: "insert-clip"; assetId: UUID; sourceStartUs: Microseconds; sourceEndUs: Microseconds; reason: string; score?: number; features?: Record<string, number>; index?: number }
   /** Reorder the video track; `clipIds` must list every video clip exactly once. */

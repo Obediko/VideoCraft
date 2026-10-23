@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { detectSceneCuts, parseSceneCuts, scenesFromCuts, detectFocus, parseFocus, parseSilenceDetect, parseProbe, speechSpans, pausesFromWords, validateMedia, probeMedia, detectSilence } from "../dist/index.js";
+import { isStillImage, detectSceneCuts, parseSceneCuts, scenesFromCuts, detectFocus, parseFocus, parseSilenceDetect, parseProbe, speechSpans, pausesFromWords, validateMedia, probeMedia, detectSilence } from "../dist/index.js";
 
 test("parses silencedetect output including a trailing open silence", () => {
   const out = "[silencedetect @ 0x1] silence_start: 1.5\n[silencedetect @ 0x1] silence_end: 2.25 | silence_duration: 0.75\n[silencedetect @ 0x1] silence_start: 9.0\n";
@@ -67,5 +67,18 @@ test("real ffmpeg: finds the shot changes in a video made of three colour shots"
     const cuts = await detectSceneCuts(path);
     assert.equal(cuts.length, 2);
     assert.ok(Math.abs(cuts[0] - 2_000_000) < 80_000 && Math.abs(cuts[1] - 4_000_000) < 80_000, JSON.stringify(cuts));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("real ffprobe: stills are recognised, videos are not, and junk is rejected", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vc-still-"));
+  try {
+    for (const name of ["a.png", "a.jpg", "a.webp"]) execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=red:s=64x64:d=1", "-frames:v", "1", join(dir, name)]);
+    execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=red:s=64x64:d=1:r=10", "-pix_fmt", "yuv420p", join(dir, "a.mp4")]);
+    for (const name of ["a.png", "a.jpg", "a.webp"]) assert.equal(await isStillImage(join(dir, name)), true, name);
+    assert.equal(await isStillImage(join(dir, "a.mp4")), false);
+    const junk = join(dir, "junk.png");
+    execFileSync("sh", ["-c", "echo not an image > " + JSON.stringify(junk)]);
+    await assert.rejects(isStillImage(junk));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

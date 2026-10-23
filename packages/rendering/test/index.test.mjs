@@ -182,3 +182,40 @@ test("real ffmpeg: background music loops under the cut and ducks while someone 
     assert.ok(Math.abs(band(flat, 2.7, 3.5) - band(flat, 0.6, 1.6)) < 3, "without ducking the music level is steady");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("real ffmpeg: b-roll stills and clips appear full-frame or as a top-right inset only during their window, under captions", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vc-broll-"));
+  try {
+    const talk = join(dir, "talk.mp4");
+    const red = join(dir, "red.png");
+    const blue = join(dir, "blue.mp4");
+    execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=0x404040:s=640x360:d=6:r=25", "-pix_fmt", "yuv420p", talk]);
+    execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=red:s=400x400:d=1", "-frames:v", "1", red]);
+    execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=blue:s=320x240:d=3:r=25", "-pix_fmt", "yuv420p", blue]);
+    const paths = { talk, red, blue };
+    const resolver = { resolve: async (id) => paths[id], isStill: async (id) => id === "red" };
+    const overlay = { id: "o", kind: "overlay", clips: [
+      { id: "b1", assetId: "red", sourceStartUs: 0, sourceEndUs: 1_000_000, timelineStartUs: 1_000_000, timelineEndUs: 2_000_000, transform: { role: "broll", mode: "full" } },
+      { id: "b2", assetId: "blue", sourceStartUs: 0, sourceEndUs: 1_500_000, timelineStartUs: 3_000_000, timelineEndUs: 4_500_000, transform: { role: "broll", mode: "pip" } },
+    ] };
+    const out = join(dir, "out.mp4");
+    const plan = await new FfmpegCommandPlanner(resolver).plan(revision([clip("c", 0, 6_000_000, 0)].map((c) => ({ ...c, assetId: "talk" })), [overlay]), { ...settings, width: 640, height: 360, captionStyle: undefined }, out);
+    await new FfmpegProcess().run(plan);
+    // Average colour of a region at a time, as [r, g, b].
+    const colour = (t, crop) => {
+      const raw = execFileSync("ffmpeg", ["-v", "error", "-ss", String(t), "-i", out, "-frames:v", "1", "-vf", "crop=" + crop + ",scale=1:1:flags=area", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]);
+      return [...raw.subarray(0, 3)];
+    };
+    const isRed = ([r, g, b]) => r > 180 && g < 70 && b < 70;
+    const isBlue = ([r, g, b]) => b > 180 && r < 70 && g < 70;
+    const isGrey = ([r, g, b]) => Math.abs(r - 64) < 20 && Math.abs(g - 64) < 20 && Math.abs(b - 64) < 20;
+    assert.ok(isGrey(colour(0.5, "640:360:0:0")), "main video before the b-roll");
+    assert.ok(isRed(colour(1.5, "640:360:0:0")), "still covers the full frame during its window: " + colour(1.5, "640:360:0:0"));
+    assert.ok(isGrey(colour(2.5, "640:360:0:0")), "gone after its window");
+    assert.ok(isBlue(colour(3.7, "120:60:500:30")), "clip inset sits top-right: " + colour(3.7, "120:60:500:30"));
+    assert.ok(isGrey(colour(3.7, "200:100:40:220")), "rest of the frame is still the main video");
+    assert.ok(isGrey(colour(5.0, "120:60:500:30")), "inset gone after its window");
+    const probe = JSON.parse(execFileSync("ffprobe", ["-v", "error", "-show_format", "-of", "json", out]).toString());
+    assert.ok(Math.abs(Number(probe.format.duration) - 6) < 0.2, "overlays do not change the length: " + probe.format.duration);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

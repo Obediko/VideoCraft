@@ -143,3 +143,20 @@ test("music bed spans the whole cut through edits and can be cleared", () => {
   assert.throws(() => parse2([{ type: "set-music", assetId: "s", volumeDb: 6 }]), /volumeDb/);
   assert.deepEqual(parse2([{ type: "set-music", assetId: "s", duck: false }, { type: "clear-music" }]), [{ type: "set-music", assetId: "s", duck: false }, { type: "clear-music" }]);
 });
+
+test("b-roll stays on its anchored moment through reorders, is clipped at cuts and vanishes with its moment", () => {
+  const base = { durationUs: 10_000_000, tracks: [{ id: "v", kind: "video", clips: [
+    { id: "a", assetId: "talk", sourceStartUs: 0, sourceEndUs: 4_000_000, timelineStartUs: 0, timelineEndUs: 4_000_000 },
+    { id: "b", assetId: "talk", sourceStartUs: 10_000_000, sourceEndUs: 16_000_000, timelineStartUs: 4_000_000, timelineEndUs: 10_000_000 },
+  ] }] };
+  const withBroll = apply2(base, [{ type: "add-broll", assetId: "city", anchorAssetId: "talk", anchorSourceUs: 11_000_000, durationUs: 2_000_000, mode: "pip" }]);
+  const overlay = () => (t) => t.tracks.find((track) => track.kind === "overlay")?.clips ?? [];
+  const at = (t) => overlay()(t).map((c) => [c.timelineStartUs, c.timelineEndUs, c.transform.mode]);
+  assert.deepEqual(at(withBroll), [[5_000_000, 7_000_000, "pip"]], "1s into clip b, which starts at 4s");
+  assert.deepEqual(at(apply2(withBroll, [{ type: "reorder-clips", clipIds: ["b", "a"] }])), [[1_000_000, 3_000_000, "pip"]], "moves with its moment");
+  assert.deepEqual(at(apply2(withBroll, [{ type: "trim-clip", clipId: "b", sourceStartUs: 10_000_000, sourceEndUs: 12_000_000 }])), [[5_000_000, 6_000_000, "pip"]], "clipped where its host clip now ends");
+  assert.deepEqual(at(apply2(withBroll, [{ type: "remove-clip", clipId: "b" }])), [], "removed with its moment");
+  const regrown = apply2(apply2(withBroll, [{ type: "trim-clip", clipId: "b", sourceStartUs: 10_000_000, sourceEndUs: 12_000_000 }]), [{ type: "trim-clip", clipId: "b", sourceStartUs: 10_000_000, sourceEndUs: 16_000_000 }]);
+  assert.deepEqual(at(regrown), [[5_000_000, 7_000_000, "pip"]], "regains its full length when the host grows back");
+  assert.throws(() => parse2([{ type: "add-broll", assetId: "x", anchorAssetId: "t", anchorSourceUs: 0, durationUs: 1_000_000, mode: "corner" }]), /mode/);
+});

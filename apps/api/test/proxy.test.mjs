@@ -88,3 +88,19 @@ test("an H.264 MP4 upload needs no proxy and is served with its declared type", 
     assert.equal(proxied, false);
   } finally { await server.close(); rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("image uploads must decode as a still image", async () => {
+  const { isStillImage } = await import("@videocraft/analysis");
+  const dir = mkdtempSync(join(tmpdir(), "vc-img-"));
+  const png = join(dir, "a.png");
+  execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=red:s=64x64:d=1", "-frames:v", "1", png]);
+  const server = Fastify();
+  registerUploadRoutes(server, { authenticate: async () => ({ userId: "u" }), authorize: { canAccess: async () => true }, assets: new InMemoryAssetRepository(), storage: new LocalObjectStorage(join(dir, "media")), clock: () => new Date().toISOString(), inspector: (p) => probeMedia(p), imageInspector: (p) => isStillImage(p) });
+  await server.listen({ host: "127.0.0.1", port: 0 });
+  const base = "http://127.0.0.1:" + server.server.address().port;
+  const send = async (bytes, name) => { const form = new FormData(); form.append("file", new Blob([bytes]), name); return (await fetch(base + "/v1/projects/p1/assets/upload?kind=image", { method: "POST", body: form })).status; };
+  try {
+    assert.equal(await send(readFileSync(png), "a.png"), 201);
+    assert.equal(await send(Buffer.from("not an image"), "fake.png"), 422);
+  } finally { await server.close(); rmSync(dir, { recursive: true, force: true }); }
+});
