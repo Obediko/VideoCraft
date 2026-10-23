@@ -89,3 +89,22 @@ test("Cloudflare producer publishes a typed media task that the consumer can tel
   const failing = new CloudflareMediaQueue({ accountId: "a", queueId: "q", apiToken: "t", fetchFn: async () => ({ ok: false, status: 500 }) });
   await assert.rejects(failing.enqueueProxy({ id: "a", projectId: "p", storageKey: "k" }), /HTTP 500/);
 });
+
+test("remote object storage: the proxy task stages the object instead of resolving a local path", async () => {
+  const assets = new InMemoryAssetRepository();
+  const asset = { id: "remote-1", projectId: "p1", kind: "video", storageKey: "projects/p1/assets/remote-1.media", checksumSha256: "b".repeat(64), metadata: { proxyStatus: "pending" }, createdAt: new Date().toISOString() };
+  await assets.save(asset);
+  const uploaded = [];
+  const storage = {
+    resolve() { throw new Error("S3 objects are not local filesystem paths"); },
+    async downloadToFile(key, path) { const { writeFile } = await import("node:fs/promises"); await writeFile(path, "media:" + key); },
+    async putFile(path, key) { uploaded.push(key); },
+  };
+  const workRoot = mkdtempSync(join(tmpdir(), "vc-remote-"));
+  try {
+    const outcome = await processProxyTask(proxyTask(asset), { assets, storage, workRoot, makeProxy: async (input, output) => { const { copyFile } = await import("node:fs/promises"); await copyFile(input, output); } });
+    assert.equal(outcome, "ready");
+    assert.deepEqual(uploaded, ["projects/p1/assets/remote-1.proxy.mp4"]);
+    assert.equal((await assets.listForProject("p1")).find((a) => a.id === "remote-1").metadata.proxyStatus, "ready");
+  } finally { rmSync(workRoot, { recursive: true, force: true }); }
+});
