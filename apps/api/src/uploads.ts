@@ -18,6 +18,8 @@ export interface UploadDependencies {
   scanner?: MalwareScanner;
   /** Extracts duration and stream metadata; uploads that cannot be decoded are rejected. */
   inspector?: (path: string) => Promise<MediaInfo>;
+  /** Confirms an "image" upload decodes as a still image. */
+  imageInspector?: (path: string) => Promise<boolean>;
   authorize: { canAccess(principal: { userId: UUID }, projectId: UUID, minimumRole: "viewer" | "editor"): Promise<boolean> };
   authenticate(request: FastifyRequest): Promise<{ userId: UUID } | null>;
   clock(): string;
@@ -66,6 +68,12 @@ export function registerUploadRoutes(server: FastifyInstance, dependencies: Uplo
           if (kind === "video" && !info.hasVideo) throw new Error("File has no video stream");
           if (kind === "audio" && !info.hasAudio) throw new Error("File has no audio stream");
         } catch (caught) { return error(reply, 422, "invalid_media", caught instanceof Error ? caught.message : "Invalid media"); }
+      }
+      if (dependencies.imageInspector && kind === "image") {
+        let still = false;
+        try { still = await dependencies.imageInspector(temporaryPath); }
+        catch (caught) { if ((caught as NodeJS.ErrnoException)?.code === "ENOENT") return error(reply, 503, "media_inspector_unavailable", "Media inspection is not available on this server"); }
+        if (!still) return error(reply, 422, "invalid_media", "The file could not be read as an image");
       }
       const needsProxy = Boolean(dependencies.proxy && dependencies.assets.updateMetadata && info && kind === "video" && !isBrowserPlayable(info));
       const stored = await dependencies.storage.putFile(temporaryPath, storageKey);

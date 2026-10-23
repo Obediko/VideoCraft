@@ -91,6 +91,16 @@ export function applyTimelineOperations(timeline: Timeline, operations: Timeline
         audio.clips.push({ id: "music", assetId: operation.assetId, sourceStartUs: start, sourceEndUs: start + 1, timelineStartUs: 0, timelineEndUs: 1, transform: { role: "music", volumeDb: operation.volumeDb ?? -16, duck: operation.duck ?? true } });
         break;
       }
+      case "add-broll": {
+        if (operation.durationUs < 200_000) throw new Error("B-roll must be at least 0.2s long");
+        const overlay = ensureTrack(tracks, "overlay", "broll");
+        const base = "broll-" + operation.anchorSourceUs;
+        let id = base;
+        for (let n = 2; tracks.some((track) => track.clips.some((clip) => clip.id === id)); n += 1) id = base + "-" + n;
+        const start = operation.sourceStartUs ?? 0;
+        overlay.clips.push({ id, assetId: operation.assetId, sourceStartUs: start, sourceEndUs: start + operation.durationUs, timelineStartUs: 0, timelineEndUs: operation.durationUs, transform: { role: "broll", mode: operation.mode ?? "full", anchorAssetId: operation.anchorAssetId, anchorSourceUs: operation.anchorSourceUs, durationUs: operation.durationUs } });
+        break;
+      }
       case "clear-music": {
         for (const track of tracks) if (track.kind === "audio") track.clips = track.clips.filter((clip) => clip.transform?.role !== "music");
         break;
@@ -160,6 +170,23 @@ export function normalizeTimeline(timeline: Timeline): Timeline {
     }
     track.clips = retimed.sort((a, b) => a.timelineStartUs - b.timelineStartUs);
   }
+
+  // B-roll follows the moment it is anchored to and never straddles a cut; it disappears with its moment.
+  for (const track of tracks) {
+    if (track.kind !== "overlay") continue;
+    track.clips = track.clips.flatMap((clip) => {
+      if (clip.transform?.role !== "broll") return [clip];
+      const anchorAsset = String(clip.transform.anchorAssetId);
+      const anchor = Number(clip.transform.anchorSourceUs);
+      const wanted = Number(clip.transform.durationUs);
+      const host = video?.clips.find((candidate) => candidate.assetId === anchorAsset && anchor >= candidate.sourceStartUs && anchor < candidate.sourceEndUs);
+      if (!host) return [];
+      const start = host.timelineStartUs + (anchor - host.sourceStartUs);
+      const end = Math.min(start + wanted, host.timelineEndUs);
+      return end - start >= 200_000 ? [{ ...clip, timelineStartUs: start, timelineEndUs: end, sourceEndUs: clip.sourceStartUs + (end - start) }] : [];
+    }).sort((a, b) => a.timelineStartUs - b.timelineStartUs);
+  }
+  for (let index = tracks.length - 1; index >= 0; index -= 1) if (tracks[index]!.kind === "overlay" && tracks[index]!.clips.length === 0) tracks.splice(index, 1);
 
   // A music bed always spans the whole cut, however the video track was edited.
   for (const track of tracks) {
@@ -250,6 +277,11 @@ export function parseTimelineOperations(value: unknown): TimelineOperation[] {
         return { type: "set-music", assetId: op.assetId, ...(op.sourceStartUs === undefined ? {} : { sourceStartUs: op.sourceStartUs as number }), ...(op.volumeDb === undefined ? {} : { volumeDb: op.volumeDb as number }), ...(op.duck === undefined ? {} : { duck: op.duck as boolean }) };
       case "clear-music":
         return { type: "clear-music" };
+      case "add-broll":
+        if (!isId(op.assetId) || !isId(op.anchorAssetId) || !isUs(op.anchorSourceUs) || !isUs(op.durationUs) || (op.durationUs as number) < 200_000 || (op.durationUs as number) > 600_000_000) return fail("add-broll needs assetId, anchorAssetId, anchorSourceUs and a duration of 0.2s-10min");
+        if (op.sourceStartUs !== undefined && !isUs(op.sourceStartUs)) return fail("add-broll sourceStartUs must be a non-negative integer");
+        if (op.mode !== undefined && op.mode !== "full" && op.mode !== "pip") return fail("add-broll mode must be full or pip");
+        return { type: "add-broll", assetId: op.assetId, anchorAssetId: op.anchorAssetId, anchorSourceUs: op.anchorSourceUs as number, durationUs: op.durationUs as number, ...(op.sourceStartUs === undefined ? {} : { sourceStartUs: op.sourceStartUs as number }), ...(op.mode === undefined ? {} : { mode: op.mode as "full" | "pip" }) };
       default:
         return fail("unknown operation type");
     }

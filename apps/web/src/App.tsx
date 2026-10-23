@@ -72,6 +72,11 @@ export function App() {
   const musicName = musicClip ? String(assets.find((asset) => asset.id === musicClip.assetId)?.metadata.filename ?? musicClip.assetId.slice(0, 8)) : "";
   const audioAssets = assets.filter((asset) => asset.kind === "audio");
   const [musicAssetId, setMusicAssetId] = useState("");
+  const [brollAssetId, setBrollAssetId] = useState("");
+  const [brollSeconds, setBrollSeconds] = useState(3);
+  const [brollMode, setBrollMode] = useState<"full" | "pip">("full");
+  const brollAssets = assets.filter((asset) => asset.kind === "image" || (asset.kind === "video" && !videoClips.some((clip) => clip.assetId === asset.id)));
+  const brolls = timeline.tracks.filter((track) => track.kind === "overlay").flatMap((track) => track.clips).filter((clip) => clip.transform?.role === "broll");
   const sourceAssetId = selectedClip?.assetId ?? videoClips[0]?.assetId ?? "";
   const sourceUrl = sourceUrls[sourceAssetId] ?? "";
 
@@ -126,6 +131,17 @@ export function App() {
     if (!player || !selectedClip) { setStatus("Select a clip first"); return; }
     const at = Math.round(player.currentTime * 1_000_000);
     if (edge === "start") trimSelectedClip(at - selectedClip.sourceStartUs, 0); else trimSelectedClip(0, at - selectedClip.sourceEndUs);
+  }
+  /** B-roll is anchored to the source moment under the playhead (or the selected clip's start). */
+  function addBroll() {
+    const anchorClip = selectedClip ?? videoClips[0];
+    if (!anchorClip) { setStatus("Add a video clip first"); return; }
+    const player = playerRef.current;
+    const playheadUs = player && previewMode === "source" && sourceUrl ? Math.round(player.currentTime * 1_000_000) : anchorClip.sourceStartUs;
+    // A playhead outside the cut falls back to the start of the selected clip.
+    const host = videoClips.find((clip) => clip.assetId === anchorClip.assetId && playheadUs >= clip.sourceStartUs && playheadUs < clip.sourceEndUs);
+    const anchorUs = host ? playheadUs : anchorClip.sourceStartUs;
+    void applyEdit([{ type: "add-broll", assetId: brollAssetId, anchorAssetId: anchorClip.assetId, anchorSourceUs: anchorUs, durationUs: Math.round(brollSeconds * 1_000_000), mode: brollMode }], host ? "B-roll added" : "B-roll added at the start of the selected clip");
   }
   function markSegmentFromPlayhead(edge: "start" | "end") {
     const player = playerRef.current;
@@ -473,6 +489,15 @@ export function App() {
           <label className="checkbox"><input type="checkbox" checked={musicDuck} onChange={(event) => setMusicDuck(event.target.checked)} /> Duck under speech</label>
           <button className="secondary" onClick={() => void applyEdit([{ type: "set-music", assetId: musicAssetId, volumeDb: musicVolume, duck: musicDuck }], "Music set")} disabled={busy || revision === 0 || !musicAssetId}>{musicClip ? "Replace music" : "Add music"}</button>
           {musicClip && <button className="secondary" onClick={() => void applyEdit([{ type: "clear-music" }], "Music removed")} disabled={busy}>Remove music</button>}
+        </section>
+        <section className="panel broll-panel" aria-label="B-roll">
+          <h2>B-roll</h2>
+          <p className="muted">Cut away to an image or clip at the playhead. It stays on that moment when you re-cut.</p>
+          <label>B-roll media<select value={brollAssetId} onChange={(event) => setBrollAssetId(event.target.value)}><option value="">Choose an image or video</option>{brollAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.kind} · {String(asset.metadata.filename ?? asset.id.slice(0, 8))}</option>)}</select></label>
+          <label>On screen for (seconds)<input type="number" min={0.5} max={60} step={0.5} value={brollSeconds} onChange={(event) => setBrollSeconds(Math.max(0.5, Number(event.target.value) || 3))} /></label>
+          <label>Style<select value={brollMode} onChange={(event) => setBrollMode(event.target.value as "full" | "pip")}><option value="full">Full frame</option><option value="pip">Corner inset</option></select></label>
+          <button className="secondary" onClick={addBroll} disabled={busy || revision === 0 || !brollAssetId}>Add B-roll at playhead</button>
+          {brolls.length > 0 && <ul className="broll-list">{brolls.map((clip) => <li key={clip.id}><span>{formatSeconds(clip.timelineStartUs)}–{formatSeconds(clip.timelineEndUs)} · {String(assets.find((asset) => asset.id === clip.assetId)?.metadata.filename ?? clip.assetId.slice(0, 8))} · {clip.transform?.mode === "pip" ? "inset" : "full"}</span><button className="secondary" onClick={() => void applyEdit([{ type: "remove-clip", clipId: clip.id, reason: "B-roll removed" }], "B-roll removed")} disabled={busy}>Remove</button></li>)}</ul>}
         </section>
         {learned && <section className="panel learned-panel" aria-label="Learned preferences">
           <h2>Learned from your edits</h2>

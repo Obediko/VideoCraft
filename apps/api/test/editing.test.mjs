@@ -128,6 +128,11 @@ test("edits may only reference this project's assets, of the right kind; music i
   assert.equal(withMusic.statusCode, 201, withMusic.body);
   const music = withMusic.json().revision.timeline.tracks.find((t) => t.kind === "audio").clips[0];
   assert.deepEqual([music.assetId, music.timelineEndUs, music.transform.volumeDb], ["song", 5_000_000, -18]);
-  const cleared = await edit(2, [{ type: "clear-music" }]);
+  assert.equal((await edit(2, [{ type: "add-broll", assetId: "song", anchorAssetId: "talk", anchorSourceUs: 1_000_000, durationUs: 1_000_000 }])).statusCode, 400, "audio cannot be b-roll");
+  assert.equal((await edit(2, [{ type: "add-broll", assetId: "pic", anchorAssetId: "song", anchorSourceUs: 1_000_000, durationUs: 1_000_000 }])).statusCode, 400, "b-roll must anchor to a video");
+  const withBroll = await edit(2, [{ type: "add-broll", assetId: "pic", anchorAssetId: "talk", anchorSourceUs: 1_000_000, durationUs: 1_500_000, mode: "pip" }]);
+  assert.equal(withBroll.statusCode, 201, withBroll.body);
+  assert.deepEqual(withBroll.json().revision.timeline.tracks.find((t) => t.kind === "overlay").clips.map((c) => [c.assetId, c.timelineStartUs, c.timelineEndUs]), [["pic", 1_000_000, 2_500_000]]);
+  const cleared = await edit(3, [{ type: "clear-music" }]);
   assert.equal(cleared.json().revision.timeline.tracks.some((t) => t.kind === "audio"), false);
 });

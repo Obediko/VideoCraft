@@ -41,7 +41,9 @@ export class CloudflareQueueRenderQueue implements RendererPort {
     if (persisted) return persisted;
 
     const projectAssets = this.assets ? await this.assets.listForProject(input.project.id) : [];
-    const assetStorageKeys = Object.fromEntries(projectAssets.map((asset) => [asset.id, asset.storageKey]));
+    // Only the assets this revision uses are staged; a project's unused uploads are never downloaded.
+    const used = new Set(input.revision.timeline.tracks.flatMap((track) => track.clips.map((clip) => clip.assetId)));
+    const assetStorageKeys = Object.fromEntries(projectAssets.filter((asset) => used.has(asset.id)).map((asset) => [asset.id, asset.storageKey]));
     const task: RenderTask = {
       jobId,
       project: input.project,

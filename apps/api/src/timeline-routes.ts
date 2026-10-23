@@ -46,6 +46,8 @@ export function registerTimelineRoutes(server: FastifyInstance, dependencies: Ti
         const owned = new Map((await dependencies.assets.listForProject(params.projectId)).map((asset) => [asset.id, asset.kind]));
         for (const operation of operations) {
           if (operation.type === "insert-clip" && owned.get(operation.assetId) !== "video") return error(reply, 400, "invalid_edit", "insert-clip must reference a video asset in this project");
+          if (operation.type === "add-broll" && owned.get(operation.assetId) !== "video" && owned.get(operation.assetId) !== "image") return error(reply, 400, "invalid_edit", "add-broll must reference a video or image asset in this project");
+          if (operation.type === "add-broll" && owned.get(operation.anchorAssetId) !== "video") return error(reply, 400, "invalid_edit", "add-broll must be anchored to a video asset in this project");
           if (operation.type === "set-music" && owned.get(operation.assetId) !== "audio" && owned.get(operation.assetId) !== "video") return error(reply, 400, "invalid_edit", "set-music must reference an audio or video asset in this project");
         }
       }

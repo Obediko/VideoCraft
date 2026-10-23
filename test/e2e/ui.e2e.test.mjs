@@ -16,7 +16,7 @@ import { registerRenderRoutes } from "../../apps/api/dist/render-routes.js";
 import { registerMediaRoutes } from "../../apps/api/dist/media-routes.js";
 import { registerPreferenceRoutes } from "../../apps/api/dist/learning.js";
 import { StorageSilenceDetector } from "../../apps/api/dist/media-analysis.js";
-import { probeMedia } from "../../packages/analysis/dist/index.js";
+import { isStillImage, probeMedia } from "../../packages/analysis/dist/index.js";
 import { FasterWhisperWorker } from "../../packages/transcription/dist/index.js";
 import { LocalObjectStorage } from "../../packages/storage/dist/index.js";
 import { FfmpegCommandPlanner, FfmpegProcess } from "../../packages/rendering/dist/index.js";
@@ -64,7 +64,8 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
         const key = "projects/" + project.id + "/renders/" + job.id + ".mp4";
         const out = storage.resolve(key);
         mkdirSync(dirname(out), { recursive: true });
-        const planner = new FfmpegCommandPlanner({ resolve: async (assetId) => storage.resolve((await assets.listForProject(project.id)).find((a) => a.id === assetId).storageKey), hasAudio: async () => true });
+        const pathOf = async (assetId) => storage.resolve((await assets.listForProject(project.id)).find((a) => a.id === assetId).storageKey);
+        const planner = new FfmpegCommandPlanner({ resolve: pathOf, hasAudio: async (assetId) => (await probeMedia(await pathOf(assetId))).hasAudio, isStill: async (assetId) => isStillImage(await pathOf(assetId)).catch(() => false) });
         await new FfmpegProcess().run(await planner.plan(revision, settings, out));
         jobs.set(job.id, { ...job, status: "succeeded", progress: 100, output: { storageKey: key, mimeType: "video/mp4", sizeBytes: 1, checksumSha256: "x" } });
       })().catch((error) => jobs.set(job.id, { ...job, status: "failed", progress: 0, errorMessage: String(error) }));
@@ -79,8 +80,8 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
     transcriber: new FasterWhisperWorker({ pythonCommand: "python3", workerPath: join(here, "sherpa_worker.py"), mediaRoot }),
     silenceDetector: new StorageSilenceDetector(storage),
   });
-  registerUploadRoutes(server, { assets, storage, authorize, authenticate, clock: clock.now, inspector: (p) => probeMedia(p) });
-  registerTimelineRoutes(server, { projects, revisions, preferences, authenticate, authorize, saveRevision: (i) => service.saveRevision(i) });
+  registerUploadRoutes(server, { assets, storage, authorize, authenticate, clock: clock.now, inspector: (p) => probeMedia(p), imageInspector: (p) => isStillImage(p) });
+  registerTimelineRoutes(server, { projects, revisions, preferences, assets, authenticate, authorize, saveRevision: (i) => service.saveRevision(i) });
   registerRenderRoutes(server, { jobs: jobRepository, storage, signingSecret: "test-signing-secret-test-signing", authenticate, authorize });
   registerPreferenceRoutes(server, { preferences, authenticate });
   registerMediaRoutes(server, { assets, storage, signingSecret: "test-signing-secret-test-signing", authenticate, authorize });
@@ -171,6 +172,19 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
     await waitStatus(/Music set \(revision \d+\)/);
     await page.locator(".music-panel").filter({ hasText: /Playing song\.wav at -16 dB, ducked under speech/ }).waitFor({ timeout: 10_000 });
 
+    // B-roll: upload a still and cut away to it on the selected clip.
+    const still = join(work, "cutaway.png");
+    execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=red:s=800x600:d=1", "-frames:v", "1", still]);
+    await page.locator('label:has-text("Upload media") select').selectOption("image");
+    await page.locator('input[type="file"]').setInputFiles(still);
+    await waitStatus(/Uploaded asset/);
+    await videoClips.first().click();
+    await page.getByLabel("B-roll media").selectOption({ label: "image · cutaway.png" });
+    await page.getByLabel("On screen for (seconds)").fill("2");
+    await page.getByRole("button", { name: "Add B-roll at playhead" }).click();
+    await waitStatus(/B-roll added.*\(revision \d+\)/);
+    await page.locator(".broll-list li").filter({ hasText: /cutaway\.png · full/ }).waitFor({ timeout: 10_000 });
+
     // The source player serves the uploaded video with seeking.
     await page.getByRole("tab", { name: "Source" }).click();
     const player = page.locator(".preview-screen video");
@@ -202,6 +216,15 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
     const video = probe.streams.find((s) => s.codec_type === "video");
     assert.deepEqual([video.width, video.height], [1080, 1920]);
     assert.ok(probe.streams.some((s) => s.codec_type === "audio"), "export carries the mixed speech and music");
+    // The b-roll still is in the export: some frame of the first second-ish of the cut is red.
+    const frameColour = (t) => [...execFileSync("ffmpeg", ["-v", "error", "-ss", String(t), "-i", outPath, "-frames:v", "1", "-vf", "scale=1:1:flags=area", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]).subarray(0, 3)];
+    const window = (await page.locator(".broll-list li span").first().innerText()).match(/([\d.]+)s–([\d.]+)s/);
+    assert.ok(window, "b-roll window is listed");
+    const mid = (Number(window[1]) + Number(window[2])) / 2;
+    const [r, g, b] = frameColour(mid);
+    assert.ok(r > 150 && g < 90 && b < 90, "the b-roll still is on screen at " + mid + "s in the export: " + [r, g, b]);
+    const [r0, g0, b0] = frameColour(Math.max(0, Number(window[1]) - 0.5) === Number(window[1]) ? Number(window[2]) + 0.5 : Math.max(0, Number(window[1]) - 0.5));
+    assert.ok(!(r0 > 150 && g0 < 90 && b0 < 90), "and not outside its window: " + [r0, g0, b0]);
     assert.ok(Number(probe.format.duration) > 10 && Number(probe.format.duration) < 45, "duration " + probe.format.duration);
     execFileSync("ffmpeg", ["-v", "error", "-i", outPath, "-f", "null", "-"]);
 

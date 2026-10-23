@@ -15,7 +15,7 @@ import { ClamAvScanner, EnvironmentSecretProvider, loadSecretEnvironment, RedisP
 import { configureTracing, MetricsRegistry } from "@videocraft/observability";
 import { buildServer } from "./server.js";
 import { registerUploadRoutes } from "./uploads.js";
-import { createProxy, probeMedia } from "@videocraft/analysis";
+import { createProxy, isStillImage, probeMedia } from "@videocraft/analysis";
 import { StorageSilenceDetector } from "./media-analysis.js";
 import { registerRenderRoutes } from "./render-routes.js";
 import { registerMediaRoutes } from "./media-routes.js";
@@ -162,6 +162,7 @@ registerUploadRoutes(server, {
   assets, storage, authorize: authorizer, authenticate: (request) => authenticator.authenticate(request),
   clock: () => new Date().toISOString(), ...(malwareScanner ? { scanner: malwareScanner } : {}),
   inspector: (path) => probeMedia(path, secretEnvironment.FFPROBE_BIN ? { executable: secretEnvironment.FFPROBE_BIN } : {}),
+  imageInspector: (path) => isStillImage(path, secretEnvironment.FFPROBE_BIN ? { executable: secretEnvironment.FFPROBE_BIN } : {}),
   // Preview proxies for formats browsers cannot play (PREVIEW_PROXIES=false disables).
   ...(secretEnvironment.PREVIEW_PROXIES === "false" ? {} : { proxy: (input: string, output: string) => createProxy(input, output, secretEnvironment.FFMPEG_BIN ? { executable: secretEnvironment.FFMPEG_BIN } : {}) }),
   onBackgroundDone: (assetId, outcome, caught) => { if (outcome === "failed") server.log.warn({ assetId, err: caught }, "Preview proxy failed"); },
