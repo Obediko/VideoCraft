@@ -18,7 +18,12 @@ mkdir -p "$APP_DIR"
 docker ps --format '{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}' | tee "$APP_DIR/preflight-containers.txt"
 avail_mb=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
 echo "memory available: ${avail_mb} MB"
-[ "$avail_mb" -ge 2300 ] || [ "${FORCE_LOW_MEMORY:-0}" = 1 ] || die "only ${avail_mb} MB available; VideoCraft needs ~2.3 GB (ClamAV ~1.5 GB). Set FORCE_LOW_MEMORY=1 to override."
+# Upgrades replace containers that already hold their memory, so the headroom check only applies to a first install.
+if docker ps --format '{{.Names}}' | grep -q '^videocraft-api$'; then
+  echo "VideoCraft already running: upgrade in place (memory check is for first installs)"
+else
+  [ "$avail_mb" -ge 2300 ] || [ "${FORCE_LOW_MEMORY:-0}" = 1 ] || die "only ${avail_mb} MB available; VideoCraft needs ~2.3 GB (ClamAV ~1.5 GB). Set FORCE_LOW_MEMORY=1 to override."
+fi
 for p in 18080 18081; do
   if ss -ltn "( sport = :$p )" | grep -q ":$p" && ! docker ps --format '{{.Names}}' | grep -q '^videocraft-'; then die "port $p already in use"; fi
 done
