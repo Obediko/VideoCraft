@@ -187,8 +187,8 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
 
     // Motion graphics: a title card (edited after adding) and a progress bar.
     const gfxPanel = page.locator(".graphics-panel");
-    await gfxPanel.getByLabel("Graphic", { exact: true }).selectOption("title");
-    await gfxPanel.getByLabel("Text", { exact: true }).fill("Why onboarding fails");
+    await gfxPanel.locator("select").first().selectOption("title");
+    await gfxPanel.locator('label:has-text("Text") input').first().fill("Why onboarding fails");
     await gfxPanel.getByLabel("Accent colour").fill("#00ff00");
     await page.getByRole("button", { name: "Add graphic at playhead" }).click();
     await waitStatus(/Graphic added.*\(revision \d+\)/);
@@ -196,8 +196,10 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
     await gfxInput.fill("Why onboarding really fails");
     await page.locator(".graphics-list li").first().getByRole("button", { name: "Save" }).click();
     await waitStatus(/Graphic updated/);
-    await page.getByLabel("Progress bar across the top").check();
+    // The box reflects the saved timeline, so it ticks once the server confirms the edit.
+    await page.getByLabel("Progress bar across the top").click();
     await waitStatus(/Progress bar on/);
+    assert.equal(await page.getByLabel("Progress bar across the top").isChecked(), true);
 
     // The source player serves the uploaded video with seeking.
     await page.getByRole("tab", { name: "Source" }).click();
