@@ -219,3 +219,38 @@ test("real ffmpeg: b-roll stills and clips appear full-frame or as a top-right i
     assert.ok(Math.abs(Number(probe.format.duration) - 6) < 0.2, "overlays do not change the length: " + probe.format.duration);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("real ffmpeg: a title card pops in only during its window, a lower third slides in, and the progress bar tracks time", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vc-gfx-"));
+  try {
+    const talk = join(dir, "talk.mp4");
+    execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=0x303030:s=640x360:d=8:r=25", "-pix_fmt", "yuv420p", talk]);
+    const overlay = { id: "o", kind: "overlay", clips: [
+      { id: "g1", assetId: "generated:graphic", sourceStartUs: 0, sourceEndUs: 2_000_000, timelineStartUs: 1_000_000, timelineEndUs: 3_000_000, transform: { role: "graphic", kind: "title", text: "ONBOARDING", position: "center", color: "#FFA000" } },
+      { id: "g2", assetId: "generated:graphic", sourceStartUs: 0, sourceEndUs: 2_500_000, timelineStartUs: 4_500_000, timelineEndUs: 7_000_000, transform: { role: "graphic", kind: "lower-third", text: "Ada Obi", subtitle: "Founder", position: "bottom", color: "#FF00FF" } },
+      { id: "progress", assetId: "generated:progress", sourceStartUs: 0, sourceEndUs: 8_000_000, timelineStartUs: 0, timelineEndUs: 8_000_000, transform: { role: "progress", color: "#00FF00" } },
+    ] };
+    const out = join(dir, "out.mp4");
+    const plan = await new FfmpegCommandPlanner({ resolve: async () => talk }).plan(revision([clip("c", 0, 8_000_000, 0)], [overlay]), { ...settings, width: 640, height: 360, captionStyle: undefined }, out);
+    await new FfmpegProcess().run(plan);
+    // Fraction of pixels in a region matching a colour test.
+    const share = (t, crop, match) => {
+      const [w, h] = crop.split(":").map(Number);
+      const raw = execFileSync("ffmpeg", ["-v", "error", "-ss", String(t), "-i", out, "-frames:v", "1", "-vf", "crop=" + crop, "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]);
+      let hits = 0;
+      for (let i = 0; i < w * h * 3; i += 3) if (match(raw[i], raw[i + 1], raw[i + 2])) hits += 1;
+      return hits / (w * h);
+    };
+    const amber = (r, g, b) => r > 200 && g > 120 && g < 200 && b < 80;
+    const magenta = (r, g, b) => r > 190 && g < 80 && b > 190;
+    const green = (r, g, b) => g > 180 && r < 90 && b < 90;
+    assert.ok(share(2.0, "640:120:0:100", amber) > 0.03, "title box visible mid-window: " + share(2.0, "640:120:0:100", amber));
+    assert.equal(share(0.5, "640:120:0:100", amber), 0, "no title before its window");
+    assert.equal(share(3.6, "640:120:0:100", amber), 0, "gone after its window");
+    assert.ok(share(6.0, "80:200:0:100", magenta) > 0.01, "lower-third bar visible mid-window: " + share(6.0, "80:200:0:100", magenta));
+    assert.equal(share(4.0, "80:200:0:100", magenta), 0, "no lower third before its window");
+    const filled = (t) => share(t, "640:2:0:0", green);
+    assert.ok(Math.abs(filled(2.0) - 0.25) < 0.06, "progress ~25% at 2s of 8s: " + filled(2.0));
+    assert.ok(Math.abs(filled(6.0) - 0.75) < 0.06, "progress ~75% at 6s of 8s: " + filled(6.0));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

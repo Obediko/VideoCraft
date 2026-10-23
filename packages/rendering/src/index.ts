@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { renderAss, resolveCaptionStyle, type TimedCue } from "@videocraft/captions";
+import { captionBand, renderAss, renderGraphicsAss, resolveCaptionStyle, type GraphicItem, type TimedCue } from "@videocraft/captions";
 import type { ProjectRevision, RenderSettings, TimelineClip, TimelineTrack } from "@videocraft/domain";
 
 export interface AssetPathResolver {
@@ -147,6 +147,22 @@ export class FfmpegCommandPlanner {
       filters.push(videoLabel + "[b" + index + "]overlay=" + position + ":enable='between(t," + start + "," + end + ")':eof_action=pass[ov" + index + "]");
       videoLabel = "[ov" + index + "]";
     });
+    // Motion graphics (title cards, callouts, lower thirds, progress bar): above b-roll, beneath captions.
+    const overlayClips = tracks.filter((track) => track.kind === "overlay").flatMap((track) => track.clips);
+    const graphics: GraphicItem[] = overlayClips.filter((clip) => clip.transform?.role === "graphic" && typeof clip.transform.text === "string").map((clip) => ({
+      kind: clip.transform!.kind === "lower-third" ? "lower-third" : clip.transform!.kind === "callout" ? "callout" : "title",
+      text: String(clip.transform!.text).slice(0, 120), startUs: clip.timelineStartUs, endUs: clip.timelineEndUs,
+      ...(typeof clip.transform!.subtitle === "string" ? { subtitle: clip.transform!.subtitle.slice(0, 120) } : {}),
+      ...(clip.transform!.position === "top" || clip.transform!.position === "bottom" || clip.transform!.position === "center" ? { position: clip.transform!.position } : {}),
+      ...(typeof clip.transform!.color === "string" ? { color: clip.transform!.color } : {}),
+    }));
+    const progressClip = overlayClips.find((clip) => clip.transform?.role === "progress");
+    if (graphics.length > 0 || progressClip) {
+      const graphicsPath = outputPath + ".graphics.ass";
+      files.push({ path: graphicsPath, content: renderGraphicsAss(graphics, progressClip ? { startUs: 0, endUs: Math.round(totalSeconds * 1_000_000), ...(typeof progressClip.transform?.color === "string" ? { color: progressClip.transform.color } : {}) } : undefined, { width, height }, style && cues.length > 0 ? { avoid: captionBand(style, height) } : {}) });
+      filters.push(videoLabel + "ass=filename='" + escapeFilterPath(graphicsPath) + "'[gfx]");
+      videoLabel = "[gfx]";
+    }
     if (style && cues.length > 0) {
       const assPath = outputPath + ".captions.ass";
       files.push({ path: assPath, content: renderAss(cues, style, { width, height }) });

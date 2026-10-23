@@ -180,10 +180,26 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
     await waitStatus(/Uploaded asset/);
     await videoClips.first().click();
     await page.getByLabel("B-roll media").selectOption({ label: "image · cutaway.png" });
-    await page.getByLabel("On screen for (seconds)").fill("2");
+    await page.locator(".broll-panel").getByLabel("On screen for (seconds)").fill("2");
     await page.getByRole("button", { name: "Add B-roll at playhead" }).click();
     await waitStatus(/B-roll added.*\(revision \d+\)/);
     await page.locator(".broll-list li").filter({ hasText: /cutaway\.png · full/ }).waitFor({ timeout: 10_000 });
+
+    // Motion graphics: a title card (edited after adding) and a progress bar.
+    const gfxPanel = page.locator(".graphics-panel");
+    await gfxPanel.locator("select").first().selectOption("title");
+    await gfxPanel.locator('label:has-text("Text") input').first().fill("Why onboarding fails");
+    await gfxPanel.getByLabel("Accent colour").fill("#00ff00");
+    await page.getByRole("button", { name: "Add graphic at playhead" }).click();
+    await waitStatus(/Graphic added.*\(revision \d+\)/);
+    const gfxInput = page.locator(".graphics-list input").first();
+    await gfxInput.fill("Why onboarding really fails");
+    await page.locator(".graphics-list li").first().getByRole("button", { name: "Save" }).click();
+    await waitStatus(/Graphic updated/);
+    // The box reflects the saved timeline, so it ticks once the server confirms the edit.
+    await page.getByLabel("Progress bar across the top").click();
+    await waitStatus(/Progress bar on/);
+    assert.equal(await page.getByLabel("Progress bar across the top").isChecked(), true);
 
     // The source player serves the uploaded video with seeking.
     await page.getByRole("tab", { name: "Source" }).click();
@@ -216,6 +232,13 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
     const video = probe.streams.find((s) => s.codec_type === "video");
     assert.deepEqual([video.width, video.height], [1080, 1920]);
     assert.ok(probe.streams.some((s) => s.codec_type === "audio"), "export carries the mixed speech and music");
+    // The progress bar is burned in and tracks time: about half the top rows are green halfway through.
+    const duration = Number(probe.format.duration);
+    const topRows = execFileSync("ffmpeg", ["-v", "error", "-ss", String(duration / 2), "-i", outPath, "-frames:v", "1", "-vf", "crop=1080:6:0:0", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]);
+    let greenPixels = 0;
+    for (let i = 0; i < topRows.length; i += 3) if (topRows[i + 1] > 180 && topRows[i] < 100 && topRows[i + 2] < 100) greenPixels += 1;
+    assert.ok(Math.abs(greenPixels / (topRows.length / 3) - 0.5) < 0.1, "progress bar ~50% at the midpoint: " + greenPixels / (topRows.length / 3));
+
     // The b-roll still is in the export: some frame of the first second-ish of the cut is red.
     const frameColour = (t) => [...execFileSync("ffmpeg", ["-v", "error", "-ss", String(t), "-i", outPath, "-frames:v", "1", "-vf", "scale=1:1:flags=area", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]).subarray(0, 3)];
     const window = (await page.locator(".broll-list li span").first().innerText()).match(/([\d.]+)s–([\d.]+)s/);
