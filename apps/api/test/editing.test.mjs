@@ -104,3 +104,30 @@ test("render settings validate fit and caption style", async () => {
   assert.equal(bad.statusCode, 400);
   await server.close();
 });
+
+test("edits may only reference this project's assets, of the right kind; music is set and cleared via edits", async () => {
+  const { InMemoryAssetRepository: Assets } = await import("@videocraft/application");
+  const projects = new InMemoryProjectRepository();
+  const assets = new Assets();
+  const revisions = new InMemoryRevisionRepository();
+  let n = 0;
+  const ids = { next: () => "id-" + (++n) };
+  const clock = { now: () => "2026-10-23T00:00:00.000Z" };
+  const server = buildServer({ projects, assets, revisions, members: new InMemoryProjectMemberRepository(), scenes: new InMemorySceneRepository(), authenticate: { authenticate: async () => ({ userId: "u" }) }, authorize: { canAccess: async () => true }, strategies: new StaticStrategyRegistry(), clock, ids });
+  const service = new ProjectService(projects, assets, revisions, ids, clock);
+  registerTimelineRoutes(server, { projects, revisions, assets, authenticate: async () => ({ userId: "u" }), authorize: { canAccess: async () => true }, saveRevision: (input) => service.saveRevision(input) });
+  const projectId = (await server.inject({ method: "POST", url: "/v1/projects", payload: { name: "Music" } })).json().project.id;
+  const add = (id, kind, project = projectId) => assets.save({ id, projectId: project, kind, storageKey: "projects/" + project + "/assets/" + id + ".media", checksumSha256: "a".repeat(64), metadata: {}, createdAt: clock.now() });
+  await add("talk", "video"); await add("song", "audio"); await add("pic", "image"); await add("theirs", "audio", "other-project");
+  await server.inject({ method: "POST", url: "/v1/projects/" + projectId + "/revisions", payload: { timeline: { durationUs: 5_000_000, tracks: [{ id: "v", kind: "video", clips: [{ id: "c", assetId: "talk", sourceStartUs: 0, sourceEndUs: 5_000_000, timelineStartUs: 0, timelineEndUs: 5_000_000 }] }] } } });
+  const edit = (revision, operations) => server.inject({ method: "POST", url: "/v1/projects/" + projectId + "/revisions/" + revision + "/edit", payload: { operations } });
+  assert.equal((await edit(1, [{ type: "set-music", assetId: "theirs" }])).statusCode, 400, "another project's asset is refused");
+  assert.equal((await edit(1, [{ type: "set-music", assetId: "pic" }])).statusCode, 400, "an image cannot be music");
+  assert.equal((await edit(1, [{ type: "insert-clip", assetId: "song", sourceStartUs: 0, sourceEndUs: 1_000_000 }])).statusCode, 400, "audio cannot be inserted as a video clip");
+  const withMusic = await edit(1, [{ type: "set-music", assetId: "song", volumeDb: -18 }]);
+  assert.equal(withMusic.statusCode, 201, withMusic.body);
+  const music = withMusic.json().revision.timeline.tracks.find((t) => t.kind === "audio").clips[0];
+  assert.deepEqual([music.assetId, music.timelineEndUs, music.transform.volumeDb], ["song", 5_000_000, -18]);
+  const cleared = await edit(2, [{ type: "clear-music" }]);
+  assert.equal(cleared.json().revision.timeline.tracks.some((t) => t.kind === "audio"), false);
+});

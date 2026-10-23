@@ -147,3 +147,38 @@ test("real ffmpeg: audio is loudness-normalised so a quiet source reaches the ta
     assert.ok(Math.abs(normalised - -16) < 2.5, "normalised near -16 LUFS: " + normalised);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("real ffmpeg: background music loops under the cut and ducks while someone speaks", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vc-music-"));
+  try {
+    // "Speech": a 1 kHz tone for 0-2s and 4-6s with silence between; music: a steady 300 Hz tone of only 2.5s (must loop).
+    const talk = join(dir, "talk.mp4");
+    const song = join(dir, "song.wav");
+    execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=gray:s=320x240:d=6:r=25", "-f", "lavfi", "-i", "sine=f=1000:d=6,volume=enable='between(t,2,4)':volume=0", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", talk]);
+    execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=300:d=2.5", song]);
+    const resolver = { resolve: async (id) => (id === "song" ? song : talk), hasAudio: async () => true };
+    const music = { id: "music", assetId: "song", sourceStartUs: 0, sourceEndUs: 6_000_000, timelineStartUs: 0, timelineEndUs: 6_000_000, transform: { role: "music", volumeDb: -6, duck: true } };
+    const render = async (name, extra = {}) => {
+      const out = join(dir, name);
+      const plan = await new FfmpegCommandPlanner(resolver).plan(revision([clip("c", 0, 6_000_000, 0)], [{ id: "a", kind: "audio", clips: [{ ...music, transform: { ...music.transform, ...extra } }] }]), { ...settings, width: 320, height: 240, normalizeLoudness: false }, out);
+      await new FfmpegProcess().run(plan);
+      return out;
+    };
+    // RMS (dB) of the 300 Hz music band in a time window.
+    const band = (path, from, to) => {
+      const out = execFileSync("sh", ["-c", "ffmpeg -nostats -v info -ss " + from + " -t " + (to - from) + " -i " + JSON.stringify(path) + " -af bandpass=f=300:width_type=h:w=80,astats=metadata=0:reset=0 -f null - 2>&1 | grep 'RMS level dB' | tail -1"]).toString();
+      return Number(out.split(":").pop());
+    };
+    const ducked = await render("ducked.mp4");
+    const probe = JSON.parse(execFileSync("ffprobe", ["-v", "error", "-show_format", "-of", "json", ducked]).toString());
+    assert.ok(Math.abs(Number(probe.format.duration) - 6) < 0.2, "music is trimmed to the cut: " + probe.format.duration);
+    const underSpeech = band(ducked, 0.6, 1.6);
+    const inPause = band(ducked, 2.7, 3.5);
+    const afterLoop = band(ducked, 2.55, 2.9);
+    assert.ok(inPause - underSpeech >= 6, "music ducks by ≥6 dB under speech: speech " + underSpeech + " dB vs pause " + inPause + " dB");
+    assert.ok(afterLoop > -40, "a 2.5s track keeps playing past its end because it loops: " + afterLoop);
+
+    const flat = await render("flat.mp4", { duck: false });
+    assert.ok(Math.abs(band(flat, 2.7, 3.5) - band(flat, 0.6, 1.6)) < 3, "without ducking the music level is steady");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

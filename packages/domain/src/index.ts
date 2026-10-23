@@ -17,6 +17,9 @@ export type TimelineOperation =
   | { type: "split-clip"; clipId: UUID; atUs: Microseconds }
   | { type: "remove-clip"; clipId: UUID; reason: string }
   | { type: "add-caption"; text: string; atUs: Microseconds; durationUs: Microseconds }
+  /** Background music under the whole cut (looped, faded, ducked under speech unless duck is false). */
+  | { type: "set-music"; assetId: UUID; sourceStartUs?: Microseconds; volumeDb?: number; duck?: boolean }
+  | { type: "clear-music" }
   /** Append (or insert at `index`) a segment of a source asset on the video track. */
   | { type: "insert-clip"; assetId: UUID; sourceStartUs: Microseconds; sourceEndUs: Microseconds; reason: string; score?: number; features?: Record<string, number>; index?: number }
   /** Reorder the video track; `clipIds` must list every video clip exactly once. */

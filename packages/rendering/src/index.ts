@@ -44,7 +44,11 @@ export class FfmpegCommandPlanner {
     const audioTrack = tracks.find((track) => track.kind === "audio");
     const clips = [...(videoTrack?.clips ?? [])].sort((a, b) => a.timelineStartUs - b.timelineStartUs);
     if (clips.length === 0) throw new Error("Timeline has no video clips to render");
-    if (audioTrack && audioTrack.clips.length > 1) throw new Error("Renderer supports at most one external audio clip");
+    // An audio-track clip is either background music (transform.role "music": mixed under the speech) or,
+    // without a role, a replacement soundtrack. One of each kind at most.
+    const musicClips = (audioTrack?.clips ?? []).filter((clip) => clip.transform?.role === "music");
+    const replacementClips = (audioTrack?.clips ?? []).filter((clip) => clip.transform?.role !== "music");
+    if (musicClips.length > 1 || replacementClips.length > 1) throw new Error("Renderer supports at most one music bed and one replacement audio clip");
 
     const width = even(settings.width);
     const height = even(settings.height);
@@ -63,12 +67,21 @@ export class FfmpegCommandPlanner {
       args.push("-ss", seconds(clip.sourceStartUs), "-t", length.toFixed(6), "-i", await this.assets.resolve(clip.assetId));
     }
 
-    const externalAudio = audioTrack?.clips[0];
+    let nextInput = clips.length;
+    const externalAudio = replacementClips[0];
     let externalIndex = -1;
     if (externalAudio) {
-      externalIndex = clips.length;
+      externalIndex = nextInput++;
       args.push("-i", await this.assets.resolve(externalAudio.assetId));
     }
+    const music = musicClips[0];
+    let musicIndex = -1;
+    if (music) {
+      musicIndex = nextInput++;
+      // Looped so a short track covers a long cut; trimmed to the timeline in the graph.
+      args.push("-stream_loop", "-1", "-ss", seconds(music.sourceStartUs), "-i", await this.assets.resolve(music.assetId));
+    }
+    const totalSeconds = clips.reduce((sum, clip) => sum + (clip.sourceEndUs - clip.sourceStartUs), 0) / 1_000_000;
 
     const contain = "scale=" + width + ":" + height + ":force_original_aspect_ratio=decrease,pad=" + width + ":" + height + ":(ow-iw)/2:(oh-ih)/2:color=black";
     const fitFor = async (clip: TimelineClip): Promise<string> => {
@@ -115,21 +128,39 @@ export class FfmpegCommandPlanner {
       videoLabel = "[vout]";
     }
 
-    let audioLabel = "[acat]";
-    if (useEmbeddedAudio && settings.normalizeLoudness !== false) {
+    let audioLabel = useEmbeddedAudio ? "[acat]" : "";
+    if (music && !externalAudio) {
+      const volumeDb = clampNumber(Number(music.transform?.volumeDb ?? -16), -40, 0);
+      const fadeOut = Math.min(1.5, totalSeconds / 4);
+      filters.push("[" + musicIndex + ":a]aresample=48000,aformat=channel_layouts=stereo,atrim=duration=" + totalSeconds.toFixed(6) + ",asetpts=PTS-STARTPTS,volume=" + volumeDb + "dB,afade=t=in:d=" + Math.min(1, totalSeconds / 4).toFixed(3) + ",afade=t=out:st=" + Math.max(0, totalSeconds - fadeOut).toFixed(3) + ":d=" + fadeOut.toFixed(3) + "[mus]");
+      if (useEmbeddedAudio) {
+        if (music.transform?.duck !== false) {
+          // Duck the music whenever someone speaks: the speech drives a sidechain compressor on the music.
+          filters.push("[acat]asplit=2[speech][key]");
+          filters.push("[mus][key]sidechaincompress=threshold=0.012:ratio=12:attack=15:release=350[ducked]");
+          filters.push("[speech][ducked]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[amix]");
+        } else {
+          filters.push("[acat][mus]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[amix]");
+        }
+        audioLabel = "[amix]";
+      } else {
+        audioLabel = "[mus]";
+      }
+    }
+    if (audioLabel && settings.normalizeLoudness !== false) {
       // Single-pass EBU R128 normalisation so clips cut from quiet and loud parts of a source sound consistent.
-      filters.push("[acat]loudnorm=I=" + (settings.loudnessLufs ?? -16) + ":TP=-1.5:LRA=11[anorm]");
+      filters.push(audioLabel + "loudnorm=I=" + (settings.loudnessLufs ?? -16) + ":TP=-1.5:LRA=11[anorm]");
       audioLabel = "[anorm]";
     }
     args.push("-filter_complex", filters.join(";"), "-map", videoLabel);
     if (externalAudio) {
       args.push("-map", externalIndex + ":a:0", "-af", "atrim=start=" + seconds(externalAudio.sourceStartUs) + ":end=" + seconds(externalAudio.sourceEndUs) + ",asetpts=PTS-STARTPTS", "-shortest");
-    } else if (useEmbeddedAudio) {
+    } else if (audioLabel) {
       args.push("-map", audioLabel);
     }
     args.push("-r", String(fps), "-c:v", settings.videoCodec);
     if (settings.videoCodec === "libx264") args.push("-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p");
-    if (externalAudio || useEmbeddedAudio) args.push("-c:a", settings.audioCodec);
+    if (externalAudio || audioLabel) args.push("-c:a", settings.audioCodec);
     args.push("-movflags", "+faststart", outputPath);
     return { args, outputPath, files };
   }
@@ -190,6 +221,7 @@ function seconds(microseconds: number): string {
   if (!Number.isSafeInteger(microseconds) || microseconds < 0) throw new Error("Time values must be non-negative safe integers");
   return (microseconds / 1_000_000).toFixed(6);
 }
+function clampNumber(value: number, min: number, max: number): number { return Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : max; }
 function even(value: number): number {
   if (!Number.isInteger(value) || value < 2 || value > 16_384) throw new Error("Video dimensions are invalid");
   return value % 2 === 0 ? value : value - 1;

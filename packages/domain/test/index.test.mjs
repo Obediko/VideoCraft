@@ -123,3 +123,23 @@ test("feature maps from untrusted input are validated", () => {
   assert.equal(sanitizeFeatures([0.1]), undefined);
   assert.equal(sanitizeFeatures({ hook: "x" }), undefined);
 });
+
+import { applyTimelineOperations as apply2, parseTimelineOperations as parse2 } from "../dist/index.js";
+
+test("music bed spans the whole cut through edits and can be cleared", () => {
+  const base = { durationUs: 10_000_000, tracks: [{ id: "v", kind: "video", clips: [
+    { id: "a", assetId: "talk", sourceStartUs: 0, sourceEndUs: 4_000_000, timelineStartUs: 0, timelineEndUs: 4_000_000 },
+    { id: "b", assetId: "talk", sourceStartUs: 6_000_000, sourceEndUs: 12_000_000, timelineStartUs: 4_000_000, timelineEndUs: 10_000_000 },
+  ] }] };
+  const withMusic = apply2(base, [{ type: "set-music", assetId: "song", sourceStartUs: 2_000_000, volumeDb: -20 }]);
+  const music = withMusic.tracks.find((t) => t.kind === "audio").clips;
+  assert.deepEqual(music.map((c) => [c.timelineStartUs, c.timelineEndUs, c.sourceStartUs, c.transform.role, c.transform.volumeDb, c.transform.duck]), [[0, 10_000_000, 2_000_000, "music", -20, true]]);
+  const cut = apply2(withMusic, [{ type: "remove-clip", clipId: "a" }]);
+  assert.equal(cut.durationUs, 6_000_000);
+  assert.equal(cut.tracks.find((t) => t.kind === "audio").clips[0].timelineEndUs, 6_000_000, "music follows the new length");
+  const replaced = apply2(cut, [{ type: "set-music", assetId: "other", duck: false }]);
+  assert.deepEqual(replaced.tracks.find((t) => t.kind === "audio").clips.map((c) => [c.assetId, c.transform.duck]), [["other", false]], "one music bed at a time");
+  assert.equal(apply2(replaced, [{ type: "clear-music" }]).tracks.some((t) => t.kind === "audio"), false);
+  assert.throws(() => parse2([{ type: "set-music", assetId: "s", volumeDb: 6 }]), /volumeDb/);
+  assert.deepEqual(parse2([{ type: "set-music", assetId: "s", duck: false }, { type: "clear-music" }]), [{ type: "set-music", assetId: "s", duck: false }, { type: "clear-music" }]);
+});

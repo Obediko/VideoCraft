@@ -160,6 +160,17 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
     await waitStatus(/Caption corrected/);
     assert.match(await page.locator(".cue-list input").first().inputValue(), /FIXED$/);
 
+    // Background music: upload a track and lay it under the cut.
+    const song = join(work, "song.wav");
+    execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=300:d=8", song]);
+    await page.locator('label:has-text("Upload media") select').selectOption("audio");
+    await page.locator('input[type="file"]').setInputFiles(song);
+    await waitStatus(/Uploaded asset/);
+    await page.getByLabel("Music track").selectOption({ index: 1 });
+    await page.getByRole("button", { name: "Add music" }).click();
+    await waitStatus(/Music set \(revision \d+\)/);
+    await page.locator(".music-panel").filter({ hasText: /Playing song\.wav at -16 dB, ducked under speech/ }).waitFor({ timeout: 10_000 });
+
     // The source player serves the uploaded video with seeking.
     await page.getByRole("tab", { name: "Source" }).click();
     const player = page.locator(".preview-screen video");
@@ -190,6 +201,7 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
     const probe = JSON.parse(execFileSync("ffprobe", ["-v", "error", "-show_streams", "-show_format", "-of", "json", outPath]).toString());
     const video = probe.streams.find((s) => s.codec_type === "video");
     assert.deepEqual([video.width, video.height], [1080, 1920]);
+    assert.ok(probe.streams.some((s) => s.codec_type === "audio"), "export carries the mixed speech and music");
     assert.ok(Number(probe.format.duration) > 10 && Number(probe.format.duration) < 45, "duration " + probe.format.duration);
     execFileSync("ffmpeg", ["-v", "error", "-i", outPath, "-f", "null", "-"]);
 
