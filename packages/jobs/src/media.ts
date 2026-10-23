@@ -62,8 +62,10 @@ export async function processProxyTask(task: ProxyTask, deps: ProxyDependencies,
   const proxyKey = "projects/" + task.projectId + "/assets/" + task.assetId + ".proxy.mp4";
   try {
     await mkdir(directory, { recursive: true });
-    let inputPath = deps.storage.resolve(task.storageKey);
+    // Remote storage (R2/S3) has no local path, so stage the object before calling resolve().
+    let inputPath: string;
     if (deps.storage.downloadToFile) { inputPath = join(directory, "input.media"); await deps.storage.downloadToFile(task.storageKey, inputPath); }
+    else inputPath = deps.storage.resolve(task.storageKey);
     const outputPath = join(directory, "proxy.mp4");
     await deps.makeProxy(inputPath, outputPath);
     await deps.storage.putFile(outputPath, proxyKey);
