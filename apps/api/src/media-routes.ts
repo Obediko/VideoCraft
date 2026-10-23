@@ -44,10 +44,14 @@ export function registerMediaRoutes(server: FastifyInstance, dependencies: Media
     if (!(await dependencies.authorize.canAccess(principal, params.projectId, "viewer"))) return error(reply, 403, "forbidden", "Project access denied");
     const asset = await find(params.projectId, params.assetId);
     if (!asset) return error(reply, 404, "not_found", "Asset not found");
+    // Formats browsers cannot play are previewed through a generated proxy; until it is ready the client waits.
+    if (asset.metadata.proxyStatus === "pending") return reply.code(202).send({ pending: true, retryAfterSeconds: 5 });
+    const playable = playbackKey(asset);
     const expires = Math.floor(Date.now() / 1000) + 3600;
-    if (dependencies.storage.createDownloadUrl) return { url: await dependencies.storage.createDownloadUrl(asset.storageKey, 3600), expires, providerNative: true };
-    const signature = sign(params.projectId + ":" + asset.id + ":" + asset.storageKey + ":" + expires, dependencies.signingSecret);
-    return { url: "/v1/projects/" + params.projectId + "/assets/" + asset.id + "/media?expires=" + expires + "&signature=" + signature, expires, providerNative: false };
+    const proxy = playable !== asset.storageKey;
+    if (dependencies.storage.createDownloadUrl) return { url: await dependencies.storage.createDownloadUrl(playable, 3600), expires, providerNative: true, proxy };
+    const signature = sign(params.projectId + ":" + asset.id + ":" + playable + ":" + expires, dependencies.signingSecret);
+    return { url: "/v1/projects/" + params.projectId + "/assets/" + asset.id + "/media?expires=" + expires + "&signature=" + signature, expires, providerNative: false, proxy };
   });
   server.get("/v1/projects/:projectId/assets/:assetId/media", async (request, reply) => {
     const params = request.params as { projectId?: string; assetId?: string };
@@ -56,11 +60,24 @@ export function registerMediaRoutes(server: FastifyInstance, dependencies: Media
     if (!asset) return error(reply, 404, "not_found", "Asset not found");
     const query = request.query as { expires?: string; signature?: string };
     const signed = typeof query.expires === "string" && typeof query.signature === "string" && Number.isSafeInteger(Number(query.expires)) && Number(query.expires) >= Math.floor(Date.now() / 1000)
-      && verify(params.projectId + ":" + asset.id + ":" + asset.storageKey + ":" + query.expires, query.signature, dependencies.signingSecret);
+      && verify(params.projectId + ":" + asset.id + ":" + playbackKey(asset) + ":" + query.expires, query.signature, dependencies.signingSecret);
     if (!signed) return error(reply, 401, "invalid_download_signature", "Playback URL is missing or expired");
-    const extension = asset.storageKey.split(".").pop()?.toLowerCase() ?? "";
-    return sendRanged(request, reply, dependencies.storage.resolve(asset.storageKey), MIME_BY_EXTENSION[extension] ?? "application/octet-stream");
+    const key = playbackKey(asset);
+    return sendRanged(request, reply, dependencies.storage.resolve(key), mimeOf(asset, key));
   });
+}
+
+function playbackKey(asset: { storageKey: string; metadata: Record<string, unknown> }): string {
+  const proxyKey = asset.metadata.proxyKey;
+  return asset.metadata.proxyStatus === "ready" && typeof proxyKey === "string" && proxyKey.startsWith(asset.storageKey.slice(0, asset.storageKey.lastIndexOf("/") + 1)) ? proxyKey : asset.storageKey;
+}
+/** Uploads are stored as ".media", so the type comes from the upload's declared type, then the original filename. */
+function mimeOf(asset: { storageKey: string; metadata: Record<string, unknown> }, key: string): string {
+  if (key.endsWith(".proxy.mp4")) return "video/mp4";
+  const declared = asset.metadata.mimeType;
+  if (typeof declared === "string" && /^(video|audio|image)\/[\w.+-]+$/.test(declared)) return declared;
+  const name = typeof asset.metadata.filename === "string" ? asset.metadata.filename : key;
+  return MIME_BY_EXTENSION[name.split(".").pop()?.toLowerCase() ?? ""] ?? "application/octet-stream";
 }
 
 function sign(value: string, secret: string): string { return createHmac("sha256", secret).update(value).digest("base64url"); }

@@ -117,14 +117,17 @@ export class PostgresAssetRepository implements AssetRepository {
     return result.rows.map(mapAsset);
   }
   async listStorageKeys(): Promise<string[]> {
-    const result = await this.db.query<{ storage_key: string }>("SELECT storage_key FROM assets");
-    return result.rows.map((row) => row.storage_key);
+    const result = await this.db.query<{ storage_key: string; proxy_key: string | null }>("SELECT storage_key, metadata->>'proxyKey' AS proxy_key FROM assets");
+    return result.rows.flatMap((row) => row.proxy_key ? [row.storage_key, row.proxy_key] : [row.storage_key]);
   }
   async save(asset: Asset): Promise<void> {
     await this.db.query(
       "INSERT INTO assets (id, project_id, kind, storage_key, checksum_sha256, duration_us, metadata, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
       [asset.id, asset.projectId, asset.kind, asset.storageKey, asset.checksumSha256, asset.durationUs ?? null, JSON.stringify(asset.metadata), asset.createdAt],
     );
+  }
+  async updateMetadata(assetId: UUID, metadata: Asset["metadata"]): Promise<void> {
+    await this.db.query("UPDATE assets SET metadata = $2 WHERE id = $1", [assetId, JSON.stringify(metadata)]);
   }
 }
 

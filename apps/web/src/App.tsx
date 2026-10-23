@@ -58,6 +58,8 @@ export function App() {
   const [previewMode, setPreviewMode] = useState<"source" | "render">("source");
   const [sourceUrls, setSourceUrls] = useState<Record<string, string>>({});
   const playerRef = useRef<HTMLVideoElement | null>(null);
+  const [sourceRetry, setSourceRetry] = useState(0);
+  const [sourceNote, setSourceNote] = useState("");
 
   const videoTrack = useMemo(() => timeline.tracks.find((track) => track.kind === "video"), [timeline]);
   const videoClips = useMemo(() => [...(videoTrack?.clips ?? [])].sort((a, b) => a.timelineStartUs - b.timelineStartUs), [videoTrack]);
@@ -70,11 +72,18 @@ export function App() {
   useEffect(() => {
     if (!token || !projectId || !sourceAssetId || sourceUrls[sourceAssetId]) return;
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     request("/v1/projects/" + projectId + "/assets/" + sourceAssetId + "/playback-url")
-      .then((result) => { if (!cancelled) setSourceUrls((current) => ({ ...current, [sourceAssetId]: /^https?:\/\//.test(result.url) ? result.url : API + result.url })); })
+      .then((result) => {
+        if (cancelled) return;
+        // Formats browsers cannot play get a preview proxy; it is generated after upload.
+        if (result.pending) { setSourceNote("Preparing a browser preview of this video…"); timer = setTimeout(() => setSourceRetry((n) => n + 1), (result.retryAfterSeconds ?? 5) * 1000); return; }
+        setSourceNote(result.proxy ? "Previewing a 720p proxy; exports use the original" : "");
+        setSourceUrls((current) => ({ ...current, [sourceAssetId]: /^https?:\/\//.test(result.url) ? result.url : API + result.url }));
+      })
       .catch(() => undefined);
-    return () => { cancelled = true; };
-  }, [token, projectId, sourceAssetId, sourceUrls]);
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [token, projectId, sourceAssetId, sourceUrls, sourceRetry]);
 
   // Selecting a clip cues the player to the start of that clip's source range.
   useEffect(() => {
@@ -478,7 +487,7 @@ export function App() {
           <ul className="cue-list">{captionCues.map((cue) => { const original = String(cue.transform?.text ?? ""); const draft = captionDrafts[cue.id] ?? original; return <li key={cue.id}><span className="cue-time">{formatSeconds(cue.timelineStartUs)}</span><input aria-label={"Caption at " + formatSeconds(cue.timelineStartUs)} value={draft} onChange={(event) => setCaptionDrafts((current) => ({ ...current, [cue.id]: event.target.value }))} /><button className="secondary" onClick={() => saveCaption(cue)} disabled={busy || revision === 0 || draft.trim() === original}>Save</button></li>; })}</ul>
         </section>}
         <div className="lower-grid">
-          <section className="panel preview-panel"><div className="panel-heading"><h2>Preview</h2><span className="badge">Non-destructive</span></div><div className="preview-tabs" role="tablist"><button role="tab" aria-selected={previewMode === "source"} className={previewMode === "source" ? "" : "secondary"} onClick={() => setPreviewMode("source")}>Source</button><button role="tab" aria-selected={previewMode === "render"} className={previewMode === "render" ? "" : "secondary"} onClick={() => setPreviewMode("render")}>Rendered export</button></div><div className="preview-screen">{previewMode === "render" ? (renderUrl ? <video controls src={renderUrl} /> : <span>{renderJobId ? "Render " + renderJobStatus : "Render a platform export to preview it here"}</span>) : (sourceUrl ? <video ref={playerRef} controls src={sourceUrl} onTimeUpdate={stopAtClipEnd} /> : <span>Sign in and add a video to scrub the source here</span>)}</div>{previewMode === "source" && sourceUrl && <div className="player-actions"><button className="secondary" onClick={playSelectedClip} disabled={!selectedClip}>Play selected clip</button><button className="secondary" onClick={() => trimToPlayhead("start")} disabled={busy || !selectedClip || revision === 0}>Trim start to playhead</button><button className="secondary" onClick={() => trimToPlayhead("end")} disabled={busy || !selectedClip || revision === 0}>Trim end to playhead</button><button className="secondary" onClick={() => markSegmentFromPlayhead("start")}>Segment start = playhead</button><button className="secondary" onClick={() => markSegmentFromPlayhead("end")}>Segment end = playhead</button></div>}</section>
+          <section className="panel preview-panel"><div className="panel-heading"><h2>Preview</h2><span className="badge">Non-destructive</span></div><div className="preview-tabs" role="tablist"><button role="tab" aria-selected={previewMode === "source"} className={previewMode === "source" ? "" : "secondary"} onClick={() => setPreviewMode("source")}>Source</button><button role="tab" aria-selected={previewMode === "render"} className={previewMode === "render" ? "" : "secondary"} onClick={() => setPreviewMode("render")}>Rendered export</button></div><div className="preview-screen">{previewMode === "render" ? (renderUrl ? <video controls src={renderUrl} /> : <span>{renderJobId ? "Render " + renderJobStatus : "Render a platform export to preview it here"}</span>) : (sourceUrl ? <video ref={playerRef} controls src={sourceUrl} onTimeUpdate={stopAtClipEnd} /> : <span>{sourceNote || "Sign in and add a video to scrub the source here"}</span>)}</div>{previewMode === "source" && sourceUrl && sourceNote && <p className="muted">{sourceNote}</p>}{previewMode === "source" && sourceUrl && <div className="player-actions"><button className="secondary" onClick={playSelectedClip} disabled={!selectedClip}>Play selected clip</button><button className="secondary" onClick={() => trimToPlayhead("start")} disabled={busy || !selectedClip || revision === 0}>Trim start to playhead</button><button className="secondary" onClick={() => trimToPlayhead("end")} disabled={busy || !selectedClip || revision === 0}>Trim end to playhead</button><button className="secondary" onClick={() => markSegmentFromPlayhead("start")}>Segment start = playhead</button><button className="secondary" onClick={() => markSegmentFromPlayhead("end")}>Segment end = playhead</button></div>}</section>
           <section className="panel proposal-panel"><div className="panel-heading"><h2>AI proposal</h2>{proposal && <span className="badge">{Math.round(proposal.confidence * 100)}% confidence</span>}</div>{proposal ? <><p>{proposal.rationale}</p>{proposal.operations.some((operation) => operation.type === "insert-clip") && <ol className="highlight-list">{proposal.operations.filter((operation) => operation.type === "insert-clip").map((operation, index) => <li key={index}><strong>{formatSeconds(operation.sourceStartUs ?? 0)}–{formatSeconds(operation.sourceEndUs ?? 0)}</strong>{typeof operation.score === "number" && <span className="badge">score {Math.round(operation.score * 100)}</span>}<p>{operation.reason}</p></li>)}</ol>}<div className="evidence">{proposal.evidence.map((item) => <div key={item.reference}><span>{item.source}</span><code>{item.reference}{typeof item.startUs === "number" && typeof item.endUs === "number" ? " · " + formatSeconds(item.startUs) + "–" + formatSeconds(item.endUs) : ""}</code>{item.excerpt && <p>{item.excerpt}</p>}</div>)}</div>{proposal.status === "proposed" && <div className="decision-actions"><button className="secondary" onClick={() => decideProposal("rejected")} disabled={busy}>Reject</button><button onClick={() => decideProposal("accepted")} disabled={busy}>Accept as revision</button></div>}</> : <p className="muted">Save a revision to request an explainable tailoring proposal.</p>}</section>
         </div>
       </section>

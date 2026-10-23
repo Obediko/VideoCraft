@@ -4,7 +4,7 @@ import { validateTimeline } from "@videocraft/domain";
 export interface Clock { now(): string; }
 export interface IdFactory { next(): UUID; }
 export interface ProjectRepository { get(id: UUID): Promise<Project | undefined>; listForOwner(ownerId: UUID): Promise<Project[]>; save(project: Project): Promise<void>; }
-export interface AssetRepository { listForProject(projectId: UUID): Promise<Asset[]>; listStorageKeys(): Promise<string[]>; save(asset: Asset): Promise<void>; }
+export interface AssetRepository { listForProject(projectId: UUID): Promise<Asset[]>; /** Every stored object an asset owns (original and derived files such as playback proxies). */ listStorageKeys(): Promise<string[]>; save(asset: Asset): Promise<void>; /** Replaces an asset's metadata (derived-file status and keys). */ updateMetadata?(assetId: UUID, metadata: Asset["metadata"]): Promise<void>; }
 export interface SceneRecord { id: string; assetId: UUID; startUs: number; endUs: number; createdAt: string; }
 export interface SceneRepository {
   listForAsset(assetId: UUID): Promise<SceneRecord[]>;
@@ -109,8 +109,9 @@ export class InMemoryProjectRepository implements ProjectRepository {
 export class InMemoryAssetRepository implements AssetRepository {
   private readonly values = new Map<UUID, Asset>();
   async listForProject(projectId: UUID) { return [...this.values.values()].filter((asset) => asset.projectId === projectId); }
-  async listStorageKeys() { return [...this.values.values()].map((asset) => asset.storageKey); }
+  async listStorageKeys() { return [...this.values.values()].flatMap((asset) => [asset.storageKey, ...(typeof asset.metadata.proxyKey === "string" ? [asset.metadata.proxyKey] : [])]); }
   async save(asset: Asset) { this.values.set(asset.id, asset); }
+  async updateMetadata(assetId: UUID, metadata: Asset["metadata"]) { const asset = this.values.get(assetId); if (asset) this.values.set(assetId, { ...asset, metadata }); }
 }
 export class InMemoryRevisionRepository implements RevisionRepository {
   private readonly values = new Map<string, ProjectRevision>();
