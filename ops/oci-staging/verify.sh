@@ -67,6 +67,53 @@ if [ "$status" = succeeded ]; then
 fi
 docker logs --since 15m videocraft-render-worker 2>&1 | grep -E 'render\.' | tail -5
 
+# ---- Editing features (added after the first staging release) ----
+# Preview proxy: a format browsers cannot play is converted by the worker (via the queue) and served.
+docker exec videocraft-render-worker ffmpeg -loglevel error -f lavfi -i testsrc=duration=2:size=320x240:rate=25 \
+  -f lavfi -i sine=frequency=330:duration=2 -shortest -c:v mpeg4 -c:a pcm_s16le -f matroska pipe:1 > "$TMP/smoke.mkv"
+c="$(code -X POST "${H[@]}" -F "file=@$TMP/smoke.mkv;type=video/x-matroska" "$API/v1/projects/$PID/assets/upload?kind=video")"
+if [ "$c" = 201 ]; then
+  MKV="$(js 'd["asset"]["id"]' < "$TMP/body")"; proxy=""
+  for i in $(seq 1 36); do
+    code "${H[@]}" "$API/v1/projects/$PID/assets" >/dev/null
+    proxy="$(js '[a for a in d["assets"] if a["id"]=="'"$MKV"'"][0]["metadata"].get("proxyStatus","")' < "$TMP/body" 2>/dev/null)"
+    case "$proxy" in ready|failed) break;; esac; sleep 5
+  done
+  [ "$proxy" = ready ] && ok "worker built a browser preview for an MKV upload (queue + R2)" || bad "preview proxy status=$proxy"
+  c="$(code "${H[@]}" "$API/v1/projects/$PID/assets/$MKV/playback-url")"
+  [ "$c" = 200 ] && ok "playback URL issued for the proxy" || bad "playback-url -> $c"
+else bad "mkv upload -> $c $(cat "$TMP/body")"; fi
+
+# Transcription runs (the tone has no words, so zero segments is the expected answer).
+c="$(code -X POST "${H[@]}" "$API/v1/projects/$PID/assets/$AID/transcript")"
+[ "$c" = 201 ] && ok "transcriber ran ($(js 'len(d["segments"])' < "$TMP/body") segments)" || bad "transcript -> $c $(cat "$TMP/body" | head -c 300)"
+
+# A 9:16 export with music, a title card, a lower third, b-roll and the progress bar exercises libass, fonts,
+# sidechain ducking and overlay compositing inside the worker image.
+docker exec videocraft-render-worker ffmpeg -loglevel error -f lavfi -i sine=frequency=220:duration=3 -f wav pipe:1 > "$TMP/music.wav"
+docker exec videocraft-render-worker ffmpeg -loglevel error -f lavfi -i color=c=red:s=320x240:d=1 -frames:v 1 -f image2 -c:v png pipe:1 > "$TMP/still.png"
+c="$(code -X POST "${H[@]}" -F "file=@$TMP/music.wav;type=audio/wav" "$API/v1/projects/$PID/assets/upload?kind=audio")"; MUS="$(js 'd["asset"]["id"]' < "$TMP/body" 2>/dev/null)"
+c2="$(code -X POST "${H[@]}" -F "file=@$TMP/still.png;type=image/png" "$API/v1/projects/$PID/assets/upload?kind=image")"; IMG="$(js 'd["asset"]["id"]' < "$TMP/body" 2>/dev/null)"
+if [ "$c" = 201 ] && [ "$c2" = 201 ]; then
+  ok "music and image uploads accepted"
+  OPS='[{"type":"set-music","assetId":"'"$MUS"'","volumeDb":-14},{"type":"add-graphic","kind":"title","text":"Staging check","anchorAssetId":"'"$AID"'","anchorSourceUs":0,"durationUs":1000000},{"type":"add-graphic","kind":"lower-third","text":"VideoCraft","subtitle":"verify.sh","anchorAssetId":"'"$AID"'","anchorSourceUs":1000000,"durationUs":900000},{"type":"add-broll","assetId":"'"$IMG"'","anchorAssetId":"'"$AID"'","anchorSourceUs":500000,"durationUs":500000,"mode":"pip"},{"type":"set-progress-bar","enabled":true}]'
+  c="$(code -X POST "${H[@]}" -H 'content-type: application/json' -d "{\"operations\":$OPS}" "$API/v1/projects/$PID/revisions/$REV/edit")"
+  if [ "$c" = 201 ]; then
+    REV2="$(js 'd["revision"]["revision"]' < "$TMP/body")"; ok "edit with music, graphics and b-roll saved as revision $REV2"
+    c="$(code -X POST "${H[@]}" -H 'content-type: application/json' -d "{\"revision\":$REV2,\"idempotencyKey\":\"smoke9x16:$PID:$REV2\",\"settings\":{\"format\":\"mp4\",\"videoCodec\":\"libx264\",\"audioCodec\":\"aac\",\"width\":540,\"height\":960,\"frameRate\":30,\"fit\":\"cover\",\"captionStyle\":\"bold-pop\"}}" "$API/v1/projects/$PID/renders")"
+    if [ "$c" = 202 ]; then
+      J2="$(js 'd["job"]["id"]' < "$TMP/body")"; st=""
+      for i in $(seq 1 60); do code "${H[@]}" "$API/v1/projects/$PID/renders/$J2" >/dev/null; st="$(js 'd["job"]["status"]' < "$TMP/body" 2>/dev/null)"; case "$st" in succeeded|failed|cancelled) break;; esac; sleep 5; done
+      if [ "$st" = succeeded ]; then
+        code "${H[@]}" "$API/v1/projects/$PID/renders/$J2/download-url" >/dev/null; U="$(js 'd["url"]' < "$TMP/body")"; case "$U" in http*) D2="$U";; *) D2="$API$U";; esac
+        curl -s -L -o "$TMP/vertical.mp4" "$D2"
+        dims="$(docker exec -i videocraft-render-worker ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 - < "$TMP/vertical.mp4" 2>/dev/null)"
+        [ "$dims" = "540,960" ] && ok "9:16 export with music, graphics and b-roll rendered ($dims)" || bad "vertical export dims=$dims"
+      else bad "vertical render status=$st $(cat "$TMP/body" | head -c 300)"; fi
+    else bad "vertical render enqueue -> $c"; fi
+  else bad "feature edit -> $c $(cat "$TMP/body" | head -c 300)"; fi
+else bad "music/image upload -> $c/$c2"; fi
+
 [ "$(curl -s -o /dev/null -w '%{http_code}' https://hub.emancipationdevelopment.org/)" = 200 ] && ok "hub still 200" || bad "hub"
 [ "$(curl -s -o /dev/null -w '%{http_code}' https://n8n.emancipationdevelopment.org/healthz)" = 200 ] && ok "n8n still 200" || bad "n8n"
 
