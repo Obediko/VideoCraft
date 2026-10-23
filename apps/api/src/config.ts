@@ -13,6 +13,10 @@ export interface ProductionEnvironment {
   INTENT_PROVIDER_API_KEY?: string;
   INTENT_PROVIDER_URL?: string;
   INTENT_PROVIDER_MODEL?: string;
+  HIGHLIGHT_RERANK_MODE?: string;
+  HIGHLIGHT_RERANK_URL?: string;
+  HIGHLIGHT_RERANK_API_KEY?: string;
+  HIGHLIGHT_RERANK_MODEL?: string;
   JOB_QUEUE_PROVIDER?: string;
   CF_ACCOUNT_ID?: string;
   CF_QUEUE_ID?: string;
@@ -60,6 +64,17 @@ export function validateProductionConfiguration(env: ProductionEnvironment): voi
       }
     }
     if (!env.INTENT_PROVIDER_MODEL) missing.push("INTENT_PROVIDER_MODEL");
+  }
+
+  // Optional AI re-ranking of highlights; reuses the intent provider's endpoint and key unless given its own.
+  const rerankMode = env.HIGHLIGHT_RERANK_MODE ?? "off";
+  if (rerankMode !== "off" && rerankMode !== "external") missing.push("HIGHLIGHT_RERANK_MODE=off|external");
+  if (rerankMode === "external") {
+    const url = env.HIGHLIGHT_RERANK_URL ?? env.INTENT_PROVIDER_URL;
+    if (!(env.HIGHLIGHT_RERANK_API_KEY ?? env.INTENT_PROVIDER_API_KEY)) missing.push("HIGHLIGHT_RERANK_API_KEY");
+    if (!(env.HIGHLIGHT_RERANK_MODEL ?? env.INTENT_PROVIDER_MODEL)) missing.push("HIGHLIGHT_RERANK_MODEL");
+    try { const endpoint = new URL(url ?? ""); if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password) missing.push("HIGHLIGHT_RERANK_URL=https://... without credentials"); }
+    catch { missing.push("HIGHLIGHT_RERANK_URL=https://..."); }
   }
 
   if (missing.length > 0) {

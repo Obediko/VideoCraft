@@ -8,7 +8,7 @@ import { BullMqRenderQueue, CloudflareQueueRenderQueue } from "@videocraft/jobs"
 import { ProjectService } from "@videocraft/application";
 import { FasterWhisperWorker } from "@videocraft/transcription";
 import { LocalObjectStorage, S3ObjectStorage, type ObjectStorage } from "@videocraft/storage";
-import { StaticStrategyRegistry } from "@videocraft/strategies";
+import { HighlightReelStrategy, OpenAiCompatibleReranker, ShortFormExplainerStrategy, StaticStrategyRegistry } from "@videocraft/strategies";
 import { PySceneDetectWorker } from "@videocraft/scene-detection";
 import { OpenAiCompatibleIntentAnalyzer, RuleBasedIntentAnalyzer } from "@videocraft/intent-analysis";
 import { ClamAvScanner, EnvironmentSecretProvider, loadSecretEnvironment, RedisProviderQuota, requireSecret, type MalwareScanner } from "@videocraft/security";
@@ -132,7 +132,14 @@ const server = buildServer({
   scenes,
   transcripts,
   proposals: new PostgresProposalStore(db),
-  strategies: new StaticStrategyRegistry(),
+  strategies: new StaticStrategyRegistry([new ShortFormExplainerStrategy(), new HighlightReelStrategy(secretEnvironment.HIGHLIGHT_RERANK_MODE === "external" ? {
+    reranker: new OpenAiCompatibleReranker({
+      endpoint: secretEnvironment.HIGHLIGHT_RERANK_URL ?? required("INTENT_PROVIDER_URL"),
+      apiKey: secretEnvironment.HIGHLIGHT_RERANK_API_KEY ?? required("INTENT_PROVIDER_API_KEY"),
+      model: secretEnvironment.HIGHLIGHT_RERANK_MODEL ?? required("INTENT_PROVIDER_MODEL"),
+      maxPerMinute: boundedInteger("HIGHLIGHT_RERANK_MAX_PER_MINUTE", 30, 1, 1_000),
+    }),
+  } : {})]),
   transcriber,
   renderer: cloudflareQueue ?? new BullMqRenderQueue(bullmqQueue!, assets, renderJobs),
   authenticate: authenticator,
