@@ -7,7 +7,7 @@ export interface Project { id: UUID; ownerId: UUID; name: string; revision: numb
 export interface Asset { id: UUID; projectId: UUID; kind: MediaKind; storageKey: string; checksumSha256: string; durationUs?: Microseconds; metadata: Record<string, string | number | boolean>; createdAt: ISODateTime; }
 export interface TranscriptWord { text: string; startUs: Microseconds; endUs: Microseconds; confidence?: number; }
 export interface TranscriptSegment { id: UUID; assetId: UUID; startUs: Microseconds; endUs: Microseconds; text: string; words: TranscriptWord[]; provider: string; providerVersion?: string; }
-export interface TimelineClip { id: UUID; assetId: UUID; sourceStartUs: Microseconds; sourceEndUs: Microseconds; timelineStartUs: Microseconds; timelineEndUs: Microseconds; transform?: Record<string, string | number | boolean>; /** Why an automated strategy chose this clip. */ reason?: string; /** Strategy score in [0,1], higher is better. */ score?: number; }
+export interface TimelineClip { id: UUID; assetId: UUID; sourceStartUs: Microseconds; sourceEndUs: Microseconds; timelineStartUs: Microseconds; timelineEndUs: Microseconds; transform?: Record<string, string | number | boolean>; /** Why an automated strategy chose this clip. */ reason?: string; /** Strategy score in [0,1], higher is better. */ score?: number; /** Feature scores behind the choice (0..1 each); used to learn from what the person keeps or removes. */ features?: Record<string, number>; }
 export interface TimelineTrack { id: UUID; kind: TrackKind; clips: TimelineClip[]; }
 export interface Timeline { tracks: TimelineTrack[]; durationUs: Microseconds; }
 export interface TailoringProfile { intent: string; audience: string; channel: string; targetDurationUs?: Microseconds; tone?: string; constraints: string[]; }
@@ -18,7 +18,7 @@ export type TimelineOperation =
   | { type: "remove-clip"; clipId: UUID; reason: string }
   | { type: "add-caption"; text: string; atUs: Microseconds; durationUs: Microseconds }
   /** Append (or insert at `index`) a segment of a source asset on the video track. */
-  | { type: "insert-clip"; assetId: UUID; sourceStartUs: Microseconds; sourceEndUs: Microseconds; reason: string; score?: number; index?: number }
+  | { type: "insert-clip"; assetId: UUID; sourceStartUs: Microseconds; sourceEndUs: Microseconds; reason: string; score?: number; features?: Record<string, number>; index?: number }
   /** Reorder the video track; `clipIds` must list every video clip exactly once. */
   | { type: "reorder-clips"; clipIds: UUID[] }
   /** Caption cue bound to source-media time so it follows the clip when the timeline is edited. */
@@ -34,7 +34,7 @@ export interface RenderJob { id: UUID; projectId: UUID; revision: number; settin
 export interface FeedbackEvent { id: UUID; projectId: UUID; revision: number; strategyId?: string; proposalId?: UUID; type: "accepted" | "rejected" | "edited" | "exported" | "shared"; value?: number; note?: string; createdAt: ISODateTime; }
 export interface TranscriptionPort { transcribe(asset: Asset): Promise<TranscriptSegment[]>; }
 export interface IntentAnalysisPort { analyze(input: { prompt: string; transcript?: TranscriptSegment[] }): Promise<{ profile: TailoringProfile; evidence: Evidence[]; provider: string; providerVersion?: string; }>; }
-export interface EditingStrategy { id: string; version: string; propose(input: { project: Project; revision: ProjectRevision; profile: TailoringProfile; transcript: TranscriptSegment[]; signals?: TimelineSignals; }): Promise<Omit<EditingProposal, "id" | "projectId" | "baseRevision" | "strategyId" | "strategyVersion">>; }
+export interface EditingStrategy { id: string; version: string; propose(input: { project: Project; revision: ProjectRevision; profile: TailoringProfile; transcript: TranscriptSegment[]; signals?: TimelineSignals; /** Weight multipliers learned from this person's past edits. */ learned?: import("./learning.js").LearnedPreferences; }): Promise<Omit<EditingProposal, "id" | "projectId" | "baseRevision" | "strategyId" | "strategyVersion">>; }
 export interface StrategyRegistry { get(id: string, version?: string): EditingStrategy; list(): Array<Pick<EditingStrategy, "id" | "version">>; }
 export interface RendererPort { enqueue(input: { project: Project; revision: ProjectRevision; settings: RenderSettings; idempotencyKey: string; }): Promise<RenderJob>; }
 export interface RenderJobRepository { get(id: UUID): Promise<RenderJob | undefined>; save(job: RenderJob): Promise<void>; update(job: RenderJob): Promise<void>; }
@@ -43,3 +43,4 @@ export function validateTimeline(timeline: Timeline): void { if (!Number.isSafeI
 export function validateProposal(proposal: EditingProposal): void { if (proposal.confidence < 0 || proposal.confidence > 1) throw new Error("Proposal confidence must be between 0 and 1"); if (proposal.evidence.length === 0) throw new Error("Proposal must include evidence"); }
 
 export * from "./timeline.js";
+export * from "./learning.js";

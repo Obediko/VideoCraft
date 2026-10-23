@@ -59,6 +59,7 @@ export function App() {
   const [sourceUrls, setSourceUrls] = useState<Record<string, string>>({});
   const playerRef = useRef<HTMLVideoElement | null>(null);
   const [sourceRetry, setSourceRetry] = useState(0);
+  const [learned, setLearned] = useState<{ samples: number; summary: string; counts: Record<string, number> } | null>(null);
   const [sourceNote, setSourceNote] = useState("");
 
   const videoTrack = useMemo(() => timeline.tracks.find((track) => track.kind === "video"), [timeline]);
@@ -90,6 +91,19 @@ export function App() {
     const player = playerRef.current;
     if (player && selectedClip && sourceUrl && previewMode === "source") player.currentTime = selectedClip.sourceStartUs / 1_000_000;
   }, [selectedClipId, sourceUrl, previewMode]);
+
+  async function refreshLearned() {
+    if (!token) return;
+    try { setLearned(await request("/v1/me/preferences")); } catch { setLearned(null); }
+  }
+  async function resetLearned() {
+    setBusy(true);
+    try { await request("/v1/me/preferences", { method: "DELETE" }); await refreshLearned(); setStatus("Learned preferences cleared"); }
+    catch (error) { setStatus(errorMessage(error)); }
+    finally { setBusy(false); }
+  }
+  // What the highlight finder has learned is refreshed whenever the person's choices could have changed it.
+  useEffect(() => { void refreshLearned(); }, [token, proposal?.status, revision, renderJobId]);
 
   function playSelectedClip() {
     const player = playerRef.current;
@@ -445,6 +459,12 @@ export function App() {
           <label>Target length (seconds)<input type="number" min={5} max={600} value={targetSeconds} onChange={(event) => setTargetSeconds(Math.max(5, Number(event.target.value) || 30))} /></label>
           <button className="secondary" onClick={previewProposal} disabled={busy || !revision}>Find highlights</button>
         </section>
+        {learned && <section className="panel learned-panel" aria-label="Learned preferences">
+          <h2>Learned from your edits</h2>
+          <p>{learned.summary}</p>
+          <p className="muted">{learned.samples} signals: {learned.counts.removed ?? 0} removed, {learned.counts.exported ?? 0} exported, {learned.counts.rejected ?? 0} from rejected proposals.</p>
+          <button className="secondary" onClick={resetLearned} disabled={busy || learned.samples === 0}>Reset what was learned</button>
+        </section>}
         <section className="panel">
           <h2>Asset reference</h2>
           <p className="muted">Upload media, choose it from the project library, then place a non-destructive clip on the timeline.</p>

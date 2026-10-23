@@ -2,8 +2,9 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import { stat } from "node:fs/promises";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { applyTimelineOperations, validateProposal } from "@videocraft/domain";
-import type { Asset, EditingProposal, ProjectRevision, RenderSettings, RendererPort, StrategyRegistry, TailoringProfile, Timeline, TimelineSignals, TranscriptSegment, TranscriptionPort, UUID } from "@videocraft/domain";
+import type { Asset, EditingProposal, PreferenceRepository, ProjectRevision, RenderSettings, RendererPort, StrategyRegistry, TailoringProfile, Timeline, TimelineSignals, TranscriptSegment, TranscriptionPort, UUID } from "@videocraft/domain";
 import type { SceneDetector } from "@videocraft/scene-detection";
+import { exportedSamples, learnedFor, record, rejectedSamples } from "./learning.js";
 import { ProjectService, type Clock, type IdFactory, type ProjectMemberRepository, type ProjectRepository, type AssetRepository, type RevisionRepository, type SceneRepository } from "@videocraft/application";
 import type { ObjectStorage } from "@videocraft/storage";
 import { MetricsRegistry } from "@videocraft/observability";
@@ -27,7 +28,7 @@ export interface AuditWriter {
 export interface ApiDependencies {
   projects: ProjectRepository; assets: AssetRepository; revisions: RevisionRepository; members?: ProjectMemberRepository; storage?: ObjectStorage;
   authenticate: Authenticator; authorize: ProjectAuthorizer;
-  renderer?: RendererPort; transcriber?: TranscriptionPort; sceneDetector?: SceneDetector; scenes?: SceneRepository; transcripts?: TranscriptStore; silenceDetector?: { detect(storageKey: string): Promise<Array<{ startUs: number; endUs: number }>>; detectScenes?(storageKey: string): Promise<Array<{ startUs: number; endUs: number }>> }; strategies?: StrategyRegistry; proposals?: ProposalStore;
+  renderer?: RendererPort; transcriber?: TranscriptionPort; sceneDetector?: SceneDetector; scenes?: SceneRepository; transcripts?: TranscriptStore; preferences?: PreferenceRepository; silenceDetector?: { detect(storageKey: string): Promise<Array<{ startUs: number; endUs: number }>>; detectScenes?(storageKey: string): Promise<Array<{ startUs: number; endUs: number }>> }; strategies?: StrategyRegistry; proposals?: ProposalStore;
   clock?: Clock; ids?: IdFactory; audit?: AuditWriter; metrics?: MetricsRegistry; metricsToken?: string; readiness?: ReadinessCheck[];
 }
 
@@ -340,12 +341,14 @@ export function buildServer(dependencies: ApiDependencies): FastifyInstance {
           signals = { silences, ...(scenes.length > 1 ? { scenes } : {}) };
         }
       }
+      const learned = await learnedFor(dependencies.preferences, principal.userId).catch((caught) => { requestLog(reply, caught, "Preference lookup failed; using base weights"); return undefined; });
       const result = await strategy.propose({
         project,
         revision,
         profile: body.profile,
         transcript: transcriptLists.flat(),
         ...(signals ? { signals } : {}),
+        ...(learned ? { learned } : {}),
       });
       const proposal: EditingProposal = {
         id: ids.next(),
@@ -380,6 +383,7 @@ export function buildServer(dependencies: ApiDependencies): FastifyInstance {
     if (body.decision !== "accepted" && body.decision !== "rejected") return sendError(reply, 400, "invalid_request", "decision must be accepted or rejected");
     if (body.decision === "rejected") {
       await dependencies.proposals.setStatus(proposal.id, "rejected");
+      await record(dependencies.preferences, rejectedSamples(principal.userId, proposal, clock.now()), (caught) => requestLog(reply, caught, "Could not record preference samples"));
       return { proposal: { ...proposal, status: "rejected" } };
     }
 
@@ -453,6 +457,8 @@ export function buildServer(dependencies: ApiDependencies): FastifyInstance {
     if (!project || !revision) return sendError(reply, 404, "not_found", "Project revision not found");
     try {
       const job = await dependencies.renderer.enqueue({ project, revision, settings: body.settings, idempotencyKey: body.idempotencyKey });
+      // Exporting is the strongest sign the chosen clips were right.
+      await record(dependencies.preferences, exportedSamples(principal.userId, projectId, revision.revision, revision.timeline, clock.now()), (caught) => requestLog(reply, caught, "Could not record preference samples"));
       return reply.code(202).send({ job });
     } catch (error) {
       return sendError(reply, 503, "render_unavailable", messageOf(error));

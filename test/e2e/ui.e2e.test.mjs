@@ -14,13 +14,14 @@ import { registerUploadRoutes } from "../../apps/api/dist/uploads.js";
 import { registerTimelineRoutes } from "../../apps/api/dist/timeline-routes.js";
 import { registerRenderRoutes } from "../../apps/api/dist/render-routes.js";
 import { registerMediaRoutes } from "../../apps/api/dist/media-routes.js";
+import { registerPreferenceRoutes } from "../../apps/api/dist/learning.js";
 import { StorageSilenceDetector } from "../../apps/api/dist/media-analysis.js";
 import { probeMedia } from "../../packages/analysis/dist/index.js";
 import { FasterWhisperWorker } from "../../packages/transcription/dist/index.js";
 import { LocalObjectStorage } from "../../packages/storage/dist/index.js";
 import { FfmpegCommandPlanner, FfmpegProcess } from "../../packages/rendering/dist/index.js";
 import { StaticStrategyRegistry } from "../../packages/strategies/dist/index.js";
-import { ProjectService, InMemoryAssetRepository, InMemoryProjectMemberRepository, InMemoryProjectRepository, InMemoryRevisionRepository, InMemorySceneRepository } from "../../packages/application/dist/index.js";
+import { ProjectService, InMemoryPreferenceRepository, InMemoryAssetRepository, InMemoryProjectMemberRepository, InMemoryProjectRepository, InMemoryRevisionRepository, InMemorySceneRepository } from "../../packages/application/dist/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "../..");
@@ -52,6 +53,7 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
   const clock = { now: () => new Date().toISOString() };
   const authenticate = async () => ({ userId: "user-1" });
   const authorize = { canAccess: async () => true };
+  const preferences = new InMemoryPreferenceRepository();
   const service = new ProjectService(projects, assets, revisions, ids, clock);
   const jobRepository = { get: async (id) => jobs.get(id), save: async (job) => { jobs.set(job.id, job); }, update: async (job) => { jobs.set(job.id, job); } };
   const renderer = {
@@ -71,15 +73,16 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
   };
   const server = buildServer({
     projects, assets, revisions, storage, members: new InMemoryProjectMemberRepository(), scenes: new InMemorySceneRepository(),
-    authenticate: { authenticate }, authorize, strategies: new StaticStrategyRegistry(), clock, ids, renderer,
+    authenticate: { authenticate }, authorize, strategies: new StaticStrategyRegistry(), clock, ids, renderer, preferences,
     transcripts: { async replaceForAsset(id, segs) { transcriptValues.set(id, segs); }, async listForAsset(id) { return transcriptValues.get(id) ?? []; } },
     proposals: { async save(p) { proposalValues.set(p.id, p); }, async get(id) { return proposalValues.get(id); }, async setStatus(id, status) { proposalValues.set(id, { ...proposalValues.get(id), status }); } },
     transcriber: new FasterWhisperWorker({ pythonCommand: "python3", workerPath: join(here, "sherpa_worker.py"), mediaRoot }),
     silenceDetector: new StorageSilenceDetector(storage),
   });
   registerUploadRoutes(server, { assets, storage, authorize, authenticate, clock: clock.now, inspector: (p) => probeMedia(p) });
-  registerTimelineRoutes(server, { projects, revisions, authenticate, authorize, saveRevision: (i) => service.saveRevision(i) });
+  registerTimelineRoutes(server, { projects, revisions, preferences, authenticate, authorize, saveRevision: (i) => service.saveRevision(i) });
   registerRenderRoutes(server, { jobs: jobRepository, storage, signingSecret: "test-signing-secret-test-signing", authenticate, authorize });
+  registerPreferenceRoutes(server, { preferences, authenticate });
   registerMediaRoutes(server, { assets, storage, signingSecret: "test-signing-secret-test-signing", authenticate, authorize });
   server.post("/auth/register", async (request, reply) => reply.code(201).send({ user: { id: "user-1", email: request.body.email }, accessToken: "test-token" }));
   server.post("/auth/refresh", async (_request, reply) => reply.code(401).send({ error: { code: "no_session", message: "No session" } }));
@@ -189,6 +192,13 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
     assert.deepEqual([video.width, video.height], [1080, 1920]);
     assert.ok(Number(probe.format.duration) > 10 && Number(probe.format.duration) < 45, "duration " + probe.format.duration);
     execFileSync("ffmpeg", ["-v", "error", "-i", outPath, "-f", "null", "-"]);
+
+    // Exporting teaches the highlight finder; the editor shows what it learned and can reset it.
+    const learnedPanel = page.locator(".learned-panel");
+    await learnedPanel.filter({ hasText: /[1-9]\d* exported/ }).waitFor({ timeout: 15_000 });
+    await page.getByRole("button", { name: "Reset what was learned" }).click();
+    await waitStatus(/Learned preferences cleared/);
+    await learnedPanel.filter({ hasText: /^[\s\S]*0 signals/ }).waitFor({ timeout: 15_000 });
     assert.deepEqual(errors, [], "no page errors during the session: " + errors.join(" | ") + " | " + (await status()));
   } finally {
     await browser.close();

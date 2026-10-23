@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { applyTimelineOperations, parseTimelineOperations, type ProjectRevision, type UUID } from "@videocraft/domain";
+import { applyTimelineOperations, parseTimelineOperations, type PreferenceRepository, type ProjectRevision, type UUID } from "@videocraft/domain";
+import { record, removedSamples } from "./learning.js";
 import { exportOtio, importOtio } from "@videocraft/timeline-interchange";
 import type { ProjectRepository, RevisionRepository } from "@videocraft/application";
 
@@ -7,6 +8,8 @@ export interface TimelineRouteDependencies {
   projects: ProjectRepository; revisions: RevisionRepository;
   authenticate(request: FastifyRequest): Promise<{ userId: UUID } | null>;
   authorize: { canAccess(principal: { userId: UUID }, projectId: UUID, role: "viewer" | "editor"): Promise<boolean> };
+  /** When present, clips the person removes teach the highlight strategy. */
+  preferences?: PreferenceRepository;
   saveRevision(input: { projectId: UUID; createdBy: UUID; timeline: ProjectRevision["timeline"]; acceptedProposalIds: UUID[]; tailoring?: NonNullable<ProjectRevision["tailoring"]> }): Promise<ProjectRevision>;
 }
 export function registerTimelineRoutes(server: FastifyInstance, dependencies: TimelineRouteDependencies): void {
@@ -44,6 +47,8 @@ export function registerTimelineRoutes(server: FastifyInstance, dependencies: Ti
         acceptedProposalIds: base.acceptedProposalIds,
         ...(base.tailoring === undefined ? {} : { tailoring: base.tailoring }),
       });
+      const removed = operations.flatMap((operation) => operation.type === "remove-clip" ? [operation.clipId] : []);
+      await record(dependencies.preferences, removedSamples(principal.userId, params.projectId, base.revision, base.timeline, removed, new Date().toISOString()), (caught) => request.log.warn({ err: caught }, "Could not record preference samples"));
       return reply.code(201).send({ revision });
     } catch (caught) {
       return error(reply, 400, "invalid_edit", caught instanceof Error ? caught.message : "Invalid edit");

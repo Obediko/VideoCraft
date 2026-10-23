@@ -113,3 +113,12 @@ test("clip edges snap to a nearby shot change only when no speech is clipped", (
   assert.deepEqual(snapToShotCuts({ startUs: 2_000_000, endUs: 3_000_000 }, [3_200_000, 8_000_000], words), { startUs: 2_000_000, endUs: 3_200_000 });
   assert.deepEqual(snapToShotCuts({ startUs: 2_000_000, endUs: 3_000_000 }, [], words), { startUs: 2_000_000, endUs: 3_000_000 });
 });
+
+test("learned multipliers tilt the policy and are explained in the proposal", async () => {
+  const profile = { intent: "Explain onboarding", audience: "founders", channel: "short-form", constraints: [] };
+  const base = policyFor(profile).weights;
+  const tilted = policyFor(profile, { multipliers: { hook: 0.5, relevance: 2 }, samples: 12 }).weights;
+  assert.equal(tilted.hook, base.hook * 0.5);
+  assert.equal(tilted.relevance, base.relevance * 2);
+  assert.equal(tilted.density, base.density);
+});

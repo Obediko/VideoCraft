@@ -1,4 +1,5 @@
 import type { Timeline, TimelineClip, TimelineOperation, TimelineTrack } from "./index.js";
+import { sanitizeFeatures } from "./learning.js";
 
 const GENERATED_PREFIX = "generated:";
 
@@ -75,7 +76,7 @@ export function applyTimelineOperations(timeline: Timeline, operations: Timeline
         let id = base;
         for (let n = 2; tracks.some((track) => track.clips.some((clip) => clip.id === id)); n += 1) id = base + "-" + n;
         const length = operation.sourceEndUs - operation.sourceStartUs;
-        const clip: TimelineClip = { id, assetId: operation.assetId, sourceStartUs: operation.sourceStartUs, sourceEndUs: operation.sourceEndUs, timelineStartUs: 0, timelineEndUs: length, reason: operation.reason, ...(operation.score === undefined ? {} : { score: operation.score }) };
+        const clip: TimelineClip = { id, assetId: operation.assetId, sourceStartUs: operation.sourceStartUs, sourceEndUs: operation.sourceEndUs, timelineStartUs: 0, timelineEndUs: length, reason: operation.reason, ...(operation.score === undefined ? {} : { score: operation.score }), ...(operation.features ? { features: operation.features } : {}) };
         const ordered = sortedClips(video);
         const index = operation.index === undefined ? ordered.length : Math.max(0, Math.min(operation.index, ordered.length));
         ordered.splice(index, 0, clip);
@@ -208,7 +209,7 @@ export function parseTimelineOperations(value: unknown): TimelineOperation[] {
       case "insert-clip":
         if (!isId(op.assetId) || !isUs(op.sourceStartUs) || !isUs(op.sourceEndUs) || op.sourceEndUs <= op.sourceStartUs) return fail("insert-clip needs assetId and a valid source range");
         if (op.index !== undefined && !(Number.isSafeInteger(op.index) && (op.index as number) >= 0)) return fail("insert-clip index must be a non-negative integer");
-        return { type: "insert-clip", assetId: op.assetId, sourceStartUs: op.sourceStartUs, sourceEndUs: op.sourceEndUs, reason: typeof op.reason === "string" ? op.reason.slice(0, 1_000) : "Added by editor", ...(typeof op.score === "number" && op.score >= 0 && op.score <= 1 ? { score: op.score } : {}), ...(op.index === undefined ? {} : { index: op.index as number }) };
+        return { type: "insert-clip", assetId: op.assetId, sourceStartUs: op.sourceStartUs, sourceEndUs: op.sourceEndUs, reason: typeof op.reason === "string" ? op.reason.slice(0, 1_000) : "Added by editor", ...(typeof op.score === "number" && op.score >= 0 && op.score <= 1 ? { score: op.score } : {}), ...(sanitizeFeatures(op.features) ? { features: sanitizeFeatures(op.features) as Record<string, number> } : {}), ...(op.index === undefined ? {} : { index: op.index as number }) };
       case "reorder-clips":
         if (!Array.isArray(op.clipIds) || op.clipIds.length === 0 || !op.clipIds.every(isId)) return fail("reorder-clips needs clipIds");
         return { type: "reorder-clips", clipIds: op.clipIds as string[] };

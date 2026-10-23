@@ -221,6 +221,7 @@ function mapRevision(row: RevisionRow): ProjectRevision {
 export { PostgresRenderJobRepository } from "./render-jobs.js";
 
 export { PostgresFeedbackRepository } from "./feedback.js";
+export { PostgresPreferenceRepository } from "./preferences.js";
 
 export { PostgresAuditRepository, type AuditEventRecord } from "./audit.js";
 
