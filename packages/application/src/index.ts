@@ -1,4 +1,4 @@
-import type { Asset, Project, ProjectRevision, Timeline, UUID } from "@videocraft/domain";
+import type { Asset, PreferenceRepository, PreferenceSample, Project, ProjectRevision, Timeline, UUID } from "@videocraft/domain";
 import { validateTimeline } from "@videocraft/domain";
 
 export interface Clock { now(): string; }
@@ -144,4 +144,12 @@ export class InMemorySceneRepository implements SceneRepository {
       this.values.set(assetId + ":" + scene.id, scene);
     }
   }
+}
+
+/** In-memory preference store (tests and single-process setups). */
+export class InMemoryPreferenceRepository implements PreferenceRepository {
+  private readonly values = new Map<string, PreferenceSample>();
+  async append(samples: PreferenceSample[]) { for (const sample of samples) if (!this.values.has(sample.key)) this.values.set(sample.key, sample); }
+  async list(userId: UUID, strategyId: string, limit: number) { return [...this.values.values()].filter((s) => s.userId === userId && s.strategyId === strategyId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, limit); }
+  async clear(userId: UUID) { for (const [key, sample] of this.values) if (sample.userId === userId) this.values.delete(key); }
 }

@@ -91,3 +91,35 @@ test("operation parser accepts valid operations and rejects malformed ones", () 
   assert.throws(() => parseTimelineOperations([{ type: "format-disk" }]), /unknown operation/);
   assert.throws(() => parseTimelineOperations([{ type: "update-caption", clipId: "x", text: "   " }]), /non-empty text/);
 });
+
+import { learnPreferences, describePreferences, sanitizeFeatures } from "../dist/index.js";
+
+const sample = (features, label, i, weight = 1) => ({ key: "k" + i, userId: "u", strategyId: "s", features, label, weight, source: label > 0 ? "exported" : "removed", createdAt: "2026-10-23T00:00:" + String(i).padStart(2, "0") + ".000Z" });
+
+test("learning: features of removed clips lose weight and features of kept clips gain it, within bounds", () => {
+  const hooky = { relevance: 0.3, hook: 0.95, density: 0.5, completeness: 0.5 };
+  const relevant = { relevance: 0.95, hook: 0.2, density: 0.6, completeness: 0.7 };
+  const samples = [];
+  for (let i = 0; i < 6; i += 1) { samples.push(sample(hooky, -1, i * 2)); samples.push(sample(relevant, 1, i * 2 + 1)); }
+  const learned = learnPreferences(samples);
+  assert.ok(learned.multipliers.hook < 0.8, "hook de-emphasised: " + learned.multipliers.hook);
+  assert.ok(learned.multipliers.relevance > 1.2, "relevance favoured: " + learned.multipliers.relevance);
+  assert.ok(Object.values(learned.multipliers).every((m) => m >= 0.5 && m <= 2), "bounded");
+  assert.match(describePreferences(learned, { relevance: "relevance", hook: "hooks" }), /favouring relevance.*de-emphasising hooks/);
+
+  const many = Array.from({ length: 200 }, (_, i) => sample(hooky, -1, i % 60));
+  assert.equal(learnPreferences(many).multipliers.hook, 0.5, "clamped at half weight");
+});
+
+test("learning: too few samples or a neutral history changes nothing", () => {
+  assert.deepEqual(learnPreferences([sample({ hook: 1, relevance: 0 }, -1, 1)]).multipliers, {});
+  const flat = [0, 1, 2].map((i) => sample({ hook: 0.5, relevance: 0.5 }, i % 2 ? 1 : -1, i));
+  assert.equal(describePreferences(learnPreferences(flat)), undefined);
+});
+
+test("feature maps from untrusted input are validated", () => {
+  assert.deepEqual(sanitizeFeatures({ hook: 0.4, relevance: 1 }), { hook: 0.4, relevance: 1 });
+  assert.deepEqual(sanitizeFeatures({ hook: 0.4, bad: 7, "__proto__x": 0.1 }), { hook: 0.4 });
+  assert.equal(sanitizeFeatures([0.1]), undefined);
+  assert.equal(sanitizeFeatures({ hook: "x" }), undefined);
+});

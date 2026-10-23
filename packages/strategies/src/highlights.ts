@@ -1,5 +1,6 @@
 import { mergeSpans, pausesFromWords } from "@videocraft/analysis";
 import { buildCues, cueOperations } from "@videocraft/captions";
+import { describePreferences, type LearnedPreferences } from "@videocraft/domain";
 import type { EditingProposal, EditingStrategy, Evidence, TailoringProfile, TimelineOperation, TimelineSignals, TranscriptSegment, TranscriptWord } from "@videocraft/domain";
 
 export interface HighlightWeights { relevance: number; hook: number; density: number; completeness: number; length: number; delivery: number; }
@@ -23,12 +24,17 @@ const HOOK_PATTERNS: Array<[RegExp, number]> = [
 const SHORT_FORM: Policy = { minUs: 6_000_000, maxUs: 28_000_000, idealUs: 14_000_000, defaultTargetUs: 30_000_000, pauseCutUs: 450_000, weights: { relevance: 0.3, hook: 0.22, density: 0.14, completeness: 0.1, length: 0.1, delivery: 0.14 } };
 const LONG_FORM: Policy = { minUs: 15_000_000, maxUs: 90_000_000, idealUs: 40_000_000, defaultTargetUs: 90_000_000, pauseCutUs: 900_000, weights: { relevance: 0.36, hook: 0.08, density: 0.14, completeness: 0.2, length: 0.08, delivery: 0.14 } };
 
-export function policyFor(profile: TailoringProfile): Policy {
+export function policyFor(profile: TailoringProfile, learned?: LearnedPreferences): Policy {
   const channel = profile.channel.toLowerCase();
   const base = channel === "short-form" || /tiktok|reel|short/.test(channel) ? SHORT_FORM : LONG_FORM;
   const tone = (profile.tone ?? "").toLowerCase();
   const weights = { ...base.weights };
   if (/professional|formal|reflective|sermon/.test(tone)) { weights.hook = weights.hook * 0.5; weights.completeness = weights.completeness + 0.05; weights.delivery = weights.delivery + 0.02; }
+  // Tilt toward what this person keeps (bounded multipliers learned from their edits).
+  for (const key of Object.keys(weights) as Array<keyof HighlightWeights>) {
+    const multiplier = learned?.multipliers[key];
+    if (typeof multiplier === "number" && Number.isFinite(multiplier) && multiplier > 0) weights[key] = weights[key] * multiplier;
+  }
   return { ...base, weights };
 }
 
@@ -136,8 +142,8 @@ function overlapUs(spans: Array<{ startUs: number; endUs: number }>, startUs: nu
 }
 
 /** Generates and scores candidate highlight windows built from whole sentences. */
-export function findCandidates(transcript: TranscriptSegment[], profile: TailoringProfile, signals?: TimelineSignals, range?: { startUs: number; endUs: number }): HighlightCandidate[] {
-  const policy = policyFor(profile);
+export function findCandidates(transcript: TranscriptSegment[], profile: TailoringProfile, signals?: TimelineSignals, range?: { startUs: number; endUs: number }, learned?: LearnedPreferences): HighlightCandidate[] {
+  const policy = policyFor(profile, learned);
   const goal = goalTerms(profile);
   const units = buildUnits(transcript).filter((unit) => !range || (unit.startUs >= range.startUs && unit.endUs <= range.endUs));
   const allWords = units.flatMap((unit) => unit.words);
@@ -211,7 +217,7 @@ export class HighlightReelStrategy implements EditingStrategy {
   readonly version = "1.0.0";
 
   async propose(input: Parameters<EditingStrategy["propose"]>[0]): ReturnType<EditingStrategy["propose"]> {
-    const { revision, profile, transcript, signals } = input;
+    const { revision, profile, transcript, signals, learned } = input;
     const videoClips = revision.timeline.tracks.find((track) => track.kind === "video")?.clips ?? [];
     const sourceClip = videoClips[0];
     const userEvidence: Evidence[] = [
@@ -226,10 +232,10 @@ export class HighlightReelStrategy implements EditingStrategy {
     if (relevant.length === 0 || relevant.every((segment) => !segment.text.trim())) return none("No transcript exists for the source video. Transcribe it first; highlights are chosen from what is said.");
 
     const sourceRange = { startUs: Math.min(...videoClips.filter((clip) => clip.assetId === assetId).map((clip) => clip.sourceStartUs)), endUs: Math.max(...videoClips.filter((clip) => clip.assetId === assetId).map((clip) => clip.sourceEndUs)) };
-    const policy = policyFor(profile);
+    const policy = policyFor(profile, learned);
     const targetUs = profile.targetDurationUs && profile.targetDurationUs > 0 ? profile.targetDurationUs : policy.defaultTargetUs;
     const sourceDurationUs = sourceRange.endUs - sourceRange.startUs;
-    const candidates = findCandidates(relevant, profile, signals, sourceRange);
+    const candidates = findCandidates(relevant, profile, signals, sourceRange, learned);
 
     // A source that already fits the target needs tightening, not selection.
     const wantsAll = sourceDurationUs <= targetUs * 1.05;
@@ -254,7 +260,7 @@ export class HighlightReelStrategy implements EditingStrategy {
         const clampedStart = Math.max(sourceRange.startUs, cut.startUs);
         const clampedEnd = Math.min(sourceRange.endUs, cut.endUs);
         if (clampedEnd <= clampedStart) return;
-        operations.push({ type: "insert-clip", assetId, sourceStartUs: clampedStart, sourceEndUs: clampedEnd, reason, score: candidate.score });
+        operations.push({ type: "insert-clip", assetId, sourceStartUs: clampedStart, sourceEndUs: clampedEnd, reason, score: candidate.score, features: { ...candidate.features } });
         kept.push({ startUs: clampedStart, endUs: clampedEnd });
       });
       evidence.push({ source: "transcript", reference: candidate.unitIds[0]?.split("#")[0] ?? "transcript", excerpt: excerpt(candidate.text), startUs: candidate.startUs, endUs: candidate.endUs });
@@ -262,12 +268,14 @@ export class HighlightReelStrategy implements EditingStrategy {
     });
 
     for (const op of cueOperations(assetId, buildCues(allWords, { ranges: kept }))) operations.push(op);
+    const learnedNote = learned ? describePreferences(learned, LABELS) : undefined;
+    if (learned && learnedNote) evidence.push({ source: "model", reference: "learned-preferences", excerpt: "From " + learned.samples + " of your past edits: " + learnedNote + ". Multipliers: " + Object.entries(learned.multipliers).map(([key, value]) => key + " ×" + value).join(", ") });
 
     const keptUs = kept.reduce((sum, range) => sum + (range.endUs - range.startUs), 0);
     const averageScore = selected.reduce((sum, candidate) => sum + candidate.score, 0) / selected.length;
     const coverage = Math.min(1, allWords.length / Math.max(1, sourceDurationUs / 1_000_000 * 1.5));
     return {
-      rationale: "Selected " + selected.length + " highlight" + (selected.length === 1 ? "" : "s") + " (" + (keptUs / 1_000_000).toFixed(1) + "s of " + (sourceDurationUs / 1_000_000).toFixed(1) + "s) that best match \"" + profile.intent.slice(0, 120) + "\" for " + profile.audience.slice(0, 80) + " on " + profile.channel + ". Pauses longer than " + (policy.pauseCutUs / 1_000_000).toFixed(2) + "s are cut and captions follow the spoken words. Review each clip's reason and transcript evidence before accepting.",
+      rationale: "Selected " + selected.length + " highlight" + (selected.length === 1 ? "" : "s") + " (" + (keptUs / 1_000_000).toFixed(1) + "s of " + (sourceDurationUs / 1_000_000).toFixed(1) + "s) that best match \"" + profile.intent.slice(0, 120) + "\" for " + profile.audience.slice(0, 80) + " on " + profile.channel + ". Pauses longer than " + (policy.pauseCutUs / 1_000_000).toFixed(2) + "s are cut and captions follow the spoken words. Review each clip's reason and transcript evidence before accepting." + (learnedNote ? " Adjusted to your past edits: " + learnedNote + "." : ""),
       confidence: round(Math.max(0.2, Math.min(0.9, averageScore * (0.6 + 0.4 * coverage)))),
       evidence,
       operations,
