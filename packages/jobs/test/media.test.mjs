@@ -10,9 +10,11 @@ import { createProxy, probeMedia, isBrowserPlayable } from "@videocraft/analysis
 import { LocalObjectStorage } from "@videocraft/storage";
 import { InMemoryAssetRepository } from "@videocraft/application";
 
-const haveRedis = spawnSync("redis-server", ["--version"]).status === 0;
+const haveRedis = Boolean(process.env.REDIS_URL) || spawnSync("redis-server", ["--version"]).status === 0;
 
 async function withRedis(run) {
+  // Use a provided Redis (CI service) when there is one; otherwise start a throwaway local server.
+  if (process.env.REDIS_URL) { const url = new URL(process.env.REDIS_URL); return run({ host: url.hostname, port: Number(url.port || 6379) }); }
   const dir = mkdtempSync(join(tmpdir(), "vc-redis-"));
   const port = 20000 + Math.floor(Math.random() * 20000);
   const server = spawn("redis-server", ["--port", String(port), "--save", "", "--appendonly", "no", "--dir", dir], { stdio: "ignore" });
