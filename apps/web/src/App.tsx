@@ -453,6 +453,47 @@ export function App() {
     finally { setBusy(false); }
   }
 
+  /**
+   * The main path in one click: transcribe the video (unless already done), lay the whole video on the
+   * timeline, save it, and ask for highlights matching the brief. Each step reports progress.
+   */
+  async function createHighlights() {
+    const video = assets.find((asset) => asset.id === assetId && asset.kind === "video") ?? [...assets].reverse().find((asset) => asset.kind === "video");
+    if (!projectId || !video) { setStatus("Upload a video first"); return; }
+    setBusy(true);
+    setProposal(null);
+    try {
+      const base = "/v1/projects/" + projectId + "/assets/" + video.id + "/transcript";
+      const existing = await request(base).catch(() => ({ segments: [] }));
+      if (!existing.segments?.length) {
+        setStatus("Step 1 of 3: listening to the video (the first run downloads the speech model and can take a few minutes)…");
+        const result = await request(base, { method: "POST" });
+        if (!result.segments?.length) throw new Error("No speech was found in this video, so there is nothing to choose highlights from");
+      }
+      setStatus("Step 2 of 3: preparing the timeline…");
+      const lengthUs = video.durationUs && video.durationUs > 0 ? video.durationUs : 10_000_000;
+      const usesVideo = videoClips.some((clip) => clip.assetId === video.id);
+      let workingRevision = revision;
+      if (!usesVideo || revision === 0) {
+        const fresh: Timeline = { durationUs: lengthUs, tracks: [{ id: "video", kind: "video", clips: [{ id: "source-" + video.id.slice(0, 8), assetId: video.id, sourceStartUs: 0, sourceEndUs: lengthUs, timelineStartUs: 0, timelineEndUs: lengthUs }] }] };
+        const saved = await request("/v1/projects/" + projectId + "/revisions", { method: "POST", body: JSON.stringify({ timeline: fresh }) });
+        workingRevision = saved.revision.revision;
+        setRevision(workingRevision);
+        setTimeline(saved.revision.timeline);
+      }
+      setStatus("Step 3 of 3: choosing the best moments for your goal…");
+      const found = await request("/v1/projects/" + projectId + "/proposals", {
+        method: "POST",
+        body: JSON.stringify({ revision: workingRevision, strategyId: "highlight-reel", profile: { intent, audience, channel, targetDurationUs: Math.round(targetSeconds * 1_000_000), constraints: [] } }),
+      });
+      setProposal(found.proposal);
+      const picks = found.proposal.operations.filter((operation: Operation) => operation.type === "insert-clip").length;
+      setStatus(picks ? "Highlights ready: review the " + picks + " suggested clips, then Accept" : found.proposal.rationale);
+      setTimeout(() => document.querySelector(".proposal-panel")?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
+    } catch (error) { setStatus(errorMessage(error)); }
+    finally { setBusy(false); }
+  }
+
   async function decideProposal(decision: "accepted" | "rejected") {
     if (!projectId || !proposal) return;
     setBusy(true);
@@ -482,6 +523,18 @@ export function App() {
     finally { setBusy(false); }
   }
 
+  const hasVideo = assets.some((asset) => asset.kind === "video");
+  const accepted = proposal?.status === "accepted";
+  const next: { title: string; detail: string; action?: { label: string; run: () => void; disabled?: boolean } } =
+    !userEmail ? { title: "Sign in", detail: "Create an account or sign in in the Project panel on the left." }
+    : !projectId ? { title: "Create a project", detail: "Name it, then click Create project.", action: { label: "Create project", run: () => void createProject() } }
+    : !hasVideo ? { title: "Upload a video", detail: "Use Upload media in the Asset reference panel on the left. A talk, interview or vlog works best." }
+    : proposal?.status === "proposed" ? { title: "Review the suggested highlights", detail: "Each clip says why it was chosen, with the transcript as evidence. Accept to build your cut, or adjust the goal and try again.", action: { label: "Accept highlights", run: () => void decideProposal("accepted") } }
+    : renderJobId && !renderUrl && !/^(failed|cancelled)/.test(renderJobStatus) ? { title: "Exporting…", detail: "Rendering " + (renderJobStatus || "queued") + ". This takes roughly as long as the video itself." }
+    : renderUrl ? { title: "Your video is ready", detail: "Play it in the Preview panel or download it. Edit further and export again any time." }
+    : accepted ? { title: "Export your video", detail: "Fine-tune below if you like (trim, captions, music, B-roll, graphics), pick a platform next to Export video, then export.", action: { label: "Export video", run: () => void submitRender() } }
+    : { title: "Create highlights", detail: "Tell VideoCraft your goal and audience (left), then let it transcribe the video and pick the strongest moments.", action: { label: "Create highlights", run: () => void createHighlights() } };
+
   return <div className="app-shell">
     <header className="topbar">
       <div><span className="eyebrow">AI VIDEO WORKSPACE</span><h1>VideoCraft</h1></div>
@@ -504,7 +557,8 @@ export function App() {
           <label>Channel<input value={channel} onChange={(event) => setChannel(event.target.value)} /></label>
           <button className="secondary" onClick={analyzeBrief} disabled={busy || !projectId}>Analyze brief</button>
           <label>Target length (seconds)<input type="number" min={5} max={600} value={targetSeconds} onChange={(event) => setTargetSeconds(Math.max(5, Number(event.target.value) || 30))} /></label>
-          <button className="secondary" onClick={previewProposal} disabled={busy || !revision}>Find highlights</button>
+          <button onClick={createHighlights} disabled={busy || !projectId || !hasVideo}>Create highlights</button>
+          <button className="secondary" onClick={previewProposal} disabled={busy || !revision}>Re-run on current timeline</button>
         </section>
         <section className="panel music-panel" aria-label="Background music">
           <h2>Background music</h2>
@@ -553,7 +607,12 @@ export function App() {
         </section>
       </aside>
       <section className="editor">
-        <div className="editor-toolbar"><div><span className="eyebrow">TIMELINE</span><h2>{projectId ? "Revision " + revision : "No project selected"}</h2></div><div className="toolbar-actions"><button className="secondary" onClick={saveRevision} disabled={busy || !projectId}>Save revision</button><select aria-label="Platform" value={platform} onChange={(event) => setPlatform(event.target.value)}>{Object.entries(PLATFORMS).map(([key, preset]) => <option key={key} value={key}>{preset.label}</option>)}</select><button onClick={submitRender} disabled={busy || !revision}>Render preview</button></div></div>
+        <section className="next-step" aria-label="Next step">
+          <div><span className="eyebrow">NEXT STEP</span><h2>{next.title}</h2><p>{next.detail}</p></div>
+          {next.action && <button className="primary-action" onClick={next.action.run} disabled={busy || next.action.disabled}>{busy ? "Working…" : next.action.label}</button>}
+          {renderUrl && <a className="primary-action" href={renderUrl} download="videocraft-export.mp4">Download video</a>}
+        </section>
+        <div className="editor-toolbar"><div><span className="eyebrow">TIMELINE</span><h2>{projectId ? "Revision " + revision : "No project selected"}</h2></div><div className="toolbar-actions"><button className="secondary" onClick={saveRevision} disabled={busy || !projectId}>Save revision</button><select aria-label="Platform" value={platform} onChange={(event) => setPlatform(event.target.value)}>{Object.entries(PLATFORMS).map(([key, preset]) => <option key={key} value={key}>{preset.label}</option>)}</select><button onClick={submitRender} disabled={busy || !revision}>Export video</button></div></div>
         <div className="timeline-card">
           <div className="ruler"><span>00:00</span><span>00:10</span><span>00:20</span><span>00:30</span></div>
           <div className="track-list">
@@ -585,7 +644,7 @@ export function App() {
         </section>}
         <div className="lower-grid">
           <section className="panel preview-panel"><div className="panel-heading"><h2>Preview</h2><span className="badge">Non-destructive</span></div><div className="preview-tabs" role="tablist"><button role="tab" aria-selected={previewMode === "source"} className={previewMode === "source" ? "" : "secondary"} onClick={() => setPreviewMode("source")}>Source</button><button role="tab" aria-selected={previewMode === "render"} className={previewMode === "render" ? "" : "secondary"} onClick={() => setPreviewMode("render")}>Rendered export</button></div><div className="preview-screen">{previewMode === "render" ? (renderUrl ? <video controls src={renderUrl} /> : <span>{renderJobId ? "Render " + renderJobStatus : "Render a platform export to preview it here"}</span>) : (sourceUrl ? <video ref={playerRef} controls src={sourceUrl} onTimeUpdate={stopAtClipEnd} /> : <span>{sourceNote || "Sign in and add a video to scrub the source here"}</span>)}</div>{previewMode === "source" && sourceUrl && sourceNote && <p className="muted">{sourceNote}</p>}{previewMode === "source" && sourceUrl && <div className="player-actions"><button className="secondary" onClick={playSelectedClip} disabled={!selectedClip}>Play selected clip</button><button className="secondary" onClick={() => trimToPlayhead("start")} disabled={busy || !selectedClip || revision === 0}>Trim start to playhead</button><button className="secondary" onClick={() => trimToPlayhead("end")} disabled={busy || !selectedClip || revision === 0}>Trim end to playhead</button><button className="secondary" onClick={() => markSegmentFromPlayhead("start")}>Segment start = playhead</button><button className="secondary" onClick={() => markSegmentFromPlayhead("end")}>Segment end = playhead</button></div>}</section>
-          <section className="panel proposal-panel"><div className="panel-heading"><h2>AI proposal</h2>{proposal && <span className="badge">{Math.round(proposal.confidence * 100)}% confidence</span>}</div>{proposal ? <><p>{proposal.rationale}</p>{proposal.operations.some((operation) => operation.type === "insert-clip") && <ol className="highlight-list">{proposal.operations.filter((operation) => operation.type === "insert-clip").map((operation, index) => <li key={index}><strong>{formatSeconds(operation.sourceStartUs ?? 0)}–{formatSeconds(operation.sourceEndUs ?? 0)}</strong>{typeof operation.score === "number" && <span className="badge">score {Math.round(operation.score * 100)}</span>}<p>{operation.reason}</p></li>)}</ol>}<div className="evidence">{proposal.evidence.map((item) => <div key={item.reference}><span>{item.source}</span><code>{item.reference}{typeof item.startUs === "number" && typeof item.endUs === "number" ? " · " + formatSeconds(item.startUs) + "–" + formatSeconds(item.endUs) : ""}</code>{item.excerpt && <p>{item.excerpt}</p>}</div>)}</div>{proposal.status === "proposed" && <div className="decision-actions"><button className="secondary" onClick={() => decideProposal("rejected")} disabled={busy}>Reject</button><button onClick={() => decideProposal("accepted")} disabled={busy}>Accept as revision</button></div>}</> : <p className="muted">Save a revision to request an explainable tailoring proposal.</p>}</section>
+          <section className="panel proposal-panel"><div className="panel-heading"><h2>AI proposal</h2>{proposal && <span className="badge">{Math.round(proposal.confidence * 100)}% confidence</span>}</div>{proposal ? <><p>{proposal.rationale}</p>{proposal.operations.some((operation) => operation.type === "insert-clip") && <ol className="highlight-list">{proposal.operations.filter((operation) => operation.type === "insert-clip").map((operation, index) => <li key={index}><strong>{formatSeconds(operation.sourceStartUs ?? 0)}–{formatSeconds(operation.sourceEndUs ?? 0)}</strong>{typeof operation.score === "number" && <span className="badge">score {Math.round(operation.score * 100)}</span>}<p>{operation.reason}</p></li>)}</ol>}<div className="evidence">{proposal.evidence.map((item) => <div key={item.reference}><span>{item.source}</span><code>{item.reference}{typeof item.startUs === "number" && typeof item.endUs === "number" ? " · " + formatSeconds(item.startUs) + "–" + formatSeconds(item.endUs) : ""}</code>{item.excerpt && <p>{item.excerpt}</p>}</div>)}</div>{proposal.status === "proposed" && <div className="decision-actions"><button className="secondary" onClick={() => decideProposal("rejected")} disabled={busy}>Reject</button><button onClick={() => decideProposal("accepted")} disabled={busy}>Accept as revision</button></div>}</> : <p className="muted">Click Create highlights: suggested clips appear here with the reason and transcript evidence for each.</p>}</section>
         </div>
       </section>
     </main>

@@ -120,24 +120,25 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
     await waitStatus(/Uploaded asset/);
     assert.deepEqual(errors, [], "no page errors after upload");
 
-    await page.getByRole("button", { name: "Transcribe" }).click();
-    await waitStatus(/Transcribed \d+ segments \(\d+ timed words\)/);
-    await page.getByRole("button", { name: "Add video clip" }).click();
-    await page.getByRole("button", { name: "Save revision" }).click();
-    await waitStatus(/Revision 1 saved/);
-
+    // The guided path: after upload the next-step bar offers one button that does transcription, layout and selection.
+    const nextStep = page.locator(".next-step");
+    await nextStep.filter({ hasText: "Create highlights" }).waitFor();
     await page.getByLabel("Intent").fill("Explain why customer onboarding fails and how to fix it");
     await page.getByLabel("Audience").fill("SaaS founders");
     await page.getByLabel("Target length (seconds)").fill("30");
-    await page.getByRole("button", { name: "Find highlights" }).click();
+    await nextStep.getByRole("button", { name: "Create highlights" }).click();
+    await waitStatus(/Step 1 of 3: listening/, 10_000);
+    await waitStatus(/Highlights ready: review the \d+ suggested clips/, 180_000);
     await page.locator(".highlight-list li").first().waitFor({ timeout: 60_000 });
     const reasons = await page.locator(".highlight-list li").allInnerTexts();
     assert.ok(reasons.length >= 1 && reasons.every((text) => /score \d+/.test(text) && /Highlight \d+\/\d+/.test(text)), "every suggestion explains itself: " + reasons.join(" | "));
     const evidence = await page.locator(".evidence code").allInnerTexts();
     assert.ok(evidence.some((text) => /\d+\.\ds–\d+\.\ds/.test(text)), "evidence carries timestamps: " + evidence.join(" | "));
 
-    await page.getByRole("button", { name: "Accept as revision" }).click();
+    await nextStep.filter({ hasText: "Review the suggested highlights" }).waitFor();
+    await nextStep.getByRole("button", { name: "Accept highlights" }).click();
     await waitStatus(/Proposal accepted/);
+    await nextStep.filter({ hasText: "Export your video" }).waitFor();
     const clips = page.locator("button.clip");
     await clips.first().waitFor();
     const videoClipCount = await page.locator(".track", { has: page.locator(".track-label", { hasText: /^video$/ }) }).locator("button.clip").count();
@@ -221,8 +222,10 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
 
     // Export for a 9:16 platform and verify the file the browser is offered.
     await page.getByLabel("Platform").selectOption("tiktok");
-    await page.getByRole("button", { name: "Render preview" }).click();
+    await nextStep.getByRole("button", { name: "Export video" }).click();
     await waitStatus(/Render succeeded/, 240_000);
+    await nextStep.filter({ hasText: "Your video is ready" }).waitFor();
+    assert.equal(await nextStep.getByRole("link", { name: "Download video" }).getAttribute("download"), "videocraft-export.mp4");
     const src = await page.locator(".preview-screen video").getAttribute("src");
     assert.ok(src, "rendered export is offered for playback");
     const bytes = Buffer.from(await (await fetch(src.startsWith("http") ? src : base + src)).arrayBuffer());

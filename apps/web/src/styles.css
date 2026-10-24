@@ -93,3 +93,10 @@ h2 { margin-bottom: 14px; font-size: 14px; letter-spacing: .02em; }
 .broll-list li { display: flex; justify-content: space-between; gap: 8px; align-items: center; font-size: 0.9em; }
 .graphics-list li { display: grid; grid-template-columns: auto 1fr auto auto; }
 input[type="color"] { padding: 0; height: 32px; }
+
+.next-step { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 18px 20px; margin-bottom: 16px; border-radius: 14px; background: linear-gradient(135deg, rgba(245, 165, 36, 0.16), rgba(245, 165, 36, 0.04)); border: 1px solid rgba(245, 165, 36, 0.45); }
+.next-step h2 { margin: 2px 0 4px; }
+.next-step p { margin: 0; opacity: 0.85; max-width: 60ch; }
+.primary-action { font-size: 1.05rem; padding: 12px 22px; border-radius: 10px; white-space: nowrap; background: #F5A524; color: #111; border: none; font-weight: 700; text-decoration: none; cursor: pointer; }
+.primary-action:disabled { opacity: 0.6; cursor: progress; }
+@media (max-width: 700px) { .next-step { flex-direction: column; align-items: stretch; } }
