@@ -114,7 +114,7 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
     await page.getByRole("button", { name: "Create account" }).last().click();
     await waitStatus(/Account created/);
 
-    await page.getByRole("button", { name: "Create project" }).click();
+    await page.locator(".sidebar").getByRole("button", { name: "Create project" }).click();
     await waitStatus(/Project created/);
     await page.locator('input[type="file"]').setInputFiles(sample + ".mp4");
     await waitStatus(/Uploaded asset/);
