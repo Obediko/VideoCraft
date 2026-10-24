@@ -284,21 +284,33 @@ export class HighlightReelStrategy implements EditingStrategy {
     const operations: TimelineOperation[] = videoClips.map((clip) => ({ type: "remove-clip", clipId: clip.id, reason: "Replaced by selected highlights" }));
     const kept: Array<{ startUs: number; endUs: number }> = [];
     const evidence: Evidence[] = [...userEvidence];
-    selected.forEach((candidate, index) => {
+    // Lay out each highlight first (pause cuts, padding, shot snapping), because padding can push the cut past
+    // the requested length; while it does, drop the weakest highlight.
+    const shotCuts = (signals?.scenes ?? []).map((scene) => scene.startUs).filter((at) => at > 0);
+    const layout = (candidate: HighlightCandidate) => {
       const earlier = allWords.filter((word) => word.endUs <= candidate.startUs).reduce((max, word) => Math.max(max, word.endUs), 0);
       const later = allWords.filter((word) => word.startUs >= candidate.endUs).reduce((min, word) => Math.min(min, word.startUs), Number.MAX_SAFE_INTEGER);
       const cuts = tightCuts(candidate, { prevEndUs: earlier, nextStartUs: later }, { pauseCutUs: policy.pauseCutUs, leadUs: 150_000, tailUs: 220_000 });
       const removedUs = (candidate.endUs - candidate.startUs) - cuts.reduce((sum, cut) => sum + (cut.endUs - cut.startUs), 0);
-      const reason = describe(candidate, index + 1, selected.length, cuts.length > 1 ? removedUs : 0);
-      const shotCuts = (signals?.scenes ?? []).map((scene) => scene.startUs).filter((at) => at > 0);
-      cuts.forEach((rawCut) => {
+      const pieces = cuts.flatMap((rawCut) => {
         const cut = snapToShotCuts(rawCut, shotCuts, allWords);
-        const clampedStart = Math.max(sourceRange.startUs, cut.startUs);
-        const clampedEnd = Math.min(sourceRange.endUs, cut.endUs);
-        if (clampedEnd <= clampedStart) return;
-        operations.push({ type: "insert-clip", assetId, sourceStartUs: clampedStart, sourceEndUs: clampedEnd, reason, score: candidate.score, features: { ...candidate.features } });
-        kept.push({ startUs: clampedStart, endUs: clampedEnd });
+        const startUs = Math.max(sourceRange.startUs, cut.startUs);
+        const endUs = Math.min(sourceRange.endUs, cut.endUs);
+        return endUs > startUs ? [{ startUs, endUs }] : [];
       });
+      return { candidate, cuts, removedUs, pieces, lengthUs: pieces.reduce((sum, piece) => sum + piece.endUs - piece.startUs, 0) };
+    };
+    let plans = selected.map(layout);
+    while (!wantsAll && plans.length > 1 && plans.reduce((sum, plan) => sum + plan.lengthUs, 0) > targetUs * 1.1) {
+      const weakest = plans.reduce((low, plan) => (plan.candidate.score < low.candidate.score ? plan : low));
+      plans = plans.filter((plan) => plan !== weakest);
+    }
+    plans.forEach(({ candidate, cuts, removedUs, pieces }, index) => {
+      const reason = describe(candidate, index + 1, plans.length, cuts.length > 1 ? removedUs : 0);
+      for (const piece of pieces) {
+        operations.push({ type: "insert-clip", assetId, sourceStartUs: piece.startUs, sourceEndUs: piece.endUs, reason, score: candidate.score, features: { ...candidate.features } });
+        kept.push(piece);
+      }
       evidence.push({ source: "transcript", reference: candidate.unitIds[0]?.split("#")[0] ?? "transcript", excerpt: excerpt(candidate.text), startUs: candidate.startUs, endUs: candidate.endUs });
       evidence.push({ source: "model", reference: "highlight-score:" + (index + 1), excerpt: "score " + candidate.score + " — " + Object.entries(candidate.features).map(([key, value]) => key + " " + value).join(", ") + (candidate.matchedTerms.length ? "; matched goal terms: " + candidate.matchedTerms.join(", ") : ""), startUs: candidate.startUs, endUs: candidate.endUs });
     });
@@ -309,10 +321,10 @@ export class HighlightReelStrategy implements EditingStrategy {
     if (learned && learnedNote) evidence.push({ source: "model", reference: "learned-preferences", excerpt: "From " + learned.samples + " of your past edits: " + learnedNote + ". Multipliers: " + Object.entries(learned.multipliers).map(([key, value]) => key + " ×" + value).join(", ") });
 
     const keptUs = kept.reduce((sum, range) => sum + (range.endUs - range.startUs), 0);
-    const averageScore = selected.reduce((sum, candidate) => sum + candidate.score, 0) / selected.length;
+    const averageScore = plans.reduce((sum, plan) => sum + plan.candidate.score, 0) / plans.length;
     const coverage = Math.min(1, allWords.length / Math.max(1, sourceDurationUs / 1_000_000 * 1.5));
     return {
-      rationale: "Selected " + selected.length + " highlight" + (selected.length === 1 ? "" : "s") + " (" + (keptUs / 1_000_000).toFixed(1) + "s of " + (sourceDurationUs / 1_000_000).toFixed(1) + "s) that best match \"" + profile.intent.slice(0, 120) + "\" for " + profile.audience.slice(0, 80) + " on " + profile.channel + ". Pauses longer than " + (policy.pauseCutUs / 1_000_000).toFixed(2) + "s are cut and captions follow the spoken words. Review each clip's reason and transcript evidence before accepting." + (learnedNote ? " Adjusted to your past edits: " + learnedNote + "." : ""),
+      rationale: "Selected " + plans.length + " highlight" + (plans.length === 1 ? "" : "s") + " (" + (keptUs / 1_000_000).toFixed(1) + "s of " + (sourceDurationUs / 1_000_000).toFixed(1) + "s) that best match \"" + profile.intent.slice(0, 120) + "\" for " + profile.audience.slice(0, 80) + " on " + profile.channel + ". Pauses longer than " + (policy.pauseCutUs / 1_000_000).toFixed(2) + "s are cut and captions follow the spoken words. Review each clip's reason and transcript evidence before accepting." + (learnedNote ? " Adjusted to your past edits: " + learnedNote + "." : ""),
       confidence: round(Math.max(0.2, Math.min(0.9, averageScore * (0.6 + 0.4 * coverage)))),
       evidence,
       operations,

@@ -122,3 +122,15 @@ test("learned multipliers tilt the policy and are explained in the proposal", as
   assert.equal(tilted.relevance, base.relevance * 2);
   assert.equal(tilted.density, base.density);
 });
+
+test("the finished cut stays within 10% of the requested length even after padding", async () => {
+  const sentences = [];
+  for (let i = 0; i < 14; i += 1) sentences.push([i % 2 ? "Onboarding fails when new users must fill in many fields before seeing value in the product today." : "Cut onboarding to three clear steps and activation improves for every new customer cohort quickly.", 1.4]);
+  const { segments: segs, durationUs: end } = transcript(sentences);
+  const rev = { projectId: "p", revision: 1, acceptedProposalIds: [], createdAt: "", createdBy: "u", timeline: { durationUs: end, tracks: [{ id: "v", kind: "video", clips: [{ id: "src", assetId: "asset", sourceStartUs: 0, sourceEndUs: end, timelineStartUs: 0, timelineEndUs: end }] }] } };
+  for (const seconds of [12, 20, 30]) {
+    const proposal = await new HighlightReelStrategy().propose({ project: { id: "p" }, revision: rev, profile: { intent: "Explain why onboarding fails", audience: "founders", channel: "short-form", targetDurationUs: seconds * 1_000_000, constraints: [] }, transcript: segs });
+    const kept = proposal.operations.filter((o) => o.type === "insert-clip").reduce((sum, o) => sum + o.sourceEndUs - o.sourceStartUs, 0);
+    assert.ok(kept <= seconds * 1_100_000, seconds + "s target kept " + kept / 1e6 + "s");
+  }
+});
