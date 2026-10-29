@@ -83,7 +83,7 @@ export function registerDirectorRoutes(server: FastifyInstance, dependencies: Di
       const lengthUs = clips.reduce((sum, clip) => sum + clip.sourceEndUs - clip.sourceStartUs, 0);
       if (lengthUs >= 3_000_000) {
         const composed = await composeMusicAsset({ projectId: ctx.projectId, mood: musicSuggestion.mood, lengthUs, accentsS: clips.slice(1).map((c) => c.timelineStartUs / 1e6), seed: Math.floor(Math.random() * 1e9) }, dependencies);
-        timeline = applyTimelineOperations(timeline, [{ type: "set-music", assetId: composed.asset.id, volumeDb: -16, duck: true }]);
+        timeline = applyTimelineOperations(timeline, [{ type: "set-music", assetId: composed.asset.id, volumeDb: -20, duck: true }]);
         music = { description: composed.music.description };
       }
     }

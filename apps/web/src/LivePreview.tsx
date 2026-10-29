@@ -1,4 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { generateSoundEffect, type SoundEffectKind } from "../../../packages/music/src/index.js";
 import { BackgroundLayer, type BackgroundSpec } from "./BackgroundLayer.js";
 import { LOOK_CSS, captionBottomFor, faceDuring, faceInFrame, focusDuring, titleTopFor, veilAt, zoomAt, type FaceTrack, type FrameBox, type PreviewClip as Clip } from "./preview.js";
 
@@ -40,6 +41,10 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
   const musicClip = tracks.find((t) => t.kind === "audio")?.clips.find((c) => c.transform?.role === "music");
   const voiceovers = tracks.filter((t) => t.kind === "audio").flatMap((t) => t.clips).filter((c) => c.transform?.role === "voiceover");
   const voiceEls = useRef<Record<string, HTMLAudioElement | null>>({});
+  const sfx = tracks.filter((t) => t.kind === "audio").flatMap((t) => t.clips).filter((c) => c.transform?.role === "sfx");
+  const audioCtx = useRef<AudioContext | null>(null);
+  const sfxBuffers = useRef<Record<string, AudioBuffer>>({});
+  const lastSfxT = useRef(0);
   const indexRef = useRef(0);
   const tRef = useRef(0);
   const clipAt = (t: number) => Math.max(0, clips.findIndex((c) => t >= c.timelineStartUs && t < c.timelineEndUs) === -1 ? (t >= durationUs ? clips.length - 1 : 0) : clips.findIndex((c) => t >= c.timelineStartUs && t < c.timelineEndUs));
@@ -66,6 +71,24 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
 
   // Keep the picture on the right frame when the edit changes.
   useEffect(() => { if (!playing) seek(tRef.current); }, [clips, urls]);
+
+  // Sound effects play when the playhead reaches them, at their own volume (made in the browser, like the export's).
+  useEffect(() => {
+    const previous = lastSfxT.current; lastSfxT.current = tUs;
+    if (!playing || tUs < previous || tUs - previous > 400_000) return;
+    for (const clip of sfx) {
+      if (clip.timelineStartUs <= previous || clip.timelineStartUs > tUs) continue;
+      const kind = String(clip.transform?.kind ?? "pop") as SoundEffectKind;
+      try {
+        const ctx = audioCtx.current ?? (audioCtx.current = new AudioContext());
+        let buffer = sfxBuffers.current[kind];
+        if (!buffer) { const fx = generateSoundEffect(kind, ctx.sampleRate); buffer = ctx.createBuffer(2, fx.left.length, fx.sampleRate); buffer.copyToChannel(fx.left as Float32Array<ArrayBuffer>, 0); buffer.copyToChannel(fx.right as Float32Array<ArrayBuffer>, 1); sfxBuffers.current[kind] = buffer; }
+        const source = ctx.createBufferSource(); source.buffer = buffer;
+        const gain = ctx.createGain(); gain.gain.value = Math.pow(10, Number(clip.transform?.volumeDb ?? -18) / 20);
+        source.connect(gain).connect(ctx.destination); source.start();
+      } catch { /* no audio output */ }
+    }
+  }, [tUs, playing]);
 
   // Voice-overs play at their moments; the footage and music dip under them, as in the export.
   useEffect(() => {
