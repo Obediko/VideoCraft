@@ -91,6 +91,7 @@ export function App() {
   const [learned, setLearned] = useState<{ samples: number; summary: string; counts: Record<string, number> } | null>(null);
   const [sourceNote, setSourceNote] = useState("");
   const [brief, setBrief] = useState("");
+  const [deleteConfirm, setDeleteConfirm] = useState("");
   const [plan, setPlan] = useState<DirectorPlan | null>(null);
   const [planApplied, setPlanApplied] = useState(false);
   const [picked, setPicked] = useState<Record<string, boolean>>({});
@@ -313,6 +314,22 @@ export function App() {
       setProposal(null);
       setProjects((current) => [...current.filter((project) => project.id !== result.project.id), result.project]);
       setStatus("Project created");
+    } catch (error) { setStatus(errorMessage(error)); }
+    finally { setBusy(false); }
+  }
+
+  async function deleteProject() {
+    const project = projects.find((item) => item.id === projectId);
+    if (!project || deleteConfirm.trim().toLowerCase() !== project.name.trim().toLowerCase()) return;
+    setBusy(true);
+    try {
+      const result = await request("/v1/projects/" + project.id, { method: "DELETE", body: JSON.stringify({ confirmName: deleteConfirm }) });
+      setProjects((current) => current.filter((item) => item.id !== project.id));
+      setProjectId(""); setAssets([]); setTimeline({ durationUs: 30_000_000, tracks: [] }); setRevision(0);
+      setProposal(null); setPlan(null); setPlanApplied(false); setCheck(null);
+      setRenderJobId(""); setRenderJobStatus(""); setRenderUrl(""); setSourceUrls({}); setDeleteConfirm("");
+      try { if (localStorage.getItem(LAST_PROJECT_KEY) === project.id) localStorage.removeItem(LAST_PROJECT_KEY); } catch { /* storage unavailable */ }
+      setStatus("Deleted “" + project.name + "” and its " + result.removedObjects + " stored file" + (result.removedObjects === 1 ? "" : "s"));
     } catch (error) { setStatus(errorMessage(error)); }
     finally { setBusy(false); }
   }
@@ -728,6 +745,11 @@ export function App() {
           {projectId && <p className="current-project">Working on <strong>{projects.find((project) => project.id === projectId)?.name ?? projectName}</strong></p>}
           {projects.length > 0 && <label>Open a project<select value={projectId} onChange={(event) => { const project = projects.find((item) => item.id === event.target.value); if (project) void openProject(project); }}><option value="">Choose a project</option>{[...projects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map((project) => <option key={project.id} value={project.id}>{project.name} · {project.revision > 0 ? "revision " + project.revision : "not edited yet"} · {new Date(project.updatedAt).toLocaleDateString(undefined, { day: "numeric", month: "short" })}</option>)}</select></label>}
           <button className="secondary" onClick={refreshProjects} disabled={busy || !token}>Refresh list</button>
+          {projectId && (() => { const current = projects.find((project) => project.id === projectId); return current ? <details className="danger-zone" onToggle={() => setDeleteConfirm("")}><summary>Delete this project</summary>
+            <p className="muted">Deletes “{current.name}”, its uploads, edits and exports for good. This cannot be undone.</p>
+            <label>Type the project name to confirm<input value={deleteConfirm} onChange={(event) => setDeleteConfirm(event.target.value)} placeholder={current.name} autoComplete="off" /></label>
+            <button className="danger" onClick={deleteProject} disabled={busy || deleteConfirm.trim().toLowerCase() !== current.name.trim().toLowerCase()}>Delete project</button>
+          </details> : null; })()}
           <details className="new-project"><summary>New project</summary>
             <label>Name<input value={projectName} maxLength={120} onChange={(event) => setProjectName(event.target.value)} /></label>
             <button onClick={createProject} disabled={busy || !projectName.trim()}>Create project</button>

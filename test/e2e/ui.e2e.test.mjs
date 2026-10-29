@@ -369,6 +369,21 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
     assert.match(chipText, /talk\.mp4/, "video clips are labelled with the file name: " + chipText.slice(0, 200));
     assert.doesNotMatch(await page.locator(".evidence").innerText(), /tailoring-profile\./, "evidence uses plain labels");
 
+    // Delete the project: the name must be typed back, then everything about it is gone.
+    const projectTitle = await page.locator(".current-project strong").innerText();
+    await page.locator(".danger-zone summary").click();
+    const deleteButton = page.locator(".danger-zone").getByRole("button", { name: "Delete project" });
+    assert.equal(await deleteButton.isDisabled(), true, "disabled until the name is typed");
+    await page.getByLabel("Type the project name to confirm").fill(projectTitle.toUpperCase());
+    await deleteButton.click();
+    await waitStatus(/^Deleted “/);
+    await page.locator(".next-step").filter({ hasText: "Create a project" }).waitFor({ timeout: 15_000 });
+    assert.equal(await projects.get("id-1"), undefined, "the project is gone on the server");
+    assert.deepEqual(await assets.listForProject("id-1"), [], "and so are its assets");
+    assert.ok(!existsSync(join(mediaRoot, "projects", "id-1")) || readdirSync(join(mediaRoot, "projects", "id-1"), { recursive: true }).filter((f) => /\.(media|mp4)$/.test(String(f))).length === 0, "its stored media is removed");
+    await page.reload();
+    await page.locator(".next-step").filter({ hasText: "Create a project" }).waitFor({ timeout: 20_000 });
+
     assert.deepEqual(errors, [], "no page errors during the session: " + errors.join(" | ") + " | " + (await status()));
   } finally {
     await browser.close();

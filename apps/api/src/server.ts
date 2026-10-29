@@ -94,6 +94,38 @@ export function buildServer(dependencies: ApiDependencies): FastifyInstance {
     return { projects: await dependencies.projects.listForOwner(principal.userId) };
   });
 
+  // Deleting a project is for its owner only, and the name must be typed back as confirmation.
+  server.delete("/v1/projects/:projectId", async (request, reply) => {
+    const principal = await authenticate(dependencies.authenticate, request, reply);
+    if (!principal) return;
+    const { projectId } = asRecord(request.params);
+    if (typeof projectId !== "string") return sendError(reply, 400, "invalid_request", "projectId is required");
+    const project = await dependencies.projects.get(projectId);
+    if (!project || !(await dependencies.authorize.canAccess(principal, projectId, "viewer"))) return sendError(reply, 404, "not_found", "Project not found");
+    if (project.ownerId !== principal.userId) return sendError(reply, 403, "forbidden", "Only the project's owner can delete it");
+    const confirmName = asRecord(request.body).confirmName;
+    if (typeof confirmName !== "string" || confirmName.trim().toLowerCase() !== project.name.trim().toLowerCase()) return sendError(reply, 400, "confirmation_required", "Type the project's name to confirm deleting it");
+    if (!dependencies.projects.delete) return sendError(reply, 501, "not_supported", "Deleting projects is not available");
+    // Stored media first (uploads, proxies, renders, generated music); the database rows go last so nothing is orphaned unseen.
+    let removedObjects = 0;
+    if (dependencies.storage) {
+      const keys = new Set<string>();
+      for (const asset of await dependencies.assets.listForProject(projectId)) {
+        keys.add(asset.storageKey);
+        if (typeof asset.metadata.proxyKey === "string") keys.add(asset.metadata.proxyKey);
+      }
+      if (dependencies.storage.list) for (const object of await dependencies.storage.list("projects/" + projectId + "/").catch(() => [])) keys.add(object.key);
+      for (const key of keys) {
+        if (!key.startsWith("projects/" + projectId + "/")) continue; // never touch anything outside this project
+        try { await dependencies.storage.remove(key); removedObjects += 1; } catch (error) { request.log.warn({ error, key }, "Could not remove a stored object of a deleted project"); }
+      }
+    }
+    await dependencies.assets.deleteForProject?.(projectId);
+    await dependencies.projects.delete(projectId);
+    request.log.info({ projectId, removedObjects }, "project deleted");
+    return reply.code(200).send({ deleted: true, removedObjects });
+  });
+
   server.get("/v1/projects/:projectId", async (request, reply) => {
     const principal = await authenticate(dependencies.authenticate, request, reply);
     if (!principal) return;
