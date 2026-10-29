@@ -264,3 +264,12 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .live-controls input[type="range"] { flex: 1; }
 .playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--warn-text); z-index: 5; pointer-events: none; }
 .track-lane { cursor: pointer; }
+
+/* Ask the director */
+.ask { display: flex; align-items: center; gap: 8px; width: 100%; max-width: 560px; padding: 6px 6px 6px 12px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--field); }
+.ask input { border: 0; background: transparent; padding: 0; min-height: 40px; }
+.ask input:focus-visible { outline: none; }
+.ask:focus-within { outline: 2px solid var(--info); outline-offset: 2px; }
+.ask-label { font-size: 13px; font-weight: 600; color: var(--muted); }
+.ask-result { width: 100%; max-width: 560px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.ask-result .suggestion { padding: 8px 0; }
