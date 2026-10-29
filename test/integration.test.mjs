@@ -140,3 +140,26 @@ test("session refresh: concurrent refreshes from two tabs both succeed; logged-o
     assert.equal((await refresh(current)).statusCode, 401, "a logged-out session is refused even within a minute");
   } finally { await server.close(); await pool.end(); }
 });
+
+test("deleting a project removes its rows everywhere and leaves other projects alone", { skip }, async () => {
+  const pool = new Pool({ connectionString: databaseUrl });
+  try {
+    await migrateDatabase(pool);
+    const stamp = Date.now();
+    const ids = ["del-" + stamp, "keep-" + stamp];
+    for (const id of ids) {
+      await pool.query("INSERT INTO projects (id, owner_id, name, revision, created_at, updated_at) VALUES ($1,$2,$3,1,now(),now())", [id, "del-user", "P " + id]);
+      await pool.query("INSERT INTO assets (id, project_id, kind, storage_key, checksum_sha256, metadata, created_at) VALUES ($1,$2,'video',$3,$4,'{}',now())", ["a-" + id, id, "projects/" + id + "/assets/a.media", "c".repeat(64)]);
+      await pool.query("INSERT INTO transcript_segments (id, asset_id, start_us, end_us, text, words, provider) VALUES ($1,$2,0,1000,'hi','[]','t')", ["t-" + id, "a-" + id]);
+      await pool.query("INSERT INTO project_revisions (project_id, revision, timeline, accepted_proposal_ids, created_at, created_by) VALUES ($1,1,$2,'[]',now(),'del-user')", [id, JSON.stringify({ durationUs: 0, tracks: [] })]);
+    }
+    await new PostgresProjectRepository(pool).delete(ids[0]);
+    const count = async (sql, id) => Number((await pool.query(sql, [id])).rows[0].n);
+    for (const [table, sql] of [["projects", "SELECT count(*) n FROM projects WHERE id = $1"], ["assets", "SELECT count(*) n FROM assets WHERE project_id = $1"], ["transcripts", "SELECT count(*) n FROM transcript_segments t JOIN assets a ON a.id = t.asset_id WHERE a.project_id = $1"], ["revisions", "SELECT count(*) n FROM project_revisions WHERE project_id = $1"]]) {
+      assert.equal(await count(sql, ids[0]), 0, table + " of the deleted project are gone");
+      assert.equal(await count(sql, ids[1]), 1, table + " of the other project stay");
+    }
+    assert.equal(await count("SELECT count(*) n FROM transcript_segments WHERE asset_id = $1", "a-" + ids[0]), 0);
+    await new PostgresProjectRepository(pool).delete(ids[1]);
+  } finally { await pool.end(); }
+});

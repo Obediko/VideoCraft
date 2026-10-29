@@ -62,6 +62,10 @@ export class PostgresProjectRepository implements ProjectRepository {
       throw error;
     }
   }
+  /** Foreign keys cascade: members, assets (and their transcripts and scenes), revisions, proposals, renders, feedback. */
+  async delete(id: UUID): Promise<void> {
+    await this.db.query("DELETE FROM projects WHERE id = $1", [id]);
+  }
   private async saveRow(project: Project): Promise<void> {
     await this.db.query(
       "INSERT INTO projects (id, owner_id, name, revision, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6) " +

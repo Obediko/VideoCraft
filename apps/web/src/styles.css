@@ -153,3 +153,7 @@ select:focus-visible { outline: 2px solid #7c70f4; outline-offset: 1px; }
 .ruler-lane span:first-child { transform: none; }
 .ruler-lane span:last-child:not(:first-child) { transform: translateX(-100%); }
 .clip-effects { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.5rem; margin-top: 0.6rem; }
+
+.danger-zone summary { color: #e58c8c; cursor: pointer; }
+button.danger { background: #b3261e; color: #fff; }
+button.danger:disabled { background: #4a2a2a; color: #a88; }

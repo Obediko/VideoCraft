@@ -3,8 +3,8 @@ import { validateTimeline } from "@videocraft/domain";
 
 export interface Clock { now(): string; }
 export interface IdFactory { next(): UUID; }
-export interface ProjectRepository { get(id: UUID): Promise<Project | undefined>; listForOwner(ownerId: UUID): Promise<Project[]>; save(project: Project): Promise<void>; }
-export interface AssetRepository { listForProject(projectId: UUID): Promise<Asset[]>; /** Every stored object an asset owns (original and derived files such as playback proxies). */ listStorageKeys(): Promise<string[]>; save(asset: Asset): Promise<void>; /** Replaces an asset's metadata (derived-file status and keys). */ updateMetadata?(assetId: UUID, metadata: Asset["metadata"]): Promise<void>; }
+export interface ProjectRepository { get(id: UUID): Promise<Project | undefined>; listForOwner(ownerId: UUID): Promise<Project[]>; save(project: Project): Promise<void>; /** Deletes the project and everything recorded about it (assets, revisions, proposals, renders, members). */ delete?(id: UUID): Promise<void>; }
+export interface AssetRepository { listForProject(projectId: UUID): Promise<Asset[]>; /** Every stored object an asset owns (original and derived files such as playback proxies). */ listStorageKeys(): Promise<string[]>; save(asset: Asset): Promise<void>; /** Replaces an asset's metadata (derived-file status and keys). */ updateMetadata?(assetId: UUID, metadata: Asset["metadata"]): Promise<void>; /** For stores without cascading deletes (the database cascades from the project). */ deleteForProject?(projectId: UUID): Promise<void>; }
 export interface SceneRecord { id: string; assetId: UUID; startUs: number; endUs: number; createdAt: string; }
 export interface SceneRepository {
   listForAsset(assetId: UUID): Promise<SceneRecord[]>;
@@ -128,6 +128,7 @@ export class InMemoryProjectRepository implements ProjectRepository {
     if (clash) throw new ProjectNameTakenError(clash.name);
     this.values.set(project.id, project);
   }
+  async delete(id: UUID) { this.values.delete(id); }
 }
 export class InMemoryAssetRepository implements AssetRepository {
   private readonly values = new Map<UUID, Asset>();
@@ -135,6 +136,7 @@ export class InMemoryAssetRepository implements AssetRepository {
   async listStorageKeys() { return [...this.values.values()].flatMap((asset) => [asset.storageKey, ...(typeof asset.metadata.proxyKey === "string" ? [asset.metadata.proxyKey] : [])]); }
   async save(asset: Asset) { this.values.set(asset.id, asset); }
   async updateMetadata(assetId: UUID, metadata: Asset["metadata"]) { const asset = this.values.get(assetId); if (asset) this.values.set(assetId, { ...asset, metadata }); }
+  async deleteForProject(projectId: UUID) { for (const [id, asset] of this.values) if (asset.projectId === projectId) this.values.delete(id); }
 }
 export class InMemoryRevisionRepository implements RevisionRepository {
   private readonly values = new Map<string, ProjectRevision>();
