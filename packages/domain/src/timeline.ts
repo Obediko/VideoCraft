@@ -118,6 +118,7 @@ export function applyTimelineOperations(timeline: Timeline, operations: Timeline
         if (!found || found.clip.transform?.role !== "graphic") throw new Error("update-graphic references an unknown graphic");
         const transform = { ...found.clip.transform, ...(operation.text !== undefined ? { text: operation.text } : {}) } as Record<string, string | number | boolean>;
         if (operation.subtitle !== undefined) { if (operation.subtitle) transform.subtitle = operation.subtitle; else delete transform.subtitle; }
+        if (operation.color !== undefined) transform.color = operation.color;
         found.track.clips[found.index] = { ...found.clip, transform };
         break;
       }
@@ -393,10 +394,11 @@ export function parseTimelineOperations(value: unknown): TimelineOperation[] {
         return { type: "add-graphic", kind: op.kind, text: (op.text as string).trim(), ...(op.subtitle ? { subtitle: (op.subtitle as string).trim() } : {}), anchorAssetId: op.anchorAssetId, anchorSourceUs: op.anchorSourceUs as number, durationUs: op.durationUs as number, ...(op.position === undefined ? {} : { position: op.position as "top" | "center" | "bottom" }), ...(op.color === undefined ? {} : { color: (op.color as string).toUpperCase() }) };
       }
       case "update-graphic":
-        if (!isId(op.clipId) || (op.text === undefined && op.subtitle === undefined)) return fail("update-graphic needs clipId and text or subtitle");
+        if (!isId(op.clipId) || (op.text === undefined && op.subtitle === undefined && op.color === undefined)) return fail("update-graphic needs clipId and text, subtitle or color");
+        if (op.color !== undefined && !isHexColor(op.color)) return fail("color must be #RRGGBB");
         if (op.text !== undefined && !isGraphicText(op.text)) return fail("update-graphic text must be 1-120 characters");
         if (op.subtitle !== undefined && op.subtitle !== "" && !isGraphicText(op.subtitle)) return fail("update-graphic subtitle must be at most 120 characters");
-        return { type: "update-graphic", clipId: op.clipId, ...(op.text === undefined ? {} : { text: (op.text as string).trim() }), ...(op.subtitle === undefined ? {} : { subtitle: (op.subtitle as string).trim() }) };
+        return { type: "update-graphic", clipId: op.clipId, ...(op.text === undefined ? {} : { text: (op.text as string).trim() }), ...(op.subtitle === undefined ? {} : { subtitle: (op.subtitle as string).trim() }), ...(op.color === undefined ? {} : { color: (op.color as string).toUpperCase() }) };
       case "set-progress-bar":
         if (typeof op.enabled !== "boolean") return fail("set-progress-bar needs enabled");
         if (op.color !== undefined && !isHexColor(op.color)) return fail("color must be #RRGGBB");

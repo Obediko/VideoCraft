@@ -26,7 +26,7 @@ export type TimelineOperation =
    */
   /** Animated text graphics anchored to a moment like b-roll: a title card, a callout, or a lower third (name + role). */
   | { type: "add-graphic"; kind: "title" | "callout" | "lower-third"; text: string; subtitle?: string; anchorAssetId: UUID; anchorSourceUs: Microseconds; durationUs: Microseconds; position?: "top" | "center" | "bottom"; color?: string }
-  | { type: "update-graphic"; clipId: string; text?: string; subtitle?: string }
+  | { type: "update-graphic"; clipId: string; text?: string; subtitle?: string; color?: string }
   /** A bar filling across the top of the frame over the whole cut. */
   | { type: "set-progress-bar"; enabled: boolean; color?: string }
   | { type: "add-broll"; assetId: UUID; anchorAssetId: UUID; anchorSourceUs: Microseconds; durationUs: Microseconds; sourceStartUs?: Microseconds; mode?: "full" | "pip" | "behind" }

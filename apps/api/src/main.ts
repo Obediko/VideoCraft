@@ -20,8 +20,8 @@ import { createProxy, isStillImage, probeMedia } from "@videocraft/analysis";
 import { StorageSilenceDetector } from "./media-analysis.js";
 import { registerRenderRoutes } from "./render-routes.js";
 import { registerMediaRoutes } from "./media-routes.js";
-import { registerStockRoutes } from "./stock.js";
-import { registerVoiceoverRoutes } from "./voiceover.js";
+import { findStock, registerStockRoutes } from "./stock.js";
+import { registerVoiceoverRoutes, speak, voiceFetcher } from "./voiceover.js";
 import { registerPreferenceRoutes } from "./learning.js";
 import { registerMusicRoutes } from "./music-routes.js";
 import { registerDirectorRoutes } from "./director-routes.js";
@@ -179,24 +179,27 @@ registerPreferenceRoutes(server, { preferences, authenticate: (request) => authe
 const director = secretEnvironment.OPENAI_API_KEY && secretEnvironment.DIRECTOR_MODE !== "rules"
   ? new OpenAiDirector({ apiKey: secretEnvironment.OPENAI_API_KEY, model: secretEnvironment.DIRECTOR_MODEL ?? "gpt-6.1-sol", ...(secretEnvironment.OPENAI_BASE_URL ? { endpoint: secretEnvironment.OPENAI_BASE_URL } : {}) })
   : new RuleDirector();
-registerDirectorRoutes(server, { projects, assets, revisions, storage, transcripts, director, saveRevision: (input) => timelineService.saveRevision(input), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, clock: () => new Date().toISOString(), ...(secretEnvironment.FFMPEG_BIN ? { ffmpeg: secretEnvironment.FFMPEG_BIN } : {}) });
+const stockDependencies = {
+  keys: { ...(secretEnvironment.PEXELS_API_KEY ? { pexels: secretEnvironment.PEXELS_API_KEY } : {}), ...(secretEnvironment.PIXABAY_API_KEY ? { pixabay: secretEnvironment.PIXABAY_API_KEY } : {}), ...(secretEnvironment.GIPHY_API_KEY ? { giphy: secretEnvironment.GIPHY_API_KEY } : {}) },
+  assets, storage, authorize: authorizer, authenticate: (request: FastifyRequest) => authenticator.authenticate(request), clock: () => new Date().toISOString(),
+  inspector: (path: string) => probeMedia(path, secretEnvironment.FFPROBE_BIN ? { executable: secretEnvironment.FFPROBE_BIN } : {}),
+  imageInspector: (path: string) => isStillImage(path, secretEnvironment.FFPROBE_BIN ? { executable: secretEnvironment.FFPROBE_BIN } : {}),
+};
+const voiceDependencies = {
+  ...(secretEnvironment.OPENAI_API_KEY ? { apiKey: secretEnvironment.OPENAI_API_KEY } : {}), ...(secretEnvironment.OPENAI_BASE_URL ? { endpoint: secretEnvironment.OPENAI_BASE_URL } : {}), ...(secretEnvironment.VOICE_MODEL ? { model: secretEnvironment.VOICE_MODEL } : {}),
+  assets, storage, authorize: authorizer, authenticate: (request: FastifyRequest) => authenticator.authenticate(request), clock: () => new Date().toISOString(),
+  inspector: (path: string) => probeMedia(path, secretEnvironment.FFPROBE_BIN ? { executable: secretEnvironment.FFPROBE_BIN } : {}),
+};
+const hasStock = Object.keys(stockDependencies.keys).length > 0;
+registerDirectorRoutes(server, { projects, assets, revisions, storage, transcripts, director, ...(hasStock ? { findStock: (projectId: string, query: string, kind: "video" | "photo" | "gif", orientation?: "portrait" | "landscape" | "square") => findStock(stockDependencies, projectId, query, kind, orientation) } : {}), ...(voiceDependencies.apiKey ? { speak: (projectId: string, text: string) => speak(voiceDependencies, voiceFetcher(voiceDependencies), projectId, text, "marin") } : {}), saveRevision: (input) => timelineService.saveRevision(input), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, clock: () => new Date().toISOString(), ...(secretEnvironment.FFMPEG_BIN ? { ffmpeg: secretEnvironment.FFMPEG_BIN } : {}) });
 registerMusicRoutes(server, { assets, revisions, storage, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, clock: () => new Date().toISOString() });
 registerMediaRoutes(server, { assets, storage, signingSecret: requiredSecret("DOWNLOAD_SIGNING_SECRET"), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer,
   ...(secretEnvironment.FACES_SCRIPT ? { faces: { script: secretEnvironment.FACES_SCRIPT, ...(secretEnvironment.SCENE_PYTHON ? { executable: secretEnvironment.SCENE_PYTHON } : {}) } } : {}),
   ...(secretEnvironment.MATTE_SCRIPT ? { matte: { script: secretEnvironment.MATTE_SCRIPT, ...(secretEnvironment.SCENE_PYTHON ? { executable: secretEnvironment.SCENE_PYTHON } : {}) } } : {}) });
 // Voice-over from typed text (OpenAI voices, the account's key); recordings use the ordinary upload.
-registerVoiceoverRoutes(server, {
-  ...(secretEnvironment.OPENAI_API_KEY ? { apiKey: secretEnvironment.OPENAI_API_KEY } : {}), ...(secretEnvironment.OPENAI_BASE_URL ? { endpoint: secretEnvironment.OPENAI_BASE_URL } : {}), ...(secretEnvironment.VOICE_MODEL ? { model: secretEnvironment.VOICE_MODEL } : {}),
-  assets, storage, authorize: authorizer, authenticate: (request) => authenticator.authenticate(request), clock: () => new Date().toISOString(),
-  inspector: (path) => probeMedia(path, secretEnvironment.FFPROBE_BIN ? { executable: secretEnvironment.FFPROBE_BIN } : {}),
-});
+registerVoiceoverRoutes(server, voiceDependencies);
 // Free stock videos, photos and GIFs for cutaways (each library is skipped when its key is not set).
-registerStockRoutes(server, {
-  keys: { ...(secretEnvironment.PEXELS_API_KEY ? { pexels: secretEnvironment.PEXELS_API_KEY } : {}), ...(secretEnvironment.PIXABAY_API_KEY ? { pixabay: secretEnvironment.PIXABAY_API_KEY } : {}), ...(secretEnvironment.GIPHY_API_KEY ? { giphy: secretEnvironment.GIPHY_API_KEY } : {}) },
-  assets, storage, authorize: authorizer, authenticate: (request) => authenticator.authenticate(request), clock: () => new Date().toISOString(),
-  inspector: (path) => probeMedia(path, secretEnvironment.FFPROBE_BIN ? { executable: secretEnvironment.FFPROBE_BIN } : {}),
-  imageInspector: (path) => isStillImage(path, secretEnvironment.FFPROBE_BIN ? { executable: secretEnvironment.FFPROBE_BIN } : {}),
-});
+registerStockRoutes(server, stockDependencies);
 registerUploadRoutes(server, {
   assets, storage, authorize: authorizer, authenticate: (request) => authenticator.authenticate(request),
   clock: () => new Date().toISOString(), ...(malwareScanner ? { scanner: malwareScanner } : {}),

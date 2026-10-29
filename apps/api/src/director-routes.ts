@@ -19,6 +19,10 @@ export interface DirectorRouteDependencies {
   authorize: { canAccess(principal: { userId: UUID }, projectId: UUID, role: "viewer" | "editor"): Promise<boolean> };
   clock(): string;
   ffmpeg?: string;
+  /** Finds and imports a free stock video, photo or GIF for a few words (absent without stock keys). */
+  findStock?(projectId: UUID, query: string, kind: "video" | "photo" | "gif", orientation?: "portrait" | "landscape" | "square"): Promise<{ id: UUID } | undefined>;
+  /** Reads text aloud as an audio asset (absent without the OpenAI key). */
+  speak?(projectId: UUID, text: string): Promise<{ id: UUID; durationUs?: number }>;
 }
 
 /** Plans a whole edit from the person's own description (AI director, or rules without a key), then applies the accepted parts. */
@@ -52,10 +56,12 @@ export function registerDirectorRoutes(server: FastifyInstance, dependencies: Di
       pieces: pieces.map((c) => ({ startS: c.sourceStartUs / 1e6, endS: c.sourceEndUs / 1e6, text: words.filter((w) => w.startUs >= c.sourceStartUs - 50_000 && w.endUs <= c.sourceEndUs + 50_000).map((w) => w.text).join(" ") })),
       graphics: overlays.filter((c) => c.transform?.role === "graphic").map((c) => String(c.transform?.kind) + ": " + String(c.transform?.text)),
       look: String(pieces[0]?.transform?.look ?? "none"),
-      music: music ? "yes" : "none",
+      music: music ? "yes, at " + String(music.transform?.volumeDb ?? -20) + " dB" : "none",
       seconds: pieces.reduce((sum, c) => sum + c.sourceEndUs - c.sourceStartUs, 0) / 1e6,
+      extras: summariseExtras(timeline),
     };
-    const input = { ...(await directorInput(ctx, brief || instruction, request)), instruction, current };
+    const playheadS = typeof ctx.body.playheadS === "number" && Number.isFinite(ctx.body.playheadS) && ctx.body.playheadS >= 0 ? ctx.body.playheadS : undefined;
+    const input = { ...(await directorInput(ctx, brief || instruction, request)), instruction, current, ...(playheadS !== undefined ? { playheadS } : {}) };
     const plan = dependencies.director.ask ? await dependencies.director.ask(input) : await new RuleDirector().ask(input);
     return { plan };
   });
@@ -87,13 +93,51 @@ export function registerDirectorRoutes(server: FastifyInstance, dependencies: Di
         music = { description: composed.music.description };
       }
     }
+    // Free stock cutaways and typed voice-overs need the network, so they are made here, after the cut.
+    const notes: string[] = [];
+    const kept = timeline.tracks.filter((t) => t.kind === "video").flatMap((t) => t.clips).filter((c) => c.assetId === ctx.main.id);
+    const anchorAt = (atS: number) => { const at = Math.round(atS * 1e6); if (kept.some((c) => at >= c.sourceStartUs && at < c.sourceEndUs)) return at; const near = [...kept].sort((a, b) => Math.abs(a.sourceStartUs - at) - Math.abs(b.sourceStartUs - at))[0]; return near ? near.sourceStartUs + 100_000 : at; };
+    const frame = ctx.revision.tailoring?.channel === "youtube" ? "landscape" : "portrait";
+    for (const s of plan.suggestions.filter((x) => accepted.has(x.id))) {
+      try {
+        if (s.kind === "stock") {
+          if (!dependencies.findStock) { notes.push("Stock search is not set up on the server, so \"" + s.query + "\" was skipped."); continue; }
+          const asset = await dependencies.findStock(ctx.projectId, s.query, s.assetKind, s.mode === "pip" ? "landscape" : frame);
+          if (!asset) { notes.push("No free stock matched \"" + s.query + "\"."); continue; }
+          timeline = applyTimelineOperations(timeline, [{ type: "add-broll", assetId: asset.id, anchorAssetId: ctx.main.id, anchorSourceUs: anchorAt(s.atS), durationUs: Math.round(s.durationS * 1e6), mode: s.mode }]);
+        } else if (s.kind === "voiceover") {
+          if (!dependencies.speak) { notes.push("Typed voice-overs need the OpenAI key; record yours in Audio → Voice-over."); continue; }
+          const asset = await dependencies.speak(ctx.projectId, s.text);
+          timeline = applyTimelineOperations(timeline, [{ type: "add-voiceover", assetId: asset.id, anchorAssetId: ctx.main.id, anchorSourceUs: anchorAt(s.atS), durationUs: Math.max(200_000, asset.durationUs ?? 3_000_000) }]);
+        }
+      } catch (caught) { notes.push((s.kind === "stock" ? "Stock \"" + s.query + "\"" : "The voice-over") + " could not be added: " + (caught instanceof Error ? caught.message : "error").slice(0, 120)); }
+    }
     const revision = await dependencies.saveRevision({
       projectId: ctx.projectId, createdBy: ctx.principal.userId, timeline, acceptedProposalIds: ctx.revision.acceptedProposalIds,
       tailoring: ctx.body.keepTailoring === true && ctx.revision.tailoring ? ctx.revision.tailoring : { intent: plan.profile.intent, audience: plan.profile.audience, channel: plan.profile.channel, ...(plan.profile.tone ? { tone: plan.profile.tone } : {}), targetDurationUs: plan.profile.targetSeconds * 1_000_000, constraints: [] },
     });
     const platform = plan.suggestions.find((s) => s.kind === "platform" && accepted.has(s.id));
-    return reply.code(201).send({ revision, ...(platform && platform.kind === "platform" ? { platform: platform.platform } : {}), ...(music ? { music } : {}) });
+    return reply.code(201).send({ revision, ...(platform && platform.kind === "platform" ? { platform: platform.platform } : {}), ...(music ? { music } : {}), ...(notes.length ? { notes } : {}) });
   });
+}
+
+/** The rest of the edit in a line, for the director: levels, effects, cutaways, captions, background. */
+function summariseExtras(timeline: ProjectRevision["timeline"]): string {
+  const audio = timeline.tracks.filter((t) => t.kind === "audio").flatMap((t) => t.clips);
+  const overlays = timeline.tracks.filter((t) => t.kind === "overlay").flatMap((t) => t.clips);
+  const video = timeline.tracks.filter((t) => t.kind === "video").flatMap((t) => t.clips);
+  const sfx = audio.filter((c) => c.transform?.role === "sfx"); const vo = audio.filter((c) => c.transform?.role === "voiceover");
+  const captions = timeline.tracks.filter((t) => t.kind === "caption").flatMap((t) => t.clips).length;
+  const backgrounds = [...new Set(video.map((c) => String(c.transform?.background ?? "none")))];
+  return [
+    "Sound effects: " + (sfx.length ? sfx.length + " at " + String(sfx[0]!.transform?.volumeDb ?? -18) + " dB" : "none"),
+    "Voice-overs: " + (vo.length ? vo.length : "none"),
+    "Cutaways: " + (overlays.filter((c) => c.transform?.role === "broll").length || "none"),
+    "Progress bar: " + (overlays.some((c) => c.transform?.role === "progress") ? "yes" : "no"),
+    "Captions: " + (captions ? captions + " cues" : "none"),
+    "Background: " + backgrounds.join(", "),
+    "Zooms: " + (video.some((c) => c.transform?.zoom) ? "yes" : "none") + "; transitions: " + (video.some((c) => c.transform?.transitionIn || c.transform?.transitionOut) ? "yes" : "none"),
+  ].join("\n");
 }
 
 function contextOf(dependencies: DirectorRouteDependencies) {
