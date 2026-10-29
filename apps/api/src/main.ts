@@ -20,6 +20,7 @@ import { StorageSilenceDetector } from "./media-analysis.js";
 import { registerRenderRoutes } from "./render-routes.js";
 import { registerMediaRoutes } from "./media-routes.js";
 import { registerStockRoutes } from "./stock.js";
+import { registerVoiceoverRoutes } from "./voiceover.js";
 import { registerPreferenceRoutes } from "./learning.js";
 import { registerMusicRoutes } from "./music-routes.js";
 import { registerDirectorRoutes } from "./director-routes.js";
@@ -182,6 +183,12 @@ registerMusicRoutes(server, { assets, revisions, storage, authenticate: (request
 registerMediaRoutes(server, { assets, storage, signingSecret: requiredSecret("DOWNLOAD_SIGNING_SECRET"), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer,
   ...(secretEnvironment.FACES_SCRIPT ? { faces: { script: secretEnvironment.FACES_SCRIPT, ...(secretEnvironment.SCENE_PYTHON ? { executable: secretEnvironment.SCENE_PYTHON } : {}) } } : {}),
   ...(secretEnvironment.MATTE_SCRIPT ? { matte: { script: secretEnvironment.MATTE_SCRIPT, ...(secretEnvironment.SCENE_PYTHON ? { executable: secretEnvironment.SCENE_PYTHON } : {}) } } : {}) });
+// Voice-over from typed text (OpenAI voices, the account's key); recordings use the ordinary upload.
+registerVoiceoverRoutes(server, {
+  ...(secretEnvironment.OPENAI_API_KEY ? { apiKey: secretEnvironment.OPENAI_API_KEY } : {}), ...(secretEnvironment.OPENAI_BASE_URL ? { endpoint: secretEnvironment.OPENAI_BASE_URL } : {}), ...(secretEnvironment.VOICE_MODEL ? { model: secretEnvironment.VOICE_MODEL } : {}),
+  assets, storage, authorize: authorizer, authenticate: (request) => authenticator.authenticate(request), clock: () => new Date().toISOString(),
+  inspector: (path) => probeMedia(path, secretEnvironment.FFPROBE_BIN ? { executable: secretEnvironment.FFPROBE_BIN } : {}),
+});
 // Free stock videos, photos and GIFs for cutaways (each library is skipped when its key is not set).
 registerStockRoutes(server, {
   keys: { ...(secretEnvironment.PEXELS_API_KEY ? { pexels: secretEnvironment.PEXELS_API_KEY } : {}), ...(secretEnvironment.PIXABAY_API_KEY ? { pixabay: secretEnvironment.PIXABAY_API_KEY } : {}), ...(secretEnvironment.GIPHY_API_KEY ? { giphy: secretEnvironment.GIPHY_API_KEY } : {}) },

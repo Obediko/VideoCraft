@@ -8,7 +8,7 @@ import { LOOK_CSS, captionBottomFor, faceDuring, faceInFrame, focusDuring, title
  * exactly), so changes show at once without rendering.
  */
 type Track = { id: string; kind: string; clips: Clip[] };
-export type LivePreviewHandle = { seek(timelineUs: number): void; pause(): void };
+export type LivePreviewHandle = { seek(timelineUs: number): void; pause(): void; play(): void; setMuted(muted: boolean): void };
 type Props = {
   tracks: Track[];
   durationUs: number;
@@ -38,6 +38,8 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
   const overlays = tracks.filter((t) => t.kind === "overlay").flatMap((t) => t.clips);
   const cues = tracks.filter((t) => t.kind === "caption").flatMap((t) => t.clips);
   const musicClip = tracks.find((t) => t.kind === "audio")?.clips.find((c) => c.transform?.role === "music");
+  const voiceovers = tracks.filter((t) => t.kind === "audio").flatMap((t) => t.clips).filter((c) => c.transform?.role === "voiceover");
+  const voiceEls = useRef<Record<string, HTMLAudioElement | null>>({});
   const indexRef = useRef(0);
   const tRef = useRef(0);
   const clipAt = (t: number) => Math.max(0, clips.findIndex((c) => t >= c.timelineStartUs && t < c.timelineEndUs) === -1 ? (t >= durationUs ? clips.length - 1 : 0) : clips.findIndex((c) => t >= c.timelineStartUs && t < c.timelineEndUs));
@@ -60,10 +62,28 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
     if (music.current && musicClip) music.current.currentTime = (clamped / 1e6) % Math.max(1, music.current.duration || 1);
     report(clamped);
   }
-  useImperativeHandle(ref, () => ({ seek, pause: () => { video.current?.pause(); music.current?.pause(); setPlaying(false); } }));
+  useImperativeHandle(ref, () => ({ seek, pause: () => { video.current?.pause(); music.current?.pause(); setPlaying(false); }, play: () => { if (!playing) toggle(); }, setMuted: (muted: boolean) => { if (video.current) video.current.muted = muted; if (music.current) music.current.muted = muted; } }));
 
   // Keep the picture on the right frame when the edit changes.
   useEffect(() => { if (!playing) seek(tRef.current); }, [clips, urls]);
+
+  // Voice-overs play at their moments; the footage and music dip under them, as in the export.
+  useEffect(() => {
+    let ducked = false;
+    for (const vo of voiceovers) {
+      const el = voiceEls.current[vo.id]; if (!el) continue;
+      const inside = tUs >= vo.timelineStartUs && tUs < vo.timelineEndUs;
+      if (inside && vo.transform?.duck !== false) ducked = true;
+      if (inside && playing) {
+        const at = (vo.sourceStartUs + tUs - vo.timelineStartUs) / 1e6;
+        if (Math.abs(el.currentTime - at) > 0.25) el.currentTime = at;
+        el.volume = Math.min(1, Math.pow(10, Number(vo.transform?.volumeDb ?? 0) / 20));
+        if (el.paused) void el.play().catch(() => undefined);
+      } else if (!el.paused) el.pause();
+    }
+    if (video.current) video.current.volume = ducked ? 0.2 : 1;
+    if (music.current && musicClip) music.current.volume = Math.min(1, Math.pow(10, Number(musicClip.transform?.volumeDb ?? -16) / 20) * 1.6) * (ducked ? 0.2 : 1);
+  }, [tUs, playing]);
 
   // While playing, follow the video and jump to the next clip at each cut.
   useEffect(() => {
@@ -170,6 +190,7 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
       {veil.opacity > 0 && <span className="live-veil" style={{ opacity: veil.opacity, background: veil.color }} />}
     </div>
     {musicUrl && <audio ref={music} src={musicUrl} loop preload="auto" />}
+    {voiceovers.map((vo) => urls[vo.assetId] ? <audio key={vo.id} ref={(el) => { voiceEls.current[vo.id] = el; }} src={urls[vo.assetId]} preload="auto" /> : null)}
     <div className="live-controls">
       <button type="button" className="btn icon" aria-label={playing ? "Pause" : "Play the edit"} onClick={toggle} disabled={clips.length === 0}>{playing ? "❚❚" : "▶"}</button>
       <input type="range" aria-label="Position in the edit" min={0} max={Math.max(1, Math.round(durationUs / 1000))} step={50} value={Math.round(tUs / 1000)} onChange={(event) => seek(Number(event.target.value) * 1000)} />

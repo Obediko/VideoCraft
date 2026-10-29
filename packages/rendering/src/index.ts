@@ -103,7 +103,8 @@ export class FfmpegCommandPlanner {
     // without a role, a replacement soundtrack. One of each kind at most.
     const musicClips = (audioTrack?.clips ?? []).filter((clip) => clip.transform?.role === "music");
     const sfxClips = (audioTrack?.clips ?? []).filter((clip) => clip.transform?.role === "sfx" && clip.timelineEndUs > clip.timelineStartUs).sort((a, b) => a.timelineStartUs - b.timelineStartUs).slice(0, 40);
-    const replacementClips = (audioTrack?.clips ?? []).filter((clip) => clip.transform?.role !== "music" && clip.transform?.role !== "sfx");
+    const voiceoverClips = (audioTrack?.clips ?? []).filter((clip) => clip.transform?.role === "voiceover" && clip.timelineEndUs > clip.timelineStartUs).sort((a, b) => a.timelineStartUs - b.timelineStartUs).slice(0, 30);
+    const replacementClips = (audioTrack?.clips ?? []).filter((clip) => clip.transform?.role !== "music" && clip.transform?.role !== "sfx" && clip.transform?.role !== "voiceover");
     if (musicClips.length > 1 || replacementClips.length > 1) throw new Error("Renderer supports at most one music bed and one replacement audio clip");
 
     const width = even(settings.width);
@@ -161,6 +162,12 @@ export class FfmpegCommandPlanner {
       if (!sfxKinds.has(kind)) { const fx = generateSoundEffect(kind); files.push({ path, content: encodeWav(fx.left, fx.right, fx.sampleRate) }); sfxKinds.add(kind); }
       sfxInputs.push(nextInput++);
       args.push("-i", path);
+    }
+    // Voice-over recordings: one input each, from the start of the recording, delayed to their moment in the mix.
+    const voiceoverInputs: number[] = [];
+    for (const vo of voiceoverClips) {
+      voiceoverInputs.push(nextInput++);
+      args.push("-ss", seconds(vo.sourceStartUs), "-t", ((vo.sourceEndUs - vo.sourceStartUs) / 1_000_000).toFixed(6), "-i", await this.assets.resolve(vo.assetId));
     }
     // Backgrounds behind the person (blur, colour, a photo or clip) and cutaways placed behind them need a matte.
     const behind = brolls.map((broll) => broll.transform?.mode === "behind");
@@ -355,6 +362,26 @@ export class FfmpegCommandPlanner {
       if (!audioLabel) { filters.push("anullsrc=r=48000:cl=stereo,atrim=duration=" + totalSeconds.toFixed(6) + "[abed]"); audioLabel = "[abed]"; }
       filters.push(audioLabel + labels.join("") + "amix=inputs=" + (labels.length + 1) + ":duration=first:dropout_transition=0:normalize=0[asfx]");
       audioLabel = "[asfx]";
+    }
+    if (voiceoverClips.length > 0 && !externalAudio) {
+      if (!audioLabel) { filters.push("anullsrc=r=48000:cl=stereo,atrim=duration=" + totalSeconds.toFixed(6) + "[avbed]"); audioLabel = "[avbed]"; }
+      // While narration plays, everything else dips by about 14 dB, with 150 ms ramps so it never clicks.
+      const ducked = voiceoverClips.filter((vo) => vo.transform?.duck !== false);
+      if (ducked.length > 0) {
+        const ramp = (vo: TimelineClip) => { const a = (vo.timelineStartUs / 1e6).toFixed(3); const b = (vo.timelineEndUs / 1e6).toFixed(3); return "clip((t-" + a + ")/0.15+1,0,1)*clip((" + b + "-t)/0.15+1,0,1)"; };
+        const level = ducked.map(ramp).reduce((acc, term) => "max(" + acc + "," + term + ")");
+        filters.push(audioLabel + "volume=volume='1-0.8*" + level + "':eval=frame[aduck]");
+        audioLabel = "[aduck]";
+      }
+      const labels = voiceoverClips.map((vo, i) => {
+        const delayMs = Math.round(vo.timelineStartUs / 1000);
+        const length = ((vo.timelineEndUs - vo.timelineStartUs) / 1_000_000).toFixed(6);
+        const volume = clampNumber(Number(vo.transform?.volumeDb ?? 0), -30, 6);
+        filters.push("[" + voiceoverInputs[i] + ":a]asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,atrim=duration=" + length + ",afade=t=out:st=" + Math.max(0, Number(length) - 0.05).toFixed(3) + ":d=0.05,volume=" + volume + "dB,adelay=" + delayMs + "|" + delayMs + "[vo" + i + "]");
+        return "[vo" + i + "]";
+      });
+      filters.push(audioLabel + labels.join("") + "amix=inputs=" + (labels.length + 1) + ":duration=first:dropout_transition=0:normalize=0[avo]");
+      audioLabel = "[avo]";
     }
     if (audioLabel && settings.normalizeLoudness !== false) {
       // Single-pass EBU R128 normalisation so clips cut from quiet and loud parts of a source sound consistent.

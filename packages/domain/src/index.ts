@@ -53,6 +53,11 @@ export type TimelineOperation =
    * the original blurred, a solid colour, or a photo / video asset. The person is cut out by a matte;
    * edge (-8..8 px) grows or shrinks the cut-out and feather (0..12 px) softens it.
    */
+  /**
+   * Narration over the edit: an audio asset (a recording or a generated voice) that starts at a moment of a source
+   * video and follows the cut like graphics. While it plays the original sound is lowered (duck, on by default).
+   */
+  | { type: "add-voiceover"; assetId: UUID; anchorAssetId: UUID; anchorSourceUs: Microseconds; durationUs: Microseconds; volumeDb?: number; duck?: boolean }
   | { type: "set-background"; clipId?: UUID; background: Background; color?: string; assetId?: UUID; edge?: number; feather?: number };
 export const BACKGROUNDS = ["none", "blur", "color", "media"] as const;
 export type Background = (typeof BACKGROUNDS)[number];
