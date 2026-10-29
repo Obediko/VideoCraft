@@ -146,3 +146,10 @@ select:focus-visible { outline: 2px solid #7c70f4; outline-offset: 1px; }
 .issue-list li.issue-warn { border-left: 3px solid #8b9bb4; }
 .issue-list li.issue-info { border-left: 3px solid #3a4457; }
 .issue-list .fix-label { margin-top: 0.3rem; font-size: 0.9em; }
+
+.ruler { display: grid; grid-template-columns: 68px 1fr; padding: 0 0 14px; }
+.ruler-lane { position: relative; height: 14px; }
+.ruler-lane span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
+.ruler-lane span:first-child { transform: none; }
+.ruler-lane span:last-child:not(:first-child) { transform: translateX(-100%); }
+.clip-effects { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.5rem; margin-top: 0.6rem; }

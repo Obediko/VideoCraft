@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { captionBand, renderAss, renderGraphicsAss, resolveCaptionStyle, type GraphicItem, type TimedCue } from "@videocraft/captions";
 import type { ProjectRevision, RenderSettings, TimelineClip, TimelineTrack } from "@videocraft/domain";
+import { encodeWav, generateSoundEffect, type SoundEffectKind } from "@videocraft/music";
 
 export interface AssetPathResolver {
   resolve(assetId: string): Promise<string>;
@@ -13,7 +14,20 @@ export interface AssetPathResolver {
   isStill?(assetId: string): Promise<boolean>;
   focus?(assetId: string, startUs: number, endUs: number): Promise<{ x: number; y: number; confidence: number } | null>;
 }
-export interface RenderPlan { args: string[]; outputPath: string; /** Side files (e.g. caption documents) written before FFmpeg starts. */ files: Array<{ path: string; content: string }>; }
+export interface RenderPlan { args: string[]; outputPath: string; /** Side files (caption documents, generated sound effects) written before FFmpeg starts. */ files: Array<{ path: string; content: string | Uint8Array }>; }
+
+/** Colour looks as FFmpeg filter chains (applied per clip, after framing). */
+// YUV-only filters (eq, lutyuv, hue, vignette, unsharp): RGB filters such as colorbalance or curves cost 3-5x the
+// render time on the ARM server.
+export const LOOK_FILTERS: Record<string, string> = {
+  warm: "lutyuv=u='val-6':v='val+5',eq=saturation=1.08:contrast=1.03",
+  clean: "eq=contrast=1.06:saturation=1.06:brightness=0.01,unsharp=5:5:0.35",
+  cinematic: "eq=contrast=1.1:saturation=0.88,lutyuv=u='val+3':v='val+2',vignette=PI/5",
+  vivid: "eq=saturation=1.3:contrast=1.08",
+  soft: "eq=contrast=0.93:saturation=0.94:brightness=0.025",
+  mono: "hue=s=0,eq=contrast=1.12",
+};
+const TRANSITION_SECONDS: Record<string, number> = { "dip-black": 0.25, "dip-white": 0.25, flash: 0.12 };
 
 export interface PlatformPreset { id: string; label: string; settings: RenderSettings; }
 
@@ -49,7 +63,8 @@ export class FfmpegCommandPlanner {
     // An audio-track clip is either background music (transform.role "music": mixed under the speech) or,
     // without a role, a replacement soundtrack. One of each kind at most.
     const musicClips = (audioTrack?.clips ?? []).filter((clip) => clip.transform?.role === "music");
-    const replacementClips = (audioTrack?.clips ?? []).filter((clip) => clip.transform?.role !== "music");
+    const sfxClips = (audioTrack?.clips ?? []).filter((clip) => clip.transform?.role === "sfx" && clip.timelineEndUs > clip.timelineStartUs).sort((a, b) => a.timelineStartUs - b.timelineStartUs).slice(0, 40);
+    const replacementClips = (audioTrack?.clips ?? []).filter((clip) => clip.transform?.role !== "music" && clip.transform?.role !== "sfx");
     if (musicClips.length > 1 || replacementClips.length > 1) throw new Error("Renderer supports at most one music bed and one replacement audio clip");
 
     const width = even(settings.width);
@@ -87,12 +102,26 @@ export class FfmpegCommandPlanner {
     const brolls = tracks.filter((track) => track.kind === "overlay").flatMap((track) => track.clips).filter((clip) => clip.transform?.role === "broll" && clip.timelineEndUs > clip.timelineStartUs).sort((a, b) => a.timelineStartUs - b.timelineStartUs);
     if (brolls.length > 20) throw new Error("Renderer supports at most 20 B-roll overlays");
     const brollInputs: number[] = [];
+    const brollStill: boolean[] = [];
     for (const broll of brolls) {
       const length = ((broll.timelineEndUs - broll.timelineStartUs) / 1_000_000).toFixed(6);
       const still = this.assets.isStill ? await this.assets.isStill(broll.assetId) : false;
       brollInputs.push(nextInput++);
+      brollStill.push(still);
       if (still) args.push("-loop", "1", "-framerate", String(fps), "-t", length, "-i", await this.assets.resolve(broll.assetId));
       else args.push("-ss", seconds(broll.sourceStartUs), "-t", length, "-i", await this.assets.resolve(broll.assetId));
+    }
+    // Generated sound effects: one WAV per kind, one input per use (each is delayed to its moment).
+    const files: RenderPlan["files"] = [];
+    const sfxInputs: number[] = [];
+    const sfxKinds = new Set<string>();
+    for (const sfx of sfxClips) {
+      const kind = String(sfx.transform?.kind) as SoundEffectKind;
+      if (!["whoosh", "pop", "hit", "riser"].includes(kind)) continue;
+      const path = outputPath + ".sfx-" + kind + ".wav";
+      if (!sfxKinds.has(kind)) { const fx = generateSoundEffect(kind); files.push({ path, content: encodeWav(fx.left, fx.right, fx.sampleRate) }); sfxKinds.add(kind); }
+      sfxInputs.push(nextInput++);
+      args.push("-i", path);
     }
     const totalSeconds = clips.reduce((sum, clip) => sum + (clip.sourceEndUs - clip.sourceStartUs), 0) / 1_000_000;
 
@@ -116,7 +145,7 @@ export class FfmpegCommandPlanner {
     const concatInputs: string[] = [];
     clips.forEach((clip, index) => {
       const length = (clip.sourceEndUs - clip.sourceStartUs) / 1_000_000;
-      filters.push("[" + index + ":v]setpts=PTS-STARTPTS," + fits[index] + ",fps=" + fps + ",setsar=1,format=yuv420p[v" + index + "]");
+      filters.push("[" + index + ":v]setpts=PTS-STARTPTS," + fits[index] + ",fps=" + fps + clipEffects(clips, index, width, height, length) + ",setsar=1,format=yuv420p[v" + index + "]");
       concatInputs.push("[v" + index + "]");
       if (useEmbeddedAudio) {
         if (audioPresent.get(clip.assetId)) {
@@ -130,7 +159,6 @@ export class FfmpegCommandPlanner {
     });
     filters.push(concatInputs.join("") + "concat=n=" + clips.length + ":v=1:a=" + (useEmbeddedAudio ? 1 : 0) + "[vcat]" + (useEmbeddedAudio ? "[acat]" : ""));
 
-    const files: RenderPlan["files"] = [];
     const style = resolveCaptionStyle(settings.captionStyle);
     const cues = style ? captionCues(tracks, videoTrack, revision.timeline.durationUs) : [];
     let videoLabel = "[vcat]";
@@ -140,7 +168,12 @@ export class FfmpegCommandPlanner {
       const pip = broll.transform?.mode === "pip";
       const insetWidth = even(Math.max(2, Math.round(width * (width < height ? 0.5 : 0.32))));
       const margin = Math.round(Math.min(width, height) * 0.04);
-      const scale = pip ? "scale=" + insetWidth + ":-2" : "scale=" + width + ":" + height + ":force_original_aspect_ratio=increase,crop=" + width + ":" + height;
+      const duration = (broll.timelineEndUs - broll.timelineStartUs) / 1_000_000;
+      // Stills drift slowly (a gentle pan and push) so they never look frozen, unless motion is "none".
+      const moving = brollStill[index] && broll.transform?.motion !== "none" && !pip;
+      const scale = pip ? "scale=" + insetWidth + ":-2"
+        : moving ? "scale=" + even(Math.round(width * 1.12)) + ":" + even(Math.round(height * 1.12)) + ":force_original_aspect_ratio=increase,crop=" + even(Math.round(width * 1.12)) + ":" + even(Math.round(height * 1.12)) + ",fps=" + fps + ",scale=w='2*trunc(" + width + "*(1.12+0.06*t/" + duration.toFixed(3) + ")/2)':h=-2:eval=frame,crop=" + width + ":" + height + ":x='(iw-ow)*min(1,t/" + duration.toFixed(3) + ")':y='(ih-oh)/2'"
+        : "scale=" + width + ":" + height + ":force_original_aspect_ratio=increase,crop=" + width + ":" + height;
       filters.push("[" + brollInputs[index] + ":v]" + scale + ",fps=" + fps + ",setsar=1,format=yuva420p,setpts=PTS-STARTPTS+" + start + "/TB[b" + index + "]");
       // Inset sits top-right, clear of the bottom caption band.
       const position = pip ? "x=W-w-" + margin + ":y=" + margin : "x=0:y=0";
@@ -188,6 +221,20 @@ export class FfmpegCommandPlanner {
       } else {
         audioLabel = "[mus]";
       }
+    }
+    if (sfxInputs.length > 0 && !externalAudio) {
+      const labels: string[] = [];
+      sfxClips.forEach((sfx, i) => {
+        if (sfxInputs[i] === undefined) return;
+        const delayMs = Math.round(sfx.timelineStartUs / 1000);
+        const length = ((sfx.timelineEndUs - sfx.timelineStartUs) / 1_000_000).toFixed(6);
+        const volume = clampNumber(Number(sfx.transform?.volumeDb ?? -10), -40, 0);
+        filters.push("[" + sfxInputs[i] + ":a]aresample=48000,aformat=channel_layouts=stereo,atrim=duration=" + length + ",volume=" + volume + "dB,adelay=" + delayMs + "|" + delayMs + "[fx" + i + "]");
+        labels.push("[fx" + i + "]");
+      });
+      if (!audioLabel) { filters.push("anullsrc=r=48000:cl=stereo,atrim=duration=" + totalSeconds.toFixed(6) + "[abed]"); audioLabel = "[abed]"; }
+      filters.push(audioLabel + labels.join("") + "amix=inputs=" + (labels.length + 1) + ":duration=first:dropout_transition=0:normalize=0[asfx]");
+      audioLabel = "[asfx]";
     }
     if (audioLabel && settings.normalizeLoudness !== false) {
       // Single-pass EBU R128 normalisation so clips cut from quiet and loud parts of a source sound consistent.
@@ -249,6 +296,25 @@ export class FfmpegProcess {
       });
     });
   }
+}
+
+/** Zoom, look and transitions for one clip (appended to its chain after framing). */
+export function clipEffects(clips: TimelineClip[], index: number, width: number, height: number, lengthS: number): string {
+  const clip = clips[index]!; const t = clip.transform ?? {};
+  const parts: string[] = [];
+  // Zooms keep faces in frame: the crop sits a little above centre.
+  if (t.zoom === "punch") parts.push("scale=" + even(Math.round(width * 1.12)) + ":-2,crop=" + width + ":" + height + ":(iw-ow)/2:(ih-oh)*0.4");
+  else if (t.zoom === "push") parts.push("scale=w='2*trunc(" + width + "*(1+0.08*t/" + Math.max(0.1, lengthS).toFixed(3) + ")/2)':h=-2:eval=frame,crop=" + width + ":" + height + ":(iw-ow)/2:(ih-oh)*0.4");
+  const look = typeof t.look === "string" ? LOOK_FILTERS[t.look] : undefined;
+  if (look) parts.push(look);
+  // A transition at a cut is shared: the outgoing clip fades out, the incoming one fades in (no overlap, so timing is unchanged).
+  const incoming = typeof t.transitionIn === "string" ? t.transitionIn : "cut";
+  const next = clips[index + 1]; const nextIn = typeof next?.transform?.transitionIn === "string" ? next.transform.transitionIn : "cut";
+  const outgoing = typeof t.transitionOut === "string" && t.transitionOut !== "cut" ? t.transitionOut : nextIn === "dip-black" || nextIn === "dip-white" ? nextIn : "cut";
+  const fadeIn = TRANSITION_SECONDS[incoming]; const fadeOut = TRANSITION_SECONDS[outgoing];
+  if (fadeIn) parts.push("fade=t=in:st=0:d=" + Math.min(fadeIn, lengthS / 3).toFixed(3) + ":color=" + (incoming === "dip-black" ? "black" : "white"));
+  if (fadeOut) { const d = Math.min(fadeOut, lengthS / 3); parts.push("fade=t=out:st=" + Math.max(0, lengthS - d).toFixed(3) + ":d=" + d.toFixed(3) + ":color=" + (outgoing === "dip-black" ? "black" : "white")); }
+  return parts.length ? "," + parts.join(",") : "";
 }
 
 /** Crop to width×height after an "increase" scale, centred on the subject (clamped to the frame). */

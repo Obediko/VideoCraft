@@ -59,7 +59,13 @@ test("director (built-in rules): describe → plan → accept → a finished edi
     assert.ok(kept > 5 && kept <= 20 * 1.2, "about the 20 s asked for: " + kept);
     assert.ok(track("caption").length > 0, "captions rebuilt for the cut");
     assert.ok(track("overlay").some((c) => c.transform.role === "graphic") && track("overlay").some((c) => c.transform.role === "progress"));
-    assert.equal(track("audio")[0].transform.role, "music");
+    assert.ok(track("audio").some((c) => c.transform.role === "music"), "music under the cut");
+    // Effects from the plan: a look on every piece, alternate punch-ins, fades at the ends, a pop under the title.
+    const pieces = track("video");
+    assert.ok(pieces.every((c) => c.transform?.look === "warm"), "inspiring brief → warm look");
+    assert.equal(pieces[0].transform.transitionIn, "dip-black"); assert.equal(pieces.at(-1).transform.transitionOut, "dip-black");
+    if (pieces.length > 1) assert.equal(pieces[1].transform.zoom, "punch");
+    assert.ok(track("audio").some((c) => c.transform.role === "sfx" && c.transform.kind === "pop"), "a pop when the title appears");
     assert.equal(revision.tailoring.targetDurationUs, 20_000_000);
     // Applying again on the old revision is refused: the timeline moved on.
     assert.equal((await server.inject({ method: "POST", url: url("apply"), payload: { revision: 1, plan, accepted: [] } })).statusCode, 409);

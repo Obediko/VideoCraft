@@ -66,10 +66,25 @@ export function checkEdit(input: CheckInput): CheckIssue[] {
     // Cut in the middle of a word, at either end.
     let start = clip.sourceStartUs; let end = clip.sourceEndUs;
     const atStart = words.find((w) => w.startUs < clip.sourceStartUs - 40_000 && w.endUs > clip.sourceStartUs + 40_000);
-    const atEnd = words.find((w) => w.startUs < clip.sourceEndUs - 40_000 && w.endUs > clip.sourceEndUs + 40_000);
+    // A clip that already runs to the end of the recording cannot keep more of a word the recogniser timed past it.
+    const atEnd = clip.sourceEndUs >= input.sourceDurationUs - 50_000 ? undefined : words.find((w) => w.startUs < clip.sourceEndUs - 40_000 && w.endUs > clip.sourceEndUs + 40_000);
     // A little air around the word, but never into the neighbouring word.
-    if (atStart) start = Math.max(0, atStart.startUs - 80_000, (words.filter((w) => w.endUs <= atStart.startUs).at(-1)?.endUs ?? -Infinity) + 20_000);
-    if (atEnd) end = Math.min(input.sourceDurationUs, atEnd.endUs + 150_000, (words.find((w) => w.startUs >= atEnd.endUs)?.startUs ?? Infinity) - 20_000);
+    // Words that run together or overlap (recognisers often stretch or overlap timings) are kept as one block,
+    // so the new cut always lands in a real gap of at least 60 ms.
+    if (atStart) {
+      let blockStart = atStart.startUs; let prevEnd = -Infinity;
+      for (const w of [...words].filter((x) => x.startUs < atStart.startUs).reverse()) {
+        if (w.endUs > blockStart - 60_000) blockStart = Math.min(blockStart, w.startUs); else { prevEnd = w.endUs; break; }
+      }
+      start = Math.max(0, blockStart - 80_000, prevEnd + 20_000);
+    }
+    if (atEnd) {
+      let blockEnd = atEnd.endUs; let nextStart = Infinity;
+      for (const w of words.filter((x) => x.startUs > atEnd.startUs || (x.startUs === atEnd.startUs && x !== atEnd))) {
+        if (w.startUs < blockEnd + 60_000) blockEnd = Math.max(blockEnd, w.endUs); else { nextStart = w.startUs; break; }
+      }
+      end = Math.min(input.sourceDurationUs, blockEnd + 150_000, nextStart - 20_000);
+    }
     if (atStart || atEnd) {
       const which = [atStart && "“" + atStart.text + "” at the start", atEnd && "“" + atEnd.text + "” at the end"].filter(Boolean).join(" and ");
       add({ severity: "fix", kind: "mid-word", title: "Cut in the middle of a word", detail: "The cut clips " + which + ".", atS: s(atStart ? clip.timelineStartUs : clip.timelineEndUs), fix: { label: "Keep the whole word", operations: [{ type: "trim-clip", clipId: clip.id, sourceStartUs: Math.round(start), sourceEndUs: Math.round(end) }, ...captionsFor(input.assetId, words, [{ startUs: start, endUs: clip.sourceStartUs }, { startUs: clip.sourceEndUs, endUs: end }])] } });

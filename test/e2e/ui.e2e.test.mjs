@@ -160,7 +160,10 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
     const findings = await checkPanel.locator(".issue-list li").allInnerTexts();
     console.log("# edit check findings: " + findings.map((f) => f.replace(/\s+/g, " ")).join(" | "));
     if (await checkPanel.getByRole("button", { name: "Apply selected fixes" }).isEnabled().catch(() => false)) {
+      const checkedBefore = await checkPanel.getAttribute("data-checked-revision");
       await checkPanel.getByRole("button", { name: "Apply selected fixes" }).click();
+      // The check reruns on the fixed revision; wait for that result, not the one already on screen.
+      await page.waitForFunction((before) => document.querySelector(".check-panel")?.getAttribute("data-checked-revision") !== before, checkedBefore, { timeout: 120_000 });
       await waitStatus(/Check done: /, 120_000);
       const after = await checkPanel.locator(".issue-list li").allInnerTexts();
       assert.ok(after.filter((f) => /^\s*Fix\b/.test(f)).length < findings.filter((f) => /^\s*Fix\b/.test(f)).length, "applying fixes clears them: " + after.join(" | "));
@@ -246,13 +249,31 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
       await page.waitForFunction(() => { const v = document.querySelector(".preview-screen video"); return v && !v.paused && v.currentTime > 0; }, null, { timeout: 30_000 });
     } else console.log("# note: this Chromium cannot decode H.264; in-browser playback was not exercised");
 
+    // Effects by hand: punch in on the first clip, a warm look on everything, a whoosh at the playhead.
+    await videoClips.first().click();
+    await page.locator(".clip-effects").getByLabel("Zoom").selectOption("punch");
+    await waitStatus(/Zoom: Punch in/);
+    await page.getByLabel("Look for the whole video").selectOption("warm");
+    await waitStatus(/Look: Warm/);
+    await page.locator(".effects-panel").getByLabel("Sound effect").selectOption("whoosh");
+    await page.getByRole("button", { name: "Add sound at playhead" }).click();
+    await waitStatus(/Whoosh added/);
+    const chipsNow = (await page.locator(".track button.clip strong").allInnerTexts()).join(" | ");
+    assert.match(chipsNow, /punch-in/); assert.match(chipsNow, /Sound · Whoosh/);
+    // The ruler follows the real length of the edit.
+    const ticks = await page.locator(".ruler-lane span").allInnerTexts();
+    assert.ok(ticks.length >= 3 && ticks[0] === "00:00", "ruler ticks: " + ticks.join(","));
+
     // Check again after the manual edits (the trim above can clip a word) and apply whatever fixes it proposes.
     await checkPanel.getByRole("button", { name: "Check again" }).click();
     await waitStatus(/Check done: /, 120_000);
     const late = await checkPanel.locator(".issue-list li").allInnerTexts();
     console.log("# edit check after manual edits: " + late.map((f) => f.replace(/\s+/g, " ")).join(" | "));
     if (await checkPanel.getByRole("button", { name: "Apply selected fixes" }).isEnabled().catch(() => false)) {
+      const checkedBefore = await checkPanel.getAttribute("data-checked-revision");
       await checkPanel.getByRole("button", { name: "Apply selected fixes" }).click();
+      // The check reruns on the fixed revision; wait for that result, not the one already on screen.
+      await page.waitForFunction((before) => document.querySelector(".check-panel")?.getAttribute("data-checked-revision") !== before, checkedBefore, { timeout: 120_000 });
       await waitStatus(/Check done: /, 120_000);
       const lateAfter = await checkPanel.locator(".issue-list li").allInnerTexts();
       console.log("# after fixes: " + lateAfter.map((f) => f.replace(/\s+/g, " ")).join(" | "));

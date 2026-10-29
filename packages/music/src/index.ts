@@ -224,3 +224,48 @@ export function encodeWav(left: Float32Array, right: Float32Array, sampleRate: n
   }
   return buffer;
 }
+
+export type SoundEffectKind = "whoosh" | "pop" | "hit" | "riser";
+
+/** Short synthesised sound effects for cuts, graphics and reveals (48 kHz stereo, peak about -3 dBFS). */
+export function generateSoundEffect(kind: SoundEffectKind, sampleRate = 48_000, seed = 7): { left: Float32Array; right: Float32Array; sampleRate: number } {
+  const seconds = { whoosh: 0.7, pop: 0.25, hit: 1.2, riser: 1.8 }[kind];
+  const n = Math.round(seconds * sampleRate);
+  const left = new Float32Array(n); const right = new Float32Array(n);
+  const rand = prng(seed);
+  // A resonant band-pass (state-variable filter) gives noise a pitch that can sweep.
+  let low = 0, band = 0, low2 = 0, band2 = 0, phase = 0;
+  for (let i = 0; i < n; i += 1) {
+    const t = i / sampleRate; const x = t / seconds; const noise = rand() * 2 - 1;
+    let sample = 0; let pan = 0.5;
+    if (kind === "whoosh") {
+      const env = x < 0.6 ? Math.pow(x / 0.6, 2) : Math.pow(1 - (x - 0.6) / 0.4, 1.5);
+      const centre = 300 + 2600 * Math.sin(Math.PI * Math.min(1, x * 1.1));
+      const f = 2 * Math.sin((Math.PI * centre) / sampleRate); const q = 0.35;
+      low += f * band; const high = noise - low - q * band; band += f * high;
+      sample = band * env * 1.6; pan = 0.15 + 0.7 * x;
+    } else if (kind === "pop") {
+      const freq = 300 + 700 * Math.exp(-t * 40); phase += freq / sampleRate;
+      sample = Math.sin(2 * Math.PI * phase) * Math.exp(-t * 22) + noise * Math.exp(-t * 400) * 0.4;
+    } else if (kind === "hit") {
+      const freq = 45 + 70 * Math.exp(-t * 18); phase += freq / sampleRate;
+      const f = 2 * Math.sin((Math.PI * 1800) / sampleRate);
+      low2 += f * band2; const high = noise - low2 - 0.8 * band2; band2 += f * high;
+      sample = Math.tanh(1.6 * Math.sin(2 * Math.PI * phase)) * Math.exp(-t * 3.2) + low2 * Math.exp(-t * 14) * 0.6;
+    } else {
+      const freq = 180 * Math.pow(7, x); phase += freq / sampleRate;
+      const centre = 400 + 5000 * x * x; const f = 2 * Math.sin((Math.PI * Math.min(centre, sampleRate / 6)) / sampleRate);
+      low += f * band; const high = noise - low - 0.3 * band; band += f * high;
+      const saw = 2 * (phase - Math.floor(phase)) - 1;
+      sample = (band * 0.9 + saw * 0.25) * Math.pow(x, 1.8) * (x > 0.97 ? (1 - x) / 0.03 : 1);
+    }
+    left[i] = sample * Math.cos((pan * Math.PI) / 2) * Math.SQRT2;
+    right[i] = sample * Math.sin((pan * Math.PI) / 2) * Math.SQRT2;
+  }
+  let peak = 0; for (let i = 0; i < n; i += 1) peak = Math.max(peak, Math.abs(left[i]!), Math.abs(right[i]!));
+  const gain = peak > 0 ? 0.7 / peak : 0;
+  // 2 ms fades so nothing clicks.
+  const fade = Math.min(n / 2, Math.round(sampleRate * 0.002));
+  for (let i = 0; i < n; i += 1) { const e = Math.min(1, i / fade, (n - 1 - i) / fade); left[i] = left[i]! * gain * e; right[i] = right[i]! * gain * e; }
+  return { left, right, sampleRate };
+}

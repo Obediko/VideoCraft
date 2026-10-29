@@ -1,5 +1,5 @@
 import { buildCues, cueOperations } from "@videocraft/captions";
-import type { Timeline, TimelineOperation, TranscriptWord } from "@videocraft/domain";
+import type { ColourLook, Timeline, TimelineOperation, TranscriptWord } from "@videocraft/domain";
 import type { CheckIssue } from "./check.js";
 
 /**
@@ -11,6 +11,7 @@ import type { CheckIssue } from "./check.js";
 
 export const MOODS = ["upbeat", "calm", "inspiring", "serious", "playful"] as const;
 export const PLATFORMS = ["tiktok", "youtube", "square"] as const;
+export const LOOKS = ["warm", "clean", "cinematic", "vivid", "soft", "mono"] as const;
 
 export interface DirectorInput {
   brief: string;
@@ -31,7 +32,14 @@ export type Suggestion =
   | { id: string; kind: "broll"; title: string; reason: string; assetId: string; atS: number; durationS: number; mode: "full" | "pip" }
   | { id: string; kind: "progress"; title: string; reason: string }
   | { id: string; kind: "platform"; title: string; reason: string; platform: (typeof PLATFORMS)[number] }
-  | { id: string; kind: "advice"; title: string; reason: string };
+  | { id: string; kind: "advice"; title: string; reason: string }
+  | { id: string; kind: "look"; title: string; reason: string; look: Exclude<ColourLook, "none"> }
+  /** "punch" = alternate tighter framings between pieces (jump-cut energy); "push" = a slow push-in on every piece. */
+  | { id: string; kind: "zooms"; title: string; reason: string; style: "punch" | "push" }
+  /** Fade in from and out to black, plus this transition where the edit jumps to a new part of the talk. */
+  | { id: string; kind: "transitions"; title: string; reason: string; transition: "dip-black" | "dip-white" | "flash" }
+  /** A whoosh on transitions and a pop when on-screen text appears. */
+  | { id: string; kind: "sfx"; title: string; reason: string };
 
 export interface DirectorPlan {
   summary: string;
@@ -115,6 +123,15 @@ export function sanitizePlan(raw: unknown, input: DirectorInput, source: Directo
       if (PLATFORMS.includes(s.platform as never) && !suggestions.some((existing) => existing.kind === "platform")) suggestions.push({ ...base(s, index), kind: "platform", platform: s.platform as (typeof PLATFORMS)[number] });
     } else if (kind === "advice") {
       const b = base(s, index); if (b.reason || b.title) suggestions.push({ ...b, kind: "advice" });
+    } else if (kind === "look") {
+      if (LOOKS.includes(s.look as never) && !suggestions.some((e) => e.kind === "look")) suggestions.push({ ...base(s, index), kind: "look", look: s.look as (typeof LOOKS)[number] });
+    } else if (kind === "zooms") {
+      if ((s.style === "punch" || s.style === "push") && !suggestions.some((e) => e.kind === "zooms")) suggestions.push({ ...base(s, index), kind: "zooms", style: s.style });
+    } else if (kind === "transitions") {
+      const transition = s.transition === "dip-white" || s.transition === "flash" ? s.transition : "dip-black";
+      if (!suggestions.some((e) => e.kind === "transitions")) suggestions.push({ ...base(s, index), kind: "transitions", transition });
+    } else if (kind === "sfx") {
+      if (!suggestions.some((e) => e.kind === "sfx")) suggestions.push({ ...base(s, index), kind: "sfx" });
     }
   });
   return { summary: text(r.summary, 600) || "A proposed edit for your video.", profile, suggestions, source, ...(extra.model ? { model: extra.model } : {}), ...(extra.note ? { note: extra.note } : {}) };
@@ -132,6 +149,10 @@ export function briefHints(brief: string): { channel: string; platform: (typeof 
     : /\b(fun|funny|playful|kids|children|comedy|silly|quirky|cute)/.test(b) ? "playful"
     : /\b(energ|hype|exciting|launch|sale|promo|upbeat|dynamic|lively|punchy)/.test(b) ? "upbeat" : undefined;
   return { channel: platform === "youtube" ? "youtube" : "short-form", platform, ...(seconds ? { targetSeconds: Number(seconds) } : {}), ...(mood ? { mood } : {}) };
+}
+
+function lookFor(hints: { mood?: string; platform: string }): (typeof LOOKS)[number] {
+  return hints.mood === "calm" ? "soft" : hints.mood === "serious" ? "cinematic" : hints.mood === "inspiring" ? "warm" : hints.mood === "upbeat" || hints.mood === "playful" ? "vivid" : "clean";
 }
 
 /** A director without a model: the strongest windows, a hook title, matching music and the right format. */
@@ -159,6 +180,12 @@ export class RuleDirector implements Director {
         ...(hook && first ? [{ id: "title", kind: "title", title: "Open with a title", reason: "A short title in the first seconds tells viewers what they are about to get.", text: hook, atS: first.startS + 0.2, durationS: 2.5, position: "top" }] : []),
         { id: "music", kind: "music", title: "Add " + (hints.mood ?? (hints.platform === "youtube" ? "calm" : "upbeat")) + " music", reason: "Matches the feel of your brief; it dips under speech.", mood: hints.mood ?? (hints.platform === "youtube" ? "calm" : "upbeat") },
         ...(hints.platform !== "youtube" ? [{ id: "progress", kind: "progress", title: "Show a progress bar", reason: "Short-form viewers stay longer when they can see how much is left." }] : []),
+        { id: "look", kind: "look", title: "Give it a " + lookFor(hints) + " look", reason: "A consistent colour treatment that suits a " + (hints.mood ?? "clear") + " video.", look: lookFor(hints) },
+        ...(chosen.length > 1 ? [hints.platform === "youtube"
+          ? { id: "zooms", kind: "zooms", title: "Slow push-ins", reason: "A gentle push on each part keeps a long talk feeling alive without drawing attention.", style: "push" }
+          : { id: "zooms", kind: "zooms", title: "Punch in on alternate parts", reason: "Changing the framing at cuts hides the jump and keeps short-form energy up.", style: "punch" }] : []),
+        { id: "transitions", kind: "transitions", title: hints.platform === "youtube" ? "Fade in and out, dip to black between topics" : "Flash between topics, fade at the ends", reason: "Hard cuts inside a thought, a visible transition where the video moves to a new point.", transition: hints.platform === "youtube" ? "dip-black" : "flash" },
+        ...(hints.platform !== "youtube" ? [{ id: "sfx", kind: "sfx", title: "Subtle sound effects", reason: "A soft whoosh on transitions and a pop when text appears make short-form feel produced." }] : []),
         { id: "platform", kind: "platform", title: "Export for " + (hints.platform === "tiktok" ? "TikTok / Reels / Shorts (9:16)" : hints.platform === "youtube" ? "YouTube (16:9)" : "feeds (1:1)"), reason: "Taken from your description.", platform: hints.platform },
       ],
     };
@@ -178,6 +205,10 @@ Rules:
 - "broll": only with assetId values from the project media list; place at a source time inside a kept segment where the words describe it.
 - "progress": a progress bar (good for short-form).
 - "platform": tiktok (9:16), youtube (16:9) or square (1:1).
+- "look": one colour look for the whole video: warm, clean, cinematic, vivid, soft or mono (field look). Choose from the mood and what the frames look like.
+- "zooms": style "punch" (alternate tighter framings at cuts; energetic short-form) or "push" (slow push-in; calm or long-form).
+- "transitions": fades at the start and end plus transition "dip-black", "dip-white" or "flash" where the edit jumps to a new part. Do not add transitions inside a continuous thought.
+- "sfx": subtle whooshes on transitions and pops when text appears; only for energetic short-form.
 - "advice": what you see in the frames that the creator could improve that you cannot change (lighting, framing, background, sound), kindly and concretely.
 Every suggestion needs a short title and a reason that cites what you saw or heard. Never invent facts, names, numbers or quotes.`;
 
@@ -187,14 +218,15 @@ const SCHEMA = {
     summary: { type: "string" },
     profile: { type: "object", additionalProperties: false, required: ["intent", "audience", "channel", "tone", "targetSeconds"], properties: { intent: { type: "string" }, audience: { type: "string" }, channel: { type: "string" }, tone: { type: "string" }, targetSeconds: { type: "number" } } },
     suggestions: { type: "array", items: { type: "object", additionalProperties: false,
-      required: ["id", "kind", "title", "reason", "segments", "text", "subtitle", "atS", "durationS", "position", "mood", "assetId", "mode", "platform"],
+      required: ["id", "kind", "title", "reason", "segments", "text", "subtitle", "atS", "durationS", "position", "mood", "assetId", "mode", "platform", "look", "style", "transition"],
       properties: {
-        id: { type: "string" }, kind: { type: "string", enum: ["cut", "title", "callout", "lower-third", "music", "broll", "progress", "platform", "advice"] },
+        id: { type: "string" }, kind: { type: "string", enum: ["cut", "title", "callout", "lower-third", "music", "broll", "progress", "platform", "look", "zooms", "transitions", "sfx", "advice"] },
         title: { type: "string" }, reason: { type: "string" },
         segments: { type: "array", items: { type: "object", additionalProperties: false, required: ["startS", "endS"], properties: { startS: { type: "number" }, endS: { type: "number" } } } },
         text: { type: "string" }, subtitle: { type: "string" }, atS: { type: "number" }, durationS: { type: "number" },
         position: { type: "string", enum: ["top", "center", "bottom", ""] }, mood: { type: "string", enum: [...MOODS, ""] }, assetId: { type: "string" },
         mode: { type: "string", enum: ["full", "pip", ""] }, platform: { type: "string", enum: [...PLATFORMS, ""] },
+        look: { type: "string", enum: [...LOOKS, ""] }, style: { type: "string", enum: ["punch", "push", ""] }, transition: { type: "string", enum: ["dip-black", "dip-white", "flash", ""] },
       } } },
   },
 };
@@ -297,6 +329,45 @@ export class OpenAiDirector implements Director {
     if (typeof out !== "string") throw new Error("no text in the response");
     try { return JSON.parse(out); } catch { throw new Error("the response was not valid JSON"); }
   }
+}
+
+/**
+ * Effects for the accepted look / zooms / transitions / sfx suggestions, worked out on the timeline after the cut
+ * was applied (so they refer to the real clips).
+ */
+export function effectOperations(plan: DirectorPlan, accepted: Set<string>, timeline: Timeline, assetId: string): TimelineOperation[] {
+  const chosen = plan.suggestions.filter((s) => accepted.has(s.id));
+  const ops: TimelineOperation[] = [];
+  const pieces = timeline.tracks.filter((t) => t.kind === "video").flatMap((t) => t.clips).sort((a, b) => a.timelineStartUs - b.timelineStartUs);
+  if (pieces.length === 0) return ops;
+  const look = chosen.find((s): s is Extract<Suggestion, { kind: "look" }> => s.kind === "look");
+  if (look) ops.push({ type: "set-look", look: look.look });
+  const zooms = chosen.find((s): s is Extract<Suggestion, { kind: "zooms" }> => s.kind === "zooms");
+  const transitions = chosen.find((s): s is Extract<Suggestion, { kind: "transitions" }> => s.kind === "transitions");
+  const sfx = chosen.some((s) => s.kind === "sfx");
+  // A "jump" is a cut to a different part of the source (not just a removed pause).
+  const jumps = new Set(pieces.flatMap((p, i) => i > 0 && (p.assetId !== pieces[i - 1]!.assetId || Math.abs(p.sourceStartUs - pieces[i - 1]!.sourceEndUs) > 8_000_000) ? [i] : []));
+  pieces.forEach((piece, i) => {
+    const effect: Extract<TimelineOperation, { type: "set-clip-effects" }> = { type: "set-clip-effects", clipId: piece.id };
+    if (zooms) {
+      const length = piece.sourceEndUs - piece.sourceStartUs;
+      if (zooms.style === "push" && length >= 2_500_000) effect.zoom = "push";
+      else if (zooms.style === "punch") effect.zoom = i % 2 === 1 ? "punch" : "none";
+    }
+    if (transitions) {
+      if (i === 0) effect.transitionIn = "dip-black";
+      else if (jumps.has(i)) effect.transitionIn = transitions.transition;
+      if (i === pieces.length - 1) effect.transitionOut = "dip-black";
+    }
+    if (Object.keys(effect).length > 2) ops.push(effect);
+    if (sfx && transitions && jumps.has(i) && piece.assetId === assetId) ops.push({ type: "add-sfx", kind: "whoosh", anchorAssetId: piece.assetId, anchorSourceUs: Math.max(piece.sourceStartUs, piece.sourceStartUs + 10_000), volumeDb: -14 });
+  });
+  if (sfx) {
+    for (const g of timeline.tracks.filter((t) => t.kind === "overlay").flatMap((t) => t.clips).filter((c) => c.transform?.role === "graphic").slice(0, 8)) {
+      ops.push({ type: "add-sfx", kind: "pop", anchorAssetId: String(g.transform?.anchorAssetId), anchorSourceUs: Number(g.transform?.anchorSourceUs), volumeDb: -16 });
+    }
+  }
+  return ops;
 }
 
 export interface ApplyContext {

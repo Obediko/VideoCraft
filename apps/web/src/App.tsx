@@ -23,7 +23,18 @@ const PLATFORMS: Record<string, { label: string; width: number; height: number; 
 };
 type Suggestion = { id: string; kind: string; title: string; reason: string; text?: string; subtitle?: string; atS?: number; durationS?: number; segments?: Array<{ startS: number; endS: number }>; mood?: string; platform?: string; assetId?: string; mode?: string };
 type DirectorPlan = { summary: string; profile: { intent: string; audience: string; channel: string; tone: string; targetSeconds: number }; suggestions: Suggestion[]; source: "ai" | "rules"; model?: string; note?: string };
-const KIND_LABEL: Record<string, string> = { cut: "The cut", title: "Title", callout: "Callout", "lower-third": "Name caption", music: "Music", broll: "Cutaway", progress: "Progress bar", platform: "Format", advice: "Tip" };
+const KIND_LABEL: Record<string, string> = { cut: "The cut", title: "Title", callout: "Callout", "lower-third": "Name caption", music: "Music", broll: "Cutaway", progress: "Progress bar", platform: "Format", advice: "Tip", look: "Look", zooms: "Zooms", transitions: "Transitions", sfx: "Sound effects" };
+const LOOK_LABEL: Record<string, string> = { none: "Natural (no look)", warm: "Warm", clean: "Clean & crisp", cinematic: "Cinematic", vivid: "Vivid", soft: "Soft", mono: "Black & white" };
+const ZOOM_LABEL: Record<string, string> = { none: "No zoom", punch: "Punch in (tighter framing)", push: "Slow push-in" };
+const TRANSITION_LABEL: Record<string, string> = { cut: "Cut", "dip-black": "Dip to black", "dip-white": "Dip to white", flash: "Flash" };
+const SFX_LABEL: Record<string, string> = { whoosh: "Whoosh", pop: "Pop", hit: "Boom", riser: "Riser" };
+/** Ruler ticks every 1/2/5/10/15/30/60 s so that there are about 6–12 of them. */
+function rulerTicks(durationUs: number): number[] {
+  const total = Math.max(1, durationUs / 1e6);
+  const step = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600].find((s) => total / s <= 12) ?? 600;
+  const ticks: number[] = []; for (let t = 0; t <= total + 1e-6; t += step) ticks.push(t);
+  return ticks;
+}
 type CheckIssue = { id: string; severity: "fix" | "warn" | "info"; kind: string; title: string; detail: string; atS?: number; fix?: { label: string; operations: Array<Record<string, unknown>> }; source: "rules" | "ai" };
 type CheckResult = { issues: CheckIssue[]; ai: boolean; scanned: boolean; note?: string; revision: number };
 type Project = { id: string; name: string; revision: number; createdAt: string; updatedAt: string };
@@ -106,9 +117,13 @@ export function App() {
   const [gfxPosition, setGfxPosition] = useState<"top" | "center" | "bottom">("top");
   const [gfxColor, setGfxColor] = useState("#F5A524");
   const [gfxDrafts, setGfxDrafts] = useState<Record<string, string>>({});
+  const [sfxKind, setSfxKind] = useState("whoosh");
   const overlayClips = timeline.tracks.filter((track) => track.kind === "overlay").flatMap((track) => track.clips);
   const graphicsClips = overlayClips.filter((clip) => clip.transform?.role === "graphic");
   const progressClip = overlayClips.find((clip) => clip.transform?.role === "progress");
+  const sfxClips = timeline.tracks.filter((track) => track.kind === "audio").flatMap((track) => track.clips).filter((clip) => clip.transform?.role === "sfx");
+  const looks = new Set(videoClips.map((clip) => String(clip.transform?.look ?? "none")));
+  const wholeLook = looks.size === 1 ? [...looks][0]! : "mixed";
   const brolls = timeline.tracks.filter((track) => track.kind === "overlay").flatMap((track) => track.clips).filter((clip) => clip.transform?.role === "broll");
   const sourceAssetId = selectedClip?.assetId ?? videoClips[0]?.assetId ?? "";
   const sourceUrl = sourceUrls[sourceAssetId] ?? "";
@@ -198,6 +213,11 @@ export function App() {
     const playheadUs = player && previewMode === "source" && sourceUrl ? Math.round(player.currentTime * 1_000_000) : anchorClip.sourceStartUs;
     const inside = videoClips.some((clip) => clip.assetId === anchorClip.assetId && playheadUs >= clip.sourceStartUs && playheadUs < clip.sourceEndUs);
     return { anchorAssetId: anchorClip.assetId, anchorSourceUs: inside ? playheadUs : anchorClip.sourceStartUs, atPlayhead: inside };
+  }
+  function addSoundEffect() {
+    const anchor = playheadAnchor();
+    if (!anchor) { setStatus("Add a video clip first"); return; }
+    void applyEdit([{ type: "add-sfx", kind: sfxKind, anchorAssetId: anchor.anchorAssetId, anchorSourceUs: anchor.anchorSourceUs }], (SFX_LABEL[sfxKind] ?? "Sound") + (anchor.atPlayhead ? " added" : " added at the start of the selected clip"));
   }
   function addGraphic() {
     const anchor = playheadAnchor();
@@ -676,8 +696,9 @@ export function App() {
   const assetName = (id: string) => { const asset = assets.find((item) => item.id === id); return asset ? String(asset.metadata.filename ?? asset.kind) : id.startsWith("generated:") ? "Generated" : "Media"; };
   const clipLabel = (kind: string, clip: TimelineClip) => kind === "caption" ? String(clip.transform?.text ?? "Caption")
     : kind === "overlay" ? (clip.transform?.role === "graphic" ? String(clip.transform?.text ?? "Graphic") : clip.transform?.role === "progress" ? "Progress bar" : "B-roll · " + assetName(clip.assetId))
-    : kind === "audio" ? "Music · " + assetName(clip.assetId) : assetName(clip.assetId);
-  const trackName: Record<string, string> = { video: "Video", caption: "Captions", overlay: "Overlays", audio: "Music" };
+    : kind === "audio" ? (clip.transform?.role === "sfx" ? "Sound · " + (SFX_LABEL[String(clip.transform?.kind)] ?? "effect") : "Music · " + assetName(clip.assetId))
+    : assetName(clip.assetId) + [clip.transform?.zoom ? " · " + (clip.transform.zoom === "punch" ? "punch-in" : "push-in") : "", clip.transform?.transitionIn ? " · " + (TRANSITION_LABEL[String(clip.transform.transitionIn)] ?? "") + " in" : ""].join("");
+  const trackName: Record<string, string> = { video: "Video", caption: "Captions", overlay: "Overlays", audio: "Sound" };
   const fit = proposal ? (proposal.confidence >= 0.7 ? "strong" : proposal.confidence >= 0.45 ? "fair" : "weak") : "";
   const accepted = proposal?.status === "accepted";
   const next: { title: string; detail: string; action?: { label: string; run: () => void; disabled?: boolean } } =
@@ -755,6 +776,14 @@ export function App() {
           {graphicsClips.length > 0 && <ul className="broll-list graphics-list">{graphicsClips.map((clip) => { const original = String(clip.transform?.text ?? ""); const draft = gfxDrafts[clip.id] ?? original; return <li key={clip.id}><span>{formatSeconds(clip.timelineStartUs)} · {String(clip.transform?.kind)}</span><input aria-label={"Graphic text at " + formatSeconds(clip.timelineStartUs)} value={draft} maxLength={120} onChange={(event) => setGfxDrafts((current) => ({ ...current, [clip.id]: event.target.value }))} /><button className="secondary" onClick={() => void applyEdit([{ type: "update-graphic", clipId: clip.id, text: draft.trim() }], "Graphic updated").then((ok) => { if (ok) setGfxDrafts((current) => { const { [clip.id]: _done, ...rest } = current; return rest; }); })} disabled={busy || !draft.trim() || draft.trim() === original}>Save</button><button className="secondary" onClick={() => void applyEdit([{ type: "remove-clip", clipId: clip.id, reason: "Graphic removed" }], "Graphic removed")} disabled={busy}>Remove</button></li>; })}</ul>}
           <label className="checkbox"><input type="checkbox" checked={Boolean(progressClip)} disabled={busy || revision === 0} onChange={(event) => void applyEdit([{ type: "set-progress-bar", enabled: event.target.checked, color: gfxColor }], event.target.checked ? "Progress bar on" : "Progress bar off")} /> Progress bar across the top</label>
         </section>
+        <section className="panel effects-panel" aria-label="Look and effects">
+          <h2>Look &amp; effects</h2>
+          <label>Look for the whole video<select value={wholeLook} disabled={busy || revision === 0} onChange={(event) => { if (event.target.value !== "mixed") void applyEdit([{ type: "set-look", look: event.target.value }], "Look: " + (LOOK_LABEL[event.target.value] ?? event.target.value)); }}>{wholeLook === "mixed" && <option value="mixed">Mixed (set per clip)</option>}{Object.entries(LOOK_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+          <p className="muted">Zooms and transitions are set per clip: select a clip on the timeline.</p>
+          <label>Sound effect<select value={sfxKind} onChange={(event) => setSfxKind(event.target.value)}>{Object.entries(SFX_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+          <button className="secondary" onClick={addSoundEffect} disabled={busy || revision === 0}>Add sound at playhead</button>
+          {sfxClips.length > 0 && <ul className="broll-list">{sfxClips.map((clip) => <li key={clip.id}><span>{formatSeconds(clip.timelineStartUs)} · {SFX_LABEL[String(clip.transform?.kind)] ?? "Sound"}</span><button className="secondary" onClick={() => void applyEdit([{ type: "remove-clip", clipId: clip.id, reason: "Sound removed" }], "Sound removed")} disabled={busy}>Remove</button></li>)}</ul>}
+        </section>
         {learned && <section className="panel learned-panel" aria-label="Learned preferences">
           <h2>Learned from your edits</h2>
           <p>{learned.summary}</p>
@@ -792,7 +821,7 @@ export function App() {
             <div className="decision-actions"><button onClick={applyPlan} disabled={busy || planApplied || !plan.suggestions.some((item) => picked[item.id])}>{planApplied ? "Applied" : "Apply selected"}</button></div>
           </>}
         </section>}
-        {revision > 0 && hasVideo && <section className="panel check-panel" aria-label="Edit check">
+        {revision > 0 && hasVideo && <section className="panel check-panel" aria-label="Edit check" data-checked-revision={check?.revision ?? 0}>
           <div className="panel-heading"><h2>Check your edit</h2>{check && <span className="badge">{check.ai ? "Built-in checks + AI look" : "Built-in checks"}{check.revision !== revision ? " · edited since" : ""}</span>}</div>
           {!check && <p className="muted">Looks over the edit like an editor before export and proposes a fix for each problem. Nothing changes until you apply.</p>}
           {check?.note && <p className="muted">{check.note}</p>}
@@ -809,7 +838,7 @@ export function App() {
         </section>}
         <div className="editor-toolbar"><div><span className="eyebrow">TIMELINE</span><h2>{projectId ? "Revision " + revision : "No project selected"}</h2></div><div className="toolbar-actions"><button className="secondary" onClick={saveRevision} disabled={busy || !projectId}>Save revision</button><select aria-label="Platform" value={platform} onChange={(event) => setPlatform(event.target.value)}>{Object.entries(PLATFORMS).map(([key, preset]) => <option key={key} value={key}>{preset.label}</option>)}</select><button className="secondary" onClick={submitRender} disabled={busy || !revision}>Export</button></div></div>
         <div className="timeline-card">
-          <div className="ruler"><span>00:00</span><span>00:10</span><span>00:20</span><span>00:30</span></div>
+          <div className="ruler" aria-hidden="true"><span className="ruler-gutter" /><div className="ruler-lane">{rulerTicks(timeline.durationUs).map((t) => <span key={t} style={{ left: (t / Math.max(1, timeline.durationUs / 1e6)) * 100 + "%" }}>{String(Math.floor(t / 60)).padStart(2, "0") + ":" + String(Math.round(t % 60)).padStart(2, "0")}</span>)}</div></div>
           <div className="track-list">
             {timeline.tracks.length === 0 && <div className="empty-state">Your non-destructive timeline is empty. Add a registered asset to begin.</div>}
             {timeline.tracks.map((track) => <div className="track" key={track.id}><div className="track-label">{trackName[track.kind] ?? track.kind}</div><div className="track-lane">{track.clips.map((clip) => <button type="button" className={"clip" + (clip.transform?.role === "progress" ? " progress" : "") + (selectedClipId === clip.id ? " selected" : "")} key={clip.id} style={{ left: (clip.timelineStartUs / Math.max(1, timeline.durationUs)) * 100 + "%", width: ((clip.timelineEndUs - clip.timelineStartUs) / Math.max(1, timeline.durationUs)) * 100 + "%" }} title={clipLabel(track.kind, clip) + " · " + formatSeconds(clip.timelineEndUs - clip.timelineStartUs)} aria-label={clipLabel(track.kind, clip) + ", " + formatSeconds(clip.sourceEndUs - clip.sourceStartUs)} aria-pressed={selectedClipId === clip.id} onClick={() => setSelectedClipId(clip.id)} onKeyDown={(event) => handleClipKeyDown(event, clip)}><strong>{clipLabel(track.kind, clip)}</strong>{track.kind === "video" && <small>{formatSeconds(clip.sourceEndUs - clip.sourceStartUs)}</small>}</button>)}</div></div>)}
@@ -826,6 +855,12 @@ export function App() {
             <button className="secondary" onClick={() => trimSelectedClip(0, -500_000)} disabled={busy || revision === 0}>Trim end −0.5s</button>
             <button className="secondary" onClick={() => trimSelectedClip(0, 500_000)} disabled={busy || revision === 0}>End +0.5s</button>
             <button className="secondary" onClick={() => removeSelectedClip()} disabled={busy}>Remove</button>
+          </div>
+          <div className="clip-effects">
+            <label>Zoom<select value={String(selectedClip.transform?.zoom ?? "none")} disabled={busy || revision === 0} onChange={(event) => void applyEdit([{ type: "set-clip-effects", clipId: selectedClip.id, zoom: event.target.value }], "Zoom: " + (ZOOM_LABEL[event.target.value] ?? event.target.value))}>{Object.entries(ZOOM_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+            <label>Into this clip<select value={String(selectedClip.transform?.transitionIn ?? "cut")} disabled={busy || revision === 0} onChange={(event) => void applyEdit([{ type: "set-clip-effects", clipId: selectedClip.id, transitionIn: event.target.value }], "Transition: " + (TRANSITION_LABEL[event.target.value] ?? event.target.value))}>{Object.entries(TRANSITION_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+            {selectedClip.id === videoClips.at(-1)?.id && <label>Ending<select value={String(selectedClip.transform?.transitionOut ?? "cut")} disabled={busy || revision === 0} onChange={(event) => void applyEdit([{ type: "set-clip-effects", clipId: selectedClip.id, transitionOut: event.target.value }], "Ending: " + (TRANSITION_LABEL[event.target.value] ?? event.target.value))}><option value="cut">Hard end</option><option value="dip-black">Fade to black</option><option value="dip-white">Fade to white</option></select></label>}
+            <label>Look<select value={String(selectedClip.transform?.look ?? "none")} disabled={busy || revision === 0} onChange={(event) => void applyEdit([{ type: "set-clip-effects", clipId: selectedClip.id, look: event.target.value }], "Clip look: " + (LOOK_LABEL[event.target.value] ?? event.target.value))}>{Object.entries(LOOK_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
           </div>
         </section>}
         {revision > 0 && <section className="panel segment-panel" aria-label="Add segment">

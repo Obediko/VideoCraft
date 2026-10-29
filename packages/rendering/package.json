@@ -12,7 +12,8 @@
   },
   "dependencies": {
     "@videocraft/domain": "0.1.0",
-    "@videocraft/captions": "0.1.0"
+    "@videocraft/captions": "0.1.0",
+    "@videocraft/music": "0.1.0"
   },
   "devDependencies": {
     "typescript": "^5.7.2",
