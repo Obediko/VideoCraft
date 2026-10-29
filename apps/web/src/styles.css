@@ -141,3 +141,8 @@ select:focus-visible { outline: 2px solid #7c70f4; outline-offset: 1px; }
 .suggestion-list label.checkbox { display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem; margin: 0; }
 .suggestion-list p { margin: 0.3rem 0 0; overflow-wrap: anywhere; }
 .suggestion-list input:not([type="checkbox"]) { margin-top: 0.4rem; width: 100%; }
+
+.issue-list li.issue-fix { border-left: 3px solid #F5A524; }
+.issue-list li.issue-warn { border-left: 3px solid #8b9bb4; }
+.issue-list li.issue-info { border-left: 3px solid #3a4457; }
+.issue-list .fix-label { margin-top: 0.3rem; font-size: 0.9em; }

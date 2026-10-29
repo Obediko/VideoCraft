@@ -1,5 +1,6 @@
 import { buildCues, cueOperations } from "@videocraft/captions";
 import type { Timeline, TimelineOperation, TranscriptWord } from "@videocraft/domain";
+import type { CheckIssue } from "./check.js";
 
 /**
  * The AI director: reads what is said, looks at sampled frames, and proposes a whole edit as a list of
@@ -42,7 +43,23 @@ export interface DirectorPlan {
   note?: string;
 }
 
-export interface Director { plan(input: DirectorInput): Promise<DirectorPlan>; }
+export interface Director {
+  plan(input: DirectorInput): Promise<DirectorPlan>;
+  /** A second look at a finished edit (AI only); the rules check runs separately. */
+  review?(input: ReviewInput): Promise<CheckIssue[]>;
+}
+
+export interface ReviewInput {
+  brief: string;
+  /** The kept pieces in play order, with their place in the edit and what is said. */
+  pieces: Array<{ clipId: string; startS: number; endS: number; text: string }>;
+  graphics: Array<{ clipId: string; kind: string; text: string; atS: number; durationS: number }>;
+  cutaways: Array<{ atS: number; durationS: number; name: string }>;
+  music?: string;
+  platform: string;
+  /** Frames of the source at moments of the edit (cut points, graphics), labelled with their place in the edit. */
+  frames: Array<{ atS: number; label: string; jpegBase64: string }>;
+}
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
 const text = (v: unknown, max: number) => (typeof v === "string" ? v.replace(/[\u0000-\u001f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, max) : "");
@@ -182,6 +199,21 @@ const SCHEMA = {
   },
 };
 
+const REVIEW = `You are a senior video editor giving a final review of an edit before it is published. You get the creator's description, the edit piece by piece with what is said, the on-screen text, cutaways, and frames from the edit.
+Find at most 6 real problems a viewer would notice, most important first: a weak or slow opening, a piece that repeats or wanders off the point, a story order that confuses, on-screen text that is wrong, unclear, misspelt or covers something important in the frame, a cutaway that does not match the words, a look problem in the frames (dark, blurry, cluttered or distracting background, poor framing).
+For each, choose one action that fixes it if possible:
+- "remove-piece" (piece = index) to drop a piece; "move-piece" (piece, toIndex) to reorder, e.g. toIndex 0 to open on the strongest line;
+- "rewrite-text" (graphic = index, text = the new wording) or "remove-graphic" (graphic = index);
+- "none" when it cannot be fixed by editing (then say concretely what to change when filming).
+Use -1 for unused indexes and "" for unused text. Never invent facts. If the edit is good, return an empty list.`;
+
+const REVIEW_SCHEMA = {
+  type: "object", additionalProperties: false, required: ["issues"],
+  properties: { issues: { type: "array", items: { type: "object", additionalProperties: false,
+    required: ["title", "detail", "atS", "severity", "action", "piece", "toIndex", "graphic", "text"],
+    properties: { title: { type: "string" }, detail: { type: "string" }, atS: { type: "number" }, severity: { type: "string", enum: ["fix", "warn", "info"] }, action: { type: "string", enum: ["none", "remove-piece", "move-piece", "rewrite-text", "remove-graphic"] }, piece: { type: "integer" }, toIndex: { type: "integer" }, graphic: { type: "integer" }, text: { type: "string" } } } } },
+};
+
 /** The AI director over OpenAI's Responses API with image input and a strict JSON schema; falls back to rules. */
 export class OpenAiDirector implements Director {
   private readonly fetchImpl: Fetch;
@@ -200,6 +232,34 @@ export class OpenAiDirector implements Director {
       return { ...fallback, note: "The AI director was unavailable (" + (error instanceof Error ? error.message : "error").slice(0, 200) + "); built-in rules made this plan." };
     }
   }
+  async review(input: ReviewInput): Promise<CheckIssue[]> {
+    const pieces = input.pieces.map((p, i) => "#" + i + " [" + p.startS.toFixed(1) + "-" + p.endS.toFixed(1) + " s] " + p.text.slice(0, 500)).join("\n");
+    const graphics = input.graphics.map((g, i) => "#" + i + " " + g.kind + " at " + g.atS.toFixed(1) + " s for " + g.durationS.toFixed(1) + " s: " + g.text).join("\n") || "(none)";
+    const cutaways = input.cutaways.map((c) => c.name + " at " + c.atS.toFixed(1) + " s for " + c.durationS.toFixed(1) + " s").join("\n") || "(none)";
+    const content: Array<Record<string, unknown>> = [{ type: "input_text", text: "Creator's description:\n" + input.brief.slice(0, 2000) + "\n\nFormat: " + input.platform + "\nMusic: " + (input.music ?? "none") + "\n\nThe edit, piece by piece (times are in the edited video):\n" + pieces + "\n\nOn-screen text:\n" + graphics + "\n\nCutaways:\n" + cutaways + "\n\nFrames from the edit follow." }];
+    for (const frame of input.frames.slice(0, 12)) {
+      content.push({ type: "input_text", text: frame.label + " (" + frame.atS.toFixed(1) + " s):" });
+      content.push({ type: "input_image", image_url: "data:image/jpeg;base64," + frame.jpegBase64, detail: "low" });
+    }
+    const raw = (await this.request(REVIEW, content, "edit_review", REVIEW_SCHEMA)) as { issues?: Array<Record<string, unknown>> };
+    const out: CheckIssue[] = [];
+    for (const [i, issue] of (Array.isArray(raw.issues) ? raw.issues : []).slice(0, 8).entries()) {
+      const title = typeof issue.title === "string" ? issue.title.slice(0, 140) : ""; if (!title) continue;
+      const detail = typeof issue.detail === "string" ? issue.detail.slice(0, 400) : "";
+      const atS = typeof issue.atS === "number" && Number.isFinite(issue.atS) && issue.atS >= 0 ? Math.round(issue.atS * 10) / 10 : undefined;
+      const piece = input.pieces[Number(issue.piece)]; const graphic = input.graphics[Number(issue.graphic)];
+      let fix: CheckIssue["fix"];
+      if (issue.action === "remove-piece" && piece && input.pieces.length > 1) fix = { label: "Remove piece " + (Number(issue.piece) + 1), operations: [{ type: "remove-clip", clipId: piece.clipId, reason: "AI check: " + title }] };
+      else if (issue.action === "move-piece" && piece && Number.isInteger(issue.toIndex) && Number(issue.toIndex) >= 0 && Number(issue.toIndex) < input.pieces.length && Number(issue.toIndex) !== Number(issue.piece)) {
+        const order = input.pieces.map((p) => p.clipId).filter((id) => id !== piece.clipId); order.splice(Number(issue.toIndex), 0, piece.clipId);
+        fix = { label: Number(issue.toIndex) === 0 ? "Open with this piece" : "Move piece " + (Number(issue.piece) + 1) + " to position " + (Number(issue.toIndex) + 1), operations: [{ type: "reorder-clips", clipIds: order }] };
+      } else if (issue.action === "rewrite-text" && graphic && typeof issue.text === "string" && issue.text.trim().length >= 2) fix = { label: "Change to “" + issue.text.trim().slice(0, 80) + "”", operations: [{ type: "update-graphic", clipId: graphic.clipId, text: issue.text.trim().slice(0, 120) }] };
+      else if (issue.action === "remove-graphic" && graphic) fix = { label: "Remove “" + graphic.text.slice(0, 40) + "”", operations: [{ type: "remove-clip", clipId: graphic.clipId, reason: "AI check: " + title }] };
+      const severity = fix ? "fix" : issue.severity === "info" ? "info" : "warn";
+      out.push({ id: "ai-" + i, severity, kind: "ai-" + String(issue.action || "note"), title, detail, ...(atS !== undefined ? { atS } : {}), ...(fix ? { fix } : {}), source: "ai" });
+    }
+    return out;
+  }
   private async call(input: DirectorInput): Promise<unknown> {
     const lines = input.transcript.map((s) => "[" + s.startS.toFixed(1) + "-" + s.endS.toFixed(1) + "] " + s.text).join("\n").slice(0, 60_000);
     const candidates = input.candidates.slice(0, 16).map((c) => c.id + " [" + c.startS.toFixed(1) + "-" + c.endS.toFixed(1) + "] score " + c.score.toFixed(2) + ": " + c.text.slice(0, 300)).join("\n");
@@ -211,6 +271,9 @@ export class OpenAiDirector implements Director {
       content.push({ type: "input_text", text: "Frame at " + frame.atS.toFixed(1) + " s:" });
       content.push({ type: "input_image", image_url: "data:image/jpeg;base64," + frame.jpegBase64, detail: "low" });
     }
+    return this.request(SYSTEM, content, "edit_plan", SCHEMA);
+  }
+  private async request(instructions: string, content: Array<Record<string, unknown>>, name: string, schema: unknown): Promise<unknown> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.options.timeoutMs ?? 90_000);
     let response;
@@ -218,7 +281,7 @@ export class OpenAiDirector implements Director {
       response = await this.fetchImpl((this.options.endpoint ?? "https://api.openai.com/v1").replace(/\/$/, "") + "/responses", {
         method: "POST", signal: controller.signal,
         headers: { authorization: "Bearer " + this.options.apiKey, "content-type": "application/json" },
-        body: JSON.stringify({ model: this.options.model, instructions: SYSTEM, input: [{ role: "user", content }], text: { format: { type: "json_schema", name: "edit_plan", strict: true, schema: SCHEMA } } }),
+        body: JSON.stringify({ model: this.options.model, instructions, input: [{ role: "user", content }], text: { format: { type: "json_schema", name, strict: true, schema } } }),
       });
     } catch (error) {
       if (controller.signal.aborted) throw new Error("timed out");
@@ -288,3 +351,5 @@ export function planOperations(plan: DirectorPlan, accepted: Set<string>, ctx: A
   }
   return ops;
 }
+
+export * from "./check.js";

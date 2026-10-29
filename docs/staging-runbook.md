@@ -128,6 +128,11 @@ and plans the whole edit; every suggestion is still reviewed and ticked by you b
 4. In the editor, the badge on "Describe your video" shows **AI director · model** when it is in use. If the
    call fails it falls back to the built-in director and says why under the button.
 
+**Check your edit** (after applying a plan or highlights) runs built-in checks on every edit: clipped words,
+long pauses, opening or ending mid-sentence, black or frozen picture, graphics that overlap or go by too fast,
+over-long titles, loud music, missing captions on short-form. With the key it also asks the AI for a second
+look at frames of the edit (story order, weak opening, on-screen text). Fixes are applied only when ticked.
+
 ## Troubleshooting
 
 Most failures so far came from old images, a full disk or memory limits, not from the code. Read logs filtered so secrets never print:

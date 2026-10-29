@@ -24,6 +24,8 @@ const PLATFORMS: Record<string, { label: string; width: number; height: number; 
 type Suggestion = { id: string; kind: string; title: string; reason: string; text?: string; subtitle?: string; atS?: number; durationS?: number; segments?: Array<{ startS: number; endS: number }>; mood?: string; platform?: string; assetId?: string; mode?: string };
 type DirectorPlan = { summary: string; profile: { intent: string; audience: string; channel: string; tone: string; targetSeconds: number }; suggestions: Suggestion[]; source: "ai" | "rules"; model?: string; note?: string };
 const KIND_LABEL: Record<string, string> = { cut: "The cut", title: "Title", callout: "Callout", "lower-third": "Name caption", music: "Music", broll: "Cutaway", progress: "Progress bar", platform: "Format", advice: "Tip" };
+type CheckIssue = { id: string; severity: "fix" | "warn" | "info"; kind: string; title: string; detail: string; atS?: number; fix?: { label: string; operations: Array<Record<string, unknown>> }; source: "rules" | "ai" };
+type CheckResult = { issues: CheckIssue[]; ai: boolean; scanned: boolean; note?: string; revision: number };
 type Project = { id: string; name: string; revision: number; createdAt: string; updatedAt: string };
 type Asset = { id: string; kind: string; storageKey: string; durationUs?: number; metadata: Record<string, string | number | boolean> };
 
@@ -82,6 +84,8 @@ export function App() {
   const [planApplied, setPlanApplied] = useState(false);
   const [picked, setPicked] = useState<Record<string, boolean>>({});
   const [planText, setPlanText] = useState<Record<string, string>>({});
+  const [check, setCheck] = useState<CheckResult | null>(null);
+  const [fixPicked, setFixPicked] = useState<Record<string, boolean>>({});
 
   const videoTrack = useMemo(() => timeline.tracks.find((track) => track.kind === "video"), [timeline]);
   const videoClips = useMemo(() => [...(videoTrack?.clips ?? [])].sort((a, b) => a.timelineStartUs - b.timelineStartUs), [videoTrack]);
@@ -312,7 +316,7 @@ export function App() {
       setProjectName(project.name);
       setRevision(project.revision);
       setProposal(null);
-      setPlan(null); setPlanApplied(false);
+      setPlan(null); setPlanApplied(false); setCheck(null);
       setRenderJobId("");
       setRenderJobStatus("");
       setRenderUrl("");
@@ -578,10 +582,40 @@ export function App() {
       if (result.music) { const listed = await request("/v1/projects/" + projectId + "/assets").catch(() => null); if (listed) setAssets(listed.assets); }
       const tailoring = result.revision.tailoring;
       if (tailoring) { setIntent(tailoring.intent ?? intent); setAudience(tailoring.audience ?? audience); setChannel(tailoring.channel ?? channel); if (tailoring.targetDurationUs) setTargetSeconds(Math.round(tailoring.targetDurationUs / 1e6)); }
-      setPlanApplied(true);
+      setPlanApplied(true); setCheck(null);
       setStatus("Plan applied (revision " + result.revision.revision + ")" + (result.music ? ". Music: " + result.music.description : ""));
     } catch (error) { setStatus(errorMessage(error)); }
     finally { setBusy(false); }
+  }
+
+  async function runCheck(atRevision = revision) {
+    if (!projectId || !atRevision) return;
+    setBusy(true);
+    setStatus("Checking your edit: cuts, pauses, picture, text and sound…");
+    try {
+      const result = await request("/v1/projects/" + projectId + "/director/check", { method: "POST", body: JSON.stringify({ revision: atRevision, platform, ...(brief.trim() ? { brief } : {}) }) });
+      setCheck({ ...result, revision: atRevision });
+      setFixPicked(Object.fromEntries(result.issues.filter((issue: CheckIssue) => issue.fix).map((issue: CheckIssue) => [issue.id, issue.severity === "fix"])));
+      const fixable = result.issues.filter((issue: CheckIssue) => issue.fix).length;
+      setStatus("Check done: " + (result.issues.length === 0 ? "nothing to fix" : result.issues.length + " finding" + (result.issues.length === 1 ? "" : "s") + (fixable ? ", " + fixable + " with a fix" : "")));
+      setTimeout(() => document.querySelector(".check-panel")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+    } catch (error) { setStatus(errorMessage(error)); }
+    finally { setBusy(false); }
+  }
+
+  async function applyFixes() {
+    if (!projectId || !check) return;
+    const fixes = check.issues.filter((issue) => issue.fix && fixPicked[issue.id]).map((issue) => ({ title: issue.title, ...(typeof issue.atS === "number" ? { atS: issue.atS } : {}), operations: issue.fix!.operations }));
+    if (!fixes.length) return;
+    setBusy(true);
+    try {
+      const result = await request("/v1/projects/" + projectId + "/director/fix", { method: "POST", body: JSON.stringify({ revision: check.revision, fixes }) });
+      setRevision(result.revision.revision); setTimeline(result.revision.timeline);
+      setRenderUrl(""); setRenderJobId(""); setRenderJobStatus("");
+      setStatus("Fixed " + result.applied.length + (result.skipped.length ? " (" + result.skipped.length + " no longer applied)" : "") + "; checking again…");
+      setBusy(false);
+      await runCheck(result.revision.revision);
+    } catch (error) { setStatus(errorMessage(error)); setBusy(false); }
   }
 
   async function createHighlights() {
@@ -610,7 +644,7 @@ export function App() {
     try {
       const result = await request("/v1/projects/" + projectId + "/proposals/" + proposal.id + "/decision", { method: "POST", body: JSON.stringify({ decision }) });
       if (result.revision) { setRevision(result.revision.revision); setTimeline(result.revision.timeline); }
-      setProposal({ ...proposal, status: decision });
+      setProposal({ ...proposal, status: decision }); if (decision === "accepted") setCheck(null);
       setStatus("Proposal " + decision);
     } catch (error) { setStatus(errorMessage(error)); }
     finally { setBusy(false); }
@@ -656,6 +690,7 @@ export function App() {
     : proposal?.status === "proposed" ? { title: "Review the suggested highlights", detail: "Each clip says why it was chosen, with the transcript as evidence. Accept to build your cut, or adjust the goal and try again.", action: { label: "Accept highlights", run: () => void decideProposal("accepted") } }
     : renderJobId && !renderUrl && !/^(failed|cancelled)/.test(renderJobStatus) ? { title: "Exporting…", detail: "Rendering " + (renderJobStatus || "queued") + ". This takes roughly as long as the video itself." }
     : renderUrl ? { title: "Your video is ready", detail: "Play it in the Preview panel or download it. Edit further and export again any time." }
+    : (accepted || planApplied) && !check ? { title: "Check your edit", detail: "A last look before export: clipped words, long pauses, black or frozen picture, text that goes by too fast and music balance. Each comes with a fix you can accept.", action: { label: "Check my edit", run: () => void runCheck() } }
     : accepted || planApplied ? { title: "Export your video", detail: "Fine-tune below if you like (trim, captions, music, B-roll, graphics), pick a platform next to Export video, then export.", action: { label: "Export video", run: () => void submitRender() } }
     : { title: "Describe your video", detail: "Say in your own words what it is about, who it is for and where it will go. The director plans the whole edit; you approve each part.", action: { label: "Plan my video", run: () => void planVideo() } };
 
@@ -756,6 +791,21 @@ export function App() {
             </li>)}</ul>
             <div className="decision-actions"><button onClick={applyPlan} disabled={busy || planApplied || !plan.suggestions.some((item) => picked[item.id])}>{planApplied ? "Applied" : "Apply selected"}</button></div>
           </>}
+        </section>}
+        {revision > 0 && hasVideo && <section className="panel check-panel" aria-label="Edit check">
+          <div className="panel-heading"><h2>Check your edit</h2>{check && <span className="badge">{check.ai ? "Built-in checks + AI look" : "Built-in checks"}{check.revision !== revision ? " · edited since" : ""}</span>}</div>
+          {!check && <p className="muted">Looks over the edit like an editor before export and proposes a fix for each problem. Nothing changes until you apply.</p>}
+          {check?.note && <p className="muted">{check.note}</p>}
+          {check && check.issues.length === 0 && <p>Nothing to fix. Ready to export.</p>}
+          {check && check.issues.length > 0 && <ul className="suggestion-list issue-list">{check.issues.map((issue) => <li key={issue.id} className={"issue-" + issue.severity + (issue.fix && !fixPicked[issue.id] ? " off" : "")}>
+            <label className="checkbox">{issue.fix && <input type="checkbox" checked={Boolean(fixPicked[issue.id])} onChange={(event) => setFixPicked((current) => ({ ...current, [issue.id]: event.target.checked }))} />}<span className="badge">{issue.severity === "fix" ? "Fix" : issue.severity === "warn" ? "Look" : "Note"}{issue.source === "ai" ? " · AI" : ""}</span><strong>{issue.title}</strong></label>
+            <p className="muted">{issue.detail}{typeof issue.atS === "number" ? " · at " + issue.atS.toFixed(1) + " s" : ""}</p>
+            {issue.fix && <p className="fix-label">→ {issue.fix.label}</p>}
+          </li>)}</ul>}
+          <div className="decision-actions">
+            <button className="secondary" onClick={() => void runCheck()} disabled={busy}>{check ? "Check again" : "Check my edit"}</button>
+            {check && check.issues.some((issue) => issue.fix) && <button onClick={applyFixes} disabled={busy || check.revision !== revision || !check.issues.some((issue) => issue.fix && fixPicked[issue.id])}>Apply selected fixes</button>}
+          </div>
         </section>}
         <div className="editor-toolbar"><div><span className="eyebrow">TIMELINE</span><h2>{projectId ? "Revision " + revision : "No project selected"}</h2></div><div className="toolbar-actions"><button className="secondary" onClick={saveRevision} disabled={busy || !projectId}>Save revision</button><select aria-label="Platform" value={platform} onChange={(event) => setPlatform(event.target.value)}>{Object.entries(PLATFORMS).map(([key, preset]) => <option key={key} value={key}>{preset.label}</option>)}</select><button className="secondary" onClick={submitRender} disabled={busy || !revision}>Export</button></div></div>
         <div className="timeline-card">

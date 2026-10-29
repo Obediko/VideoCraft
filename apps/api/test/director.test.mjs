@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildServer } from "../dist/server.js";
 import { registerDirectorRoutes } from "../dist/director-routes.js";
+import { registerTimelineRoutes } from "../dist/timeline-routes.js";
 import { RuleDirector, OpenAiDirector } from "@videocraft/director";
 import { StaticStrategyRegistry } from "@videocraft/strategies";
 import { LocalObjectStorage } from "@videocraft/storage";
@@ -14,7 +15,7 @@ import { ProjectService, InMemoryAssetRepository, InMemoryProjectMemberRepositor
 
 const lines = ["Most graduates discover the job market wants skills they never learned in class.", "So we built a programme with real projects and mentors for them.", "Students spend twelve weeks with companies and leave with a strong portfolio.", "More than half of them found jobs within three months last year.", "Start building something you can show to employers today."];
 
-async function setup(director) {
+async function setup(director, options = {}) {
   const dir = mkdtempSync(join(tmpdir(), "vc-director-"));
   const projects = new InMemoryProjectRepository(); const assets = new InMemoryAssetRepository(); const revisions = new InMemoryRevisionRepository();
   let n = 0; const ids = { next: () => "id-" + ++n }; const clock = { now: () => new Date().toISOString() };
@@ -26,14 +27,15 @@ async function setup(director) {
   const server = buildServer({ projects, assets, revisions, members: new InMemoryProjectMemberRepository(), scenes: new InMemorySceneRepository(), authenticate: auth, authorize, strategies: new StaticStrategyRegistry(), clock, ids });
   const service = new ProjectService(projects, assets, revisions, ids, clock);
   registerDirectorRoutes(server, { projects, assets, revisions, storage, transcripts: { listForAsset: async (id) => (id === "talk" ? segments : []) }, director, saveRevision: (i) => service.saveRevision(i), authenticate: auth.authenticate, authorize, clock: clock.now });
+  registerTimelineRoutes(server, { projects, revisions, assets, authenticate: auth.authenticate, authorize, saveRevision: (i) => service.saveRevision(i) });
   const projectId = (await server.inject({ method: "POST", url: "/v1/projects", payload: { name: "Director" } })).json().project.id;
   const video = join(dir, "talk.mp4");
-  execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=640x360:d=" + (durationUs / 1e6).toFixed(2) + ":r=25", "-pix_fmt", "yuv420p", video]);
+  execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=640x360:d=" + (durationUs / 1e6).toFixed(2) + ":r=25", ...(options.blackLead ? ["-vf", "drawbox=c=black:t=fill:enable='lt(t,2)'"] : []), "-pix_fmt", "yuv420p", video]);
   const stored = await storage.putFile(video, "projects/" + projectId + "/assets/talk.media");
   await assets.save({ id: "talk", projectId, kind: "video", storageKey: stored.key, checksumSha256: stored.checksumSha256, durationUs, metadata: { filename: "talk.mp4", width: 640, height: 360 }, createdAt: clock.now() });
   await assets.save({ id: "pic", projectId, kind: "image", storageKey: "projects/" + projectId + "/assets/pic.media", checksumSha256: "b".repeat(64), metadata: { filename: "campus.jpg" }, createdAt: clock.now() });
   await server.inject({ method: "POST", url: "/v1/projects/" + projectId + "/revisions", payload: { timeline: { durationUs, tracks: [{ id: "v", kind: "video", clips: [{ id: "src", assetId: "talk", sourceStartUs: 0, sourceEndUs: durationUs, timelineStartUs: 0, timelineEndUs: durationUs }] }] } } });
-  return { server, projectId, segments, close: () => rmSync(dir, { recursive: true, force: true }) };
+  return { server, projectId, segments, durationUs, close: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 test("director (built-in rules): describe → plan → accept → a finished edit with cut, captions, title, music and format", async () => {
@@ -92,5 +94,75 @@ test("director (OpenAI): real frames are sent, the AI plan is applied, foreign a
     assert.deepEqual(overlays.map((c) => c.assetId), ["pic"], "only the project's own image is placed");
     const video = applied.revision.timeline.tracks.find((t) => t.kind === "video").clips;
     assert.ok(video[0].sourceStartUs < video[1].sourceStartUs, "segments are kept in source order");
+  } finally { close(); mock.close(); }
+});
+
+test("edit check: finds black picture, a clipped word, no captions; fixes apply and the re-check is clean of them", async () => {
+  const { server, projectId, segments, close } = await setup(new RuleDirector(), { blackLead: true });
+  try {
+    const url = (p) => "/v1/projects/" + projectId + "/director/" + p;
+    const cutUs = segments[1].words[3].startUs + 100_000; // inside a word
+    const saved = await server.inject({ method: "POST", url: "/v1/projects/" + projectId + "/revisions", payload: { timeline: { durationUs: cutUs, tracks: [{ id: "v", kind: "video", clips: [{ id: "src", assetId: "talk", sourceStartUs: 0, sourceEndUs: cutUs, timelineStartUs: 0, timelineEndUs: cutUs }] }] } } });
+    const rev = saved.json().revision.revision;
+    const checked = await server.inject({ method: "POST", url: url("check"), payload: { revision: rev, platform: "tiktok" } });
+    assert.equal(checked.statusCode, 200, checked.body);
+    const { issues, scanned, ai } = checked.json();
+    assert.equal(scanned, true); assert.equal(ai, false);
+    const kinds = issues.map((i) => i.kind);
+    for (const k of ["black", "mid-word", "no-captions"]) assert.ok(kinds.includes(k), k + " in " + kinds);
+    const black = issues.find((i) => i.kind === "black");
+    assert.ok(black.atS < 0.3 && /Black screen for (1\.[6-9]|2(\.\d)?) s/.test(black.title), black.title);
+    const fixes = issues.filter((i) => i.fix).map((i) => ({ title: i.title, atS: i.atS, operations: i.fix.operations }));
+    const fixed = await server.inject({ method: "POST", url: url("fix"), payload: { revision: rev, fixes } });
+    assert.equal(fixed.statusCode, 201, fixed.body);
+    assert.equal(fixed.json().skipped.length, 0, "all fixes applied: " + fixed.json().skipped);
+    const again = (await server.inject({ method: "POST", url: url("check"), payload: { revision: fixed.json().revision.revision, platform: "tiktok" } })).json().issues.map((i) => i.kind);
+    for (const k of ["black", "mid-word", "no-captions"]) assert.ok(!again.includes(k), k + " fixed, now: " + again);
+    // A fix from someone else's project media is refused.
+    const evil = await server.inject({ method: "POST", url: url("fix"), payload: { revision: fixed.json().revision.revision, fixes: [{ title: "x", operations: [{ type: "insert-clip", assetId: "not-mine", sourceStartUs: 0, sourceEndUs: 1_000_000, reason: "x" }] }] } });
+    assert.equal(evil.statusCode, 409);
+  } finally { close(); }
+});
+
+test("edit check with the AI second look: frames of the edit are sent, its fixes become real operations", async () => {
+  let review;
+  const mock = createServer((req, res) => { let b = ""; req.on("data", (c) => { b += c; }); req.on("end", () => {
+    const body = JSON.parse(b); review = body;
+    const result = { issues: [
+      { title: "Open on the result", detail: "The jobs line is the hook.", atS: 4, severity: "fix", action: "move-piece", piece: 1, toIndex: 0, graphic: -1, text: "" },
+      { title: "Clearer title", detail: "Say who it is for.", atS: 0, severity: "fix", action: "rewrite-text", piece: -1, toIndex: -1, graphic: 0, text: "For new graduates" },
+      { title: "Background is cluttered", detail: "Film against a plain wall.", atS: 1, severity: "warn", action: "none", piece: -1, toIndex: -1, graphic: -1, text: "" },
+      { title: "Bad index", detail: "", atS: 0, severity: "fix", action: "remove-piece", piece: 9, toIndex: -1, graphic: -1, text: "" },
+    ] };
+    res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ output_text: JSON.stringify(result) }));
+  }); });
+  await new Promise((r) => mock.listen(0, "127.0.0.1", r));
+  const { server, projectId, segments, close } = await setup(new OpenAiDirector({ apiKey: "sk-test", model: "m", endpoint: "http://127.0.0.1:" + mock.address().port + "/v1" }));
+  try {
+    const url = (p) => "/v1/projects/" + projectId + "/director/" + p;
+    const a = segments[1]; const b = segments[3];
+    const piece = (id, seg, at) => ({ id, assetId: "talk", sourceStartUs: seg.startUs - 100_000, sourceEndUs: seg.endUs + 100_000, timelineStartUs: at, timelineEndUs: at + seg.endUs - seg.startUs + 200_000 });
+    const p1 = piece("p1", a, 0); const p2 = piece("p2", b, p1.timelineEndUs);
+    const tl = { durationUs: p2.timelineEndUs, tracks: [{ id: "v", kind: "video", clips: [p1, p2] }] };
+    const first = await server.inject({ method: "POST", url: "/v1/projects/" + projectId + "/revisions", payload: { timeline: tl } }); assert.equal(first.statusCode, 201, first.body);
+    let rev = first.json().revision.revision;
+    rev = (await server.inject({ method: "POST", url: "/v1/projects/" + projectId + "/revisions/" + rev + "/edit", payload: { operations: [{ type: "add-graphic", kind: "title", text: "Our programme", anchorAssetId: "talk", anchorSourceUs: a.startUs, durationUs: 2_500_000 }] } })).json().revision.revision;
+    const result = (await server.inject({ method: "POST", url: url("check"), payload: { revision: rev, platform: "youtube", brief: "Reel for graduates" } })).json();
+    assert.equal(result.ai, true, JSON.stringify(result));
+    assert.equal(review.text.format.name, "edit_review");
+    const text = review.input[0].content[0].text;
+    assert.match(text, /#0 \[0\.0-/); assert.match(text, /#1 .*More than half/); assert.match(text, /title at 0\.\d s .*: Our programme/);
+    const labels = review.input[0].content.filter((c) => c.type === "input_text").map((c) => c.text).join(" | ");
+    assert.match(labels, /Start of piece #1/); assert.match(labels, /Under on-screen text #0/);
+    assert.equal(review.input[0].content.filter((c) => c.type === "input_image").length, 3);
+    const aiIssues = result.issues.filter((i) => i.source === "ai");
+    assert.equal(aiIssues.length, 4);
+    assert.deepEqual(aiIssues.find((i) => i.title === "Open on the result").fix.operations, [{ type: "reorder-clips", clipIds: ["p2", "p1"] }]);
+    assert.equal(aiIssues.find((i) => i.title === "Bad index").fix, undefined, "an out-of-range piece gets no fix");
+    const fixes = aiIssues.filter((i) => i.fix).map((i) => ({ title: i.title, atS: i.atS, operations: i.fix.operations }));
+    const fixed = (await server.inject({ method: "POST", url: url("fix"), payload: { revision: rev, fixes } })).json();
+    const order = fixed.revision.timeline.tracks.find((t) => t.kind === "video").clips.sort((x, y) => x.timelineStartUs - y.timelineStartUs).map((c) => c.id);
+    assert.deepEqual(order, ["p2", "p1"]);
+    assert.equal(fixed.revision.timeline.tracks.find((t) => t.kind === "overlay").clips[0].transform.text, "For new graduates");
   } finally { close(); mock.close(); }
 });

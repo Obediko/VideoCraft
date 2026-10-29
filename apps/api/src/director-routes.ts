@@ -3,10 +3,10 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { applyTimelineOperations, type ProjectRevision, type TranscriptSegment, type UUID } from "@videocraft/domain";
+import { applyTimelineOperations, parseTimelineOperations, type ProjectRevision, type TranscriptSegment, type UUID } from "@videocraft/domain";
 import type { AssetRepository, ProjectRepository, RevisionRepository } from "@videocraft/application";
 import type { ObjectStorage } from "@videocraft/storage";
-import { briefHints, planOperations, sanitizePlan, type Director, type DirectorInput, type DirectorPlan } from "@videocraft/director";
+import { briefHints, checkEdit, parseMediaSignals, planOperations, sanitizePlan, type CheckIssue, type Director, type DirectorInput, type DirectorPlan, type MediaSignals } from "@videocraft/director";
 import { findCandidates } from "@videocraft/strategies";
 import { composeMusicAsset } from "./music-routes.js";
 
@@ -23,25 +23,8 @@ export interface DirectorRouteDependencies {
 
 /** Plans a whole edit from the person's own description (AI director, or rules without a key), then applies the accepted parts. */
 export function registerDirectorRoutes(server: FastifyInstance, dependencies: DirectorRouteDependencies): void {
-  const context = async (request: FastifyRequest, reply: FastifyReply) => {
-    const principal = await dependencies.authenticate(request);
-    if (!principal) { error(reply, 401, "unauthorized", "Authentication required"); return null; }
-    const { projectId } = request.params as { projectId?: string };
-    if (!projectId || !(await dependencies.authorize.canAccess(principal, projectId, "editor"))) { error(reply, 403, "forbidden", "Project access denied"); return null; }
-    const body = (request.body ?? {}) as Record<string, unknown>;
-    if (!Number.isSafeInteger(body.revision) || (body.revision as number) < 1) { error(reply, 400, "invalid_request", "revision must be a positive integer"); return null; }
-    const revision = await dependencies.revisions.get(projectId, body.revision as number);
-    if (!revision) { error(reply, 404, "not_found", "Revision not found"); return null; }
-    const mainClip = revision.timeline.tracks.find((track) => track.kind === "video")?.clips[0];
-    const assets = await dependencies.assets.listForProject(projectId);
-    const main = assets.find((asset) => asset.id === mainClip?.assetId);
-    if (!mainClip || !main) { error(reply, 400, "invalid_request", "Add your video to the timeline first"); return null; }
-    const transcript = await dependencies.transcripts.listForAsset(main.id);
-    if (!transcript.length) { error(reply, 409, "transcript_required", "Transcribe the video first so the director can hear what is said"); return null; }
-    const durationS = (main.durationUs ?? Math.max(...transcript.map((s) => s.endUs))) / 1_000_000;
-    const others = assets.filter((asset) => asset.id !== main.id && (asset.kind === "image" || asset.kind === "video")).map((asset) => ({ id: asset.id, kind: asset.kind as "image" | "video", name: String(asset.metadata.filename ?? asset.kind).slice(0, 80) }));
-    return { principal, projectId, body, revision, main, transcript, durationS, others };
-  };
+  const context = contextOf(dependencies);
+  registerCheckRoutes(server, dependencies, context);
 
   server.post("/v1/projects/:projectId/director/plan", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } } as never, async (request: FastifyRequest, reply: FastifyReply) => {
     const ctx = await context(request, reply);
@@ -98,30 +81,160 @@ export function registerDirectorRoutes(server: FastifyInstance, dependencies: Di
   });
 }
 
-/** JPEG stills spread across the video (small, for the director to look at). */
-async function sampleFrames(dependencies: DirectorRouteDependencies, storageKey: string, durationS: number, count: number): Promise<DirectorInput["frames"]> {
+function contextOf(dependencies: DirectorRouteDependencies) {
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+
+    const principal = await dependencies.authenticate(request);
+    if (!principal) { error(reply, 401, "unauthorized", "Authentication required"); return null; }
+    const { projectId } = request.params as { projectId?: string };
+    if (!projectId || !(await dependencies.authorize.canAccess(principal, projectId, "editor"))) { error(reply, 403, "forbidden", "Project access denied"); return null; }
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    if (!Number.isSafeInteger(body.revision) || (body.revision as number) < 1) { error(reply, 400, "invalid_request", "revision must be a positive integer"); return null; }
+    const revision = await dependencies.revisions.get(projectId, body.revision as number);
+    if (!revision) { error(reply, 404, "not_found", "Revision not found"); return null; }
+    const mainClip = revision.timeline.tracks.find((track) => track.kind === "video")?.clips[0];
+    const assets = await dependencies.assets.listForProject(projectId);
+    const main = assets.find((asset) => asset.id === mainClip?.assetId);
+    if (!mainClip || !main) { error(reply, 400, "invalid_request", "Add your video to the timeline first"); return null; }
+    const transcript = await dependencies.transcripts.listForAsset(main.id);
+    if (!transcript.length) { error(reply, 409, "transcript_required", "Transcribe the video first so the director can hear what is said"); return null; }
+    const durationS = (main.durationUs ?? Math.max(...transcript.map((s) => s.endUs))) / 1_000_000;
+    const others = assets.filter((asset) => asset.id !== main.id && (asset.kind === "image" || asset.kind === "video")).map((asset) => ({ id: asset.id, kind: asset.kind as "image" | "video", name: String(asset.metadata.filename ?? asset.kind).slice(0, 80) }));
+    return { principal, projectId, body, revision, main, transcript, durationS, others };
+  };
+}
+
+/** Edit check: rules (cuts, pauses, text, music, captions, black/frozen picture) plus an AI second look when available. */
+export function registerCheckRoutes(server: FastifyInstance, dependencies: DirectorRouteDependencies, context: ReturnType<typeof contextOf>): void {
+  server.post("/v1/projects/:projectId/director/check", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } } as never, async (request: FastifyRequest, reply: FastifyReply) => {
+    const ctx = await context(request, reply);
+    if (!ctx) return reply;
+    const timeline = ctx.revision.timeline;
+    const words = ctx.transcript.flatMap((segment) => segment.words);
+    const pieces = timeline.tracks.filter((t) => t.kind === "video").flatMap((t) => t.clips).sort((a, b) => a.timelineStartUs - b.timelineStartUs);
+    const mine = pieces.filter((c) => c.assetId === ctx.main.id);
+    const platform = typeof ctx.body.platform === "string" ? ctx.body.platform : "tiktok";
+    const target = ctx.revision.tailoring?.targetDurationUs ? Math.round(ctx.revision.tailoring.targetDurationUs / 1e6) : undefined;
+    const overlays = timeline.tracks.filter((t) => t.kind === "overlay").flatMap((t) => t.clips);
+    const graphics = overlays.filter((c) => c.transform?.role === "graphic").sort((a, b) => a.timelineStartUs - b.timelineStartUs);
+    // Source moments worth looking at: each piece's first second and each graphic, labelled with their place in the edit.
+    const looks = [
+      ...mine.slice(0, 8).map((c, i) => ({ sourceS: c.sourceStartUs / 1e6 + Math.min(0.8, (c.sourceEndUs - c.sourceStartUs) / 2e6), atS: c.timelineStartUs / 1e6, label: "Start of piece #" + i })),
+      ...graphics.slice(0, 4).map((g, i) => ({ sourceS: Number(g.transform?.anchorSourceUs ?? 0) / 1e6 + 0.5, atS: g.timelineStartUs / 1e6, label: "Under on-screen text #" + i })),
+    ];
+    const brief = typeof ctx.body.brief === "string" && ctx.body.brief.trim() ? ctx.body.brief.trim().slice(0, 2000) : ctx.revision.tailoring?.intent ?? "";
+    let media: MediaSignals | undefined; let frames: Array<{ atS: number; label: string; jpegBase64: string }> = [];
+    await withSource(dependencies, ctx.main.storageKey, async (input, directory) => {
+      media = await scanPicture(dependencies, input, mine.map((c) => ({ startUs: c.sourceStartUs, endUs: c.sourceEndUs }))).catch((caught) => { request.log.warn({ err: caught }, "Picture scan failed"); return undefined; });
+      if (dependencies.director.review) {
+        const shots = await framesAt(dependencies, input, directory, looks.map((l) => l.sourceS)).catch(() => []);
+        frames = shots.map((shot, i) => ({ atS: looks[i]!.atS, label: looks[i]!.label, jpegBase64: shot.jpegBase64 }));
+      }
+    }).catch((caught) => request.log.warn({ err: caught }, "Could not open the source for the check"));
+    const issues: CheckIssue[] = checkEdit({ timeline, assetId: ctx.main.id, words, sourceDurationUs: ctx.main.durationUs ?? Math.round(ctx.durationS * 1e6), platform, ...(target ? { targetSeconds: target } : {}), ...(media ? { media } : {}) });
+    let note: string | undefined; let ai = false;
+    if (dependencies.director.review) {
+      const textOf = (startUs: number, endUs: number) => words.filter((w) => w.startUs >= startUs - 50_000 && w.endUs <= endUs + 50_000).map((w) => w.text).join(" ");
+      const music = timeline.tracks.find((t) => t.kind === "audio")?.clips.find((c) => c.transform?.role === "music");
+      const musicAsset = music ? (await dependencies.assets.listForProject(ctx.projectId)).find((a) => a.id === music.assetId) : undefined;
+      try {
+        const reviewed = await dependencies.director.review({
+          brief, platform, frames,
+          pieces: pieces.map((c) => ({ clipId: c.id, startS: c.timelineStartUs / 1e6, endS: c.timelineEndUs / 1e6, text: c.assetId === ctx.main.id ? textOf(c.sourceStartUs, c.sourceEndUs) : "(other footage)" })),
+          graphics: graphics.map((g) => ({ clipId: g.id, kind: String(g.transform?.kind ?? "title"), text: String(g.transform?.text ?? ""), atS: g.timelineStartUs / 1e6, durationS: (g.timelineEndUs - g.timelineStartUs) / 1e6 })),
+          cutaways: overlays.filter((c) => c.transform?.role === "broll").map((c) => ({ atS: c.timelineStartUs / 1e6, durationS: (c.timelineEndUs - c.timelineStartUs) / 1e6, name: ctx.others.find((o) => o.id === c.assetId)?.name ?? "media" })),
+          ...(musicAsset ? { music: String(musicAsset.metadata.description ?? musicAsset.metadata.mood ?? musicAsset.metadata.filename ?? "music") } : {}),
+        });
+        issues.push(...reviewed); ai = true;
+      } catch (caught) { note = "The AI second look was unavailable (" + (caught instanceof Error ? caught.message : "error").slice(0, 160) + "); these are the built-in checks."; }
+    }
+    const order = { fix: 0, warn: 1, info: 2 } as const;
+    issues.sort((a, b) => order[a.severity] - order[b.severity] || (a.atS ?? 1e9) - (b.atS ?? 1e9));
+    return { issues, ai, scanned: Boolean(media), ...(note ? { note } : {}) };
+  });
+
+  server.post("/v1/projects/:projectId/director/fix", async (request: FastifyRequest, reply: FastifyReply) => {
+    const ctx = await context(request, reply);
+    if (!ctx) return reply;
+    const project = await dependencies.projects.get(ctx.projectId);
+    if (project && project.revision !== ctx.revision.revision) return error(reply, 409, "revision_conflict", "Revision " + project.revision + " is newer; check again before fixing");
+    const fixes = Array.isArray(ctx.body.fixes) ? (ctx.body.fixes as Array<{ title?: unknown; atS?: unknown; operations?: unknown }>).slice(0, 30) : [];
+    if (fixes.length === 0) return error(reply, 400, "invalid_request", "fixes must list at least one fix");
+    const owned = new Map((await dependencies.assets.listForProject(ctx.projectId)).map((asset) => [asset.id, asset.kind]));
+    // Later moments first, so fixing one moment does not move the others; whole-video fixes last.
+    const ordered = [...fixes].sort((a, b) => (typeof b.atS === "number" ? b.atS : -1) - (typeof a.atS === "number" ? a.atS : -1));
+    let timeline = ctx.revision.timeline; const applied: string[] = []; const skipped: string[] = [];
+    const original = new Map(ctx.revision.timeline.tracks.flatMap((t) => t.clips).map((c) => [c.id, c]));
+    // Each fix was worked out against the checked revision; a trim moves only the edge it changed, so several fixes to one piece add up.
+    const rebase = (ops: ReturnType<typeof parseTimelineOperations>) => ops.map((op) => {
+      if (op.type !== "trim-clip") return op;
+      const before = original.get(op.clipId); const now = timeline.tracks.flatMap((t) => t.clips).find((c) => c.id === op.clipId);
+      if (!before || !now) return op;
+      return { ...op, sourceStartUs: op.sourceStartUs !== before.sourceStartUs ? op.sourceStartUs : now.sourceStartUs, sourceEndUs: op.sourceEndUs !== before.sourceEndUs ? op.sourceEndUs : now.sourceEndUs };
+    });
+    for (const fix of ordered) {
+      const title = typeof fix.title === "string" ? fix.title.slice(0, 140) : "fix";
+      try {
+        const ops = parseTimelineOperations(fix.operations);
+        for (const op of ops) {
+          if (op.type === "insert-clip" && owned.get(op.assetId) !== "video") throw new Error("foreign asset");
+          if ((op.type === "add-graphic" || op.type === "add-broll" || op.type === "add-caption-cue") && owned.get("anchorAssetId" in op ? op.anchorAssetId : op.assetId) !== "video") throw new Error("foreign asset");
+          if (op.type === "add-broll" && !["video", "image"].includes(owned.get(op.assetId) ?? "")) throw new Error("foreign asset");
+          if (op.type === "set-music" && !["audio", "video"].includes(owned.get(op.assetId) ?? "")) throw new Error("foreign asset");
+        }
+        timeline = applyTimelineOperations(timeline, rebase(ops)); applied.push(title);
+      } catch (caught) { request.log.info({ err: caught, fix: title }, "Fix skipped"); skipped.push(title); }
+    }
+    if (applied.length === 0) return error(reply, 409, "fixes_not_applicable", "None of the fixes still apply to this revision; run the check again");
+    const revision = await dependencies.saveRevision({ projectId: ctx.projectId, createdBy: ctx.principal.userId, timeline, acceptedProposalIds: ctx.revision.acceptedProposalIds, ...(ctx.revision.tailoring ? { tailoring: ctx.revision.tailoring } : {}) });
+    return reply.code(201).send({ revision, applied, skipped });
+  });
+}
+
+/** Runs `work` with a local path to the stored source (downloaded to a temp folder on object storage). */
+async function withSource<T>(dependencies: DirectorRouteDependencies, storageKey: string, work: (path: string, directory: string) => Promise<T>): Promise<T> {
   const directory = await mkdtemp(join(tmpdir(), "videocraft-frames-"));
   try {
-    let input = dependencies.storage.downloadToFile ? join(directory, "input.media") : dependencies.storage.resolve(storageKey);
+    const input = dependencies.storage.downloadToFile ? join(directory, "input.media") : dependencies.storage.resolve(storageKey);
     if (dependencies.storage.downloadToFile) await dependencies.storage.downloadToFile(storageKey, input);
-    const frames: DirectorInput["frames"] = [];
-    for (let i = 0; i < count; i += 1) {
-      const atS = Math.max(0, (durationS * (i + 0.5)) / count);
-      const out = join(directory, "f" + i + ".jpg");
-      await run(dependencies.ffmpeg ?? "ffmpeg", ["-v", "error", "-y", "-ss", atS.toFixed(2), "-i", input, "-frames:v", "1", "-vf", "scale='min(512,iw)':-2", "-q:v", "6", out]);
-      frames.push({ atS, jpegBase64: (await readFile(out)).toString("base64") });
-    }
-    input = "";
-    return frames;
+    return await work(input, directory);
   } finally { await rm(directory, { recursive: true, force: true }).catch(() => undefined); }
 }
-function run(cmd: string, args: string[]): Promise<void> {
+
+/** Small JPEG stills at the given source times (for the AI to look at). */
+async function framesAt(dependencies: DirectorRouteDependencies, input: string, directory: string, times: number[]): Promise<Array<{ atS: number; jpegBase64: string }>> {
+  const frames: Array<{ atS: number; jpegBase64: string }> = [];
+  for (const [i, atS] of times.entries()) {
+    const out = join(directory, "f" + i + ".jpg");
+    await run(dependencies.ffmpeg ?? "ffmpeg", ["-v", "error", "-y", "-ss", Math.max(0, atS).toFixed(2), "-i", input, "-frames:v", "1", "-vf", "scale='min(512,iw)':-2", "-q:v", "6", out]);
+    frames.push({ atS, jpegBase64: (await readFile(out)).toString("base64") });
+  }
+  return frames;
+}
+
+/** JPEG stills spread across the video (small, for the director to look at). */
+async function sampleFrames(dependencies: DirectorRouteDependencies, storageKey: string, durationS: number, count: number): Promise<DirectorInput["frames"]> {
+  return withSource(dependencies, storageKey, (input, directory) => framesAt(dependencies, input, directory, Array.from({ length: count }, (_, i) => Math.max(0, (durationS * (i + 0.5)) / count))));
+}
+
+/** Black and frozen picture inside the kept ranges (low-res scan, a few seconds of work per minute of footage). */
+async function scanPicture(dependencies: DirectorRouteDependencies, input: string, ranges: Array<{ startUs: number; endUs: number }>): Promise<MediaSignals> {
+  const out: MediaSignals = { black: [], frozen: [] };
+  for (const range of ranges.slice(0, 40)) {
+    const stderr = await run(dependencies.ffmpeg ?? "ffmpeg", ["-v", "info", "-hide_banner", "-nostats", "-ss", (range.startUs / 1e6).toFixed(3), "-t", ((range.endUs - range.startUs) / 1e6).toFixed(3), "-i", input, "-an", "-vf", "fps=6,scale=320:-2,blackdetect=d=0.4:pix_th=0.12,freezedetect=n=-65dB:d=2.5", "-f", "null", "-"]);
+    const found = parseMediaSignals(stderr, range.startUs);
+    out.black.push(...found.black); out.frozen.push(...found.frozen);
+  }
+  return out;
+}
+
+function run(cmd: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { stdio: ["ignore", "ignore", "pipe"] });
-    let stderr = ""; child.stderr.on("data", (c) => { stderr += String(c); });
-    const timer = setTimeout(() => child.kill("SIGKILL"), 60_000);
+    let stderr = ""; child.stderr.on("data", (c) => { stderr += String(c); if (stderr.length > 2_000_000) stderr = stderr.slice(-1_000_000); });
+    const timer = setTimeout(() => child.kill("SIGKILL"), 120_000);
     child.once("error", (e) => { clearTimeout(timer); reject(e); });
-    child.once("close", (code) => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error("ffmpeg failed: " + stderr.slice(-300))); });
+    child.once("close", (code) => { clearTimeout(timer); code === 0 ? resolve(stderr) : reject(new Error("ffmpeg failed: " + stderr.slice(-300))); });
   });
 }
 function error(reply: FastifyReply, status: number, code: string, message: string) { return reply.code(status).send({ error: { code, message } }); }
