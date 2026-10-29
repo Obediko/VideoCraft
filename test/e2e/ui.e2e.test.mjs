@@ -15,6 +15,7 @@ import { registerTimelineRoutes } from "../../apps/api/dist/timeline-routes.js";
 import { registerRenderRoutes } from "../../apps/api/dist/render-routes.js";
 import { registerMediaRoutes } from "../../apps/api/dist/media-routes.js";
 import { registerPreferenceRoutes } from "../../apps/api/dist/learning.js";
+import { registerMusicRoutes } from "../../apps/api/dist/music-routes.js";
 import { StorageSilenceDetector } from "../../apps/api/dist/media-analysis.js";
 import { isStillImage, probeMedia } from "../../packages/analysis/dist/index.js";
 import { FasterWhisperWorker } from "../../packages/transcription/dist/index.js";
@@ -84,6 +85,7 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
   registerTimelineRoutes(server, { projects, revisions, preferences, assets, authenticate, authorize, saveRevision: (i) => service.saveRevision(i) });
   registerRenderRoutes(server, { jobs: jobRepository, storage, signingSecret: "test-signing-secret-test-signing", authenticate, authorize });
   registerPreferenceRoutes(server, { preferences, authenticate });
+  registerMusicRoutes(server, { assets, revisions, storage, authenticate, authorize, clock: clock.now });
   registerMediaRoutes(server, { assets, storage, signingSecret: "test-signing-secret-test-signing", authenticate, authorize });
   let registeredEmail = "";
   server.post("/auth/register", async (request, reply) => { registeredEmail = request.body.email; return reply.code(201).send({ user: { id: "user-1", email: registeredEmail }, accessToken: "test-token" }); });
@@ -171,16 +173,13 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
     await waitStatus(/Caption corrected/);
     assert.match(await page.locator(".cue-list input").first().inputValue(), /FIXED$/);
 
-    // Background music: upload a track and lay it under the cut.
-    const song = join(work, "song.wav");
-    execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=300:d=8", song]);
-    await page.locator('label:has-text("Upload media") select').selectOption("audio");
-    await page.locator('input[type="file"]').setInputFiles(song);
-    await waitStatus(/Uploaded asset/);
-    await page.getByLabel("Music track").selectOption({ index: 1 });
-    await page.getByRole("button", { name: "Add music" }).click();
-    await waitStatus(/Music set \(revision \d+\)/);
-    await page.locator(".music-panel").filter({ hasText: /Playing song\.wav at -16 dB, ducked under speech/ }).waitFor({ timeout: 10_000 });
+    // Background music: compose a matching bed for this cut and lay it under the video.
+    const musicPanel = page.locator(".music-panel");
+    await musicPanel.locator("select").first().selectOption("inspiring");
+    await musicPanel.getByRole("button", { name: "Generate matching music" }).click();
+    await waitStatus(/Music added: Inspiring · .* BPM .*\(revision \d+\)/, 60_000);
+    await musicPanel.filter({ hasText: /Playing Generated inspiring 96 BPM\.wav \(inspiring, .* major, 96 BPM\) at -16 dB, ducked under speech/ }).waitFor({ timeout: 10_000 });
+    assert.ok(await musicPanel.getByRole("button", { name: "Try different music" }).isVisible(), "a second click tries different music");
 
     // B-roll: upload a still and cut away to it on the selected clip.
     const still = join(work, "cutaway.png");

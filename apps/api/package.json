@@ -31,7 +31,8 @@
     "@videocraft/timeline-interchange": "0.1.0",
     "ioredis": "^5.4.1",
     "@videocraft/scene-detection": "0.1.0",
-    "@videocraft/analysis": "0.1.0"
+    "@videocraft/analysis": "0.1.0",
+    "@videocraft/music": "0.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
