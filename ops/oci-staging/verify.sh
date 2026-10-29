@@ -111,6 +111,16 @@ if [ "$c" = 201 ] && [ "$c2" = 201 ]; then
         curl -s -L -o "$TMP/vertical.mp4" "$D2"
         dims="$(docker exec -i videocraft-render-worker ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 - < "$TMP/vertical.mp4" 2>/dev/null)"
         [ "$dims" = "540,960" ] && ok "9:16 export with music, graphics and b-roll rendered ($dims)" || bad "vertical export dims=$dims"
+        # Stream metadata alone does not prove a decoded picture: reject audio-only or undecodable exports.
+        if docker exec -i videocraft-render-worker ffmpeg -v error -xerror -i pipe:0 -map 0:v:0 -frames:v 25 -an -f null - < "$TMP/vertical.mp4" >/dev/null 2>"$TMP/decode.err"; then
+          ok "vertical export video frames decode successfully"
+        else
+          bad "vertical export contains undecodable or missing video frames"
+        fi
+        # Synthetic testsrc is moving and brightly coloured. A mostly black export is a regression.
+        if docker exec -i videocraft-render-worker ffmpeg -hide_banner -i pipe:0 -vf "blackdetect=d=1:pix_th=0.10" -an -f null - < "$TMP/vertical.mp4" 2>"$TMP/blackdetect.log"; then
+          if grep -q 'black_start:' "$TMP/blackdetect.log"; then bad "vertical export contains a long black segment"; else ok "vertical export has no long black segment"; fi
+        else bad "vertical export black-frame inspection failed"; fi
       else bad "vertical render status=$st $(cat "$TMP/body" | head -c 300)"; fi
     else bad "vertical render enqueue -> $c"; fi
   else bad "feature edit -> $c $(cat "$TMP/body" | head -c 300)"; fi
