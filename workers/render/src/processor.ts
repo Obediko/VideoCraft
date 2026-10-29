@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import { safeMediaPath } from "@videocraft/transcription";
 import { FfmpegCommandPlanner, FfmpegProcess } from "@videocraft/rendering";
-import { detectFocus, isStillImage, probeMedia } from "@videocraft/analysis";
+import { detectFocus, isStillImage, loadOrDetectFaceTrack, probeMedia } from "@videocraft/analysis";
 import { LocalObjectStorage, S3ObjectStorage, type ObjectStorage } from "@videocraft/storage";
 import { PostgresRenderJobRepository, type Database } from "@videocraft/persistence";
 import type { RenderTask } from "@videocraft/jobs";
@@ -109,6 +109,21 @@ export class RenderTaskProcessor {
           const path = stagedAssets[assetId];
           if (!script || !path) return null;
           try { return await detectFocus(path, startUs, endUs, { script, executable: process.env.REFRAME_PYTHON ?? "python3" }); }
+          catch { return null; }
+        },
+        // Captions and text stay off the speaker's face. Optional: without FACES_SCRIPT (or on failure) they keep their place.
+        faces: async (assetId: string) => {
+          const script = process.env.FACES_SCRIPT;
+          const path = stagedAssets[assetId]; const storageKey = task.assetStorageKeys[assetId];
+          if (!script || !path || !storageKey) return null;
+          try {
+            return await loadOrDetectFaceTrack(this.storage, { projectId: task.project.id, assetId, storageKey }, { script, executable: process.env.REFRAME_PYTHON ?? "python3", ...(process.env.RENDER_WORK_ROOT ? { workRoot: process.env.RENDER_WORK_ROOT } : {}) }, path);
+          } catch { return null; }
+        },
+        dimensions: async (assetId: string) => {
+          const path = stagedAssets[assetId];
+          if (!path) return null;
+          try { const info = await probeMedia(path, process.env.FFPROBE_BIN ? { executable: process.env.FFPROBE_BIN } : {}); return info.width && info.height ? { width: info.width, height: info.height } : null; }
           catch { return null; }
         },
       };

@@ -100,6 +100,10 @@ services:
       # AI director (OpenAI). Without a key the built-in rules director is used.
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       DIRECTOR_MODEL: ${DIRECTOR_MODEL:-gpt-6.1-sol}
+      # Free stock footage, photos and GIFs. Each source is skipped when its key is empty.
+      PEXELS_API_KEY: ${PEXELS_API_KEY:-}
+      PIXABAY_API_KEY: ${PIXABAY_API_KEY:-}
+      GIPHY_API_KEY: ${GIPHY_API_KEY:-}
     tmpfs: ["/tmp:size=1g"]
     # Downloaded once and kept across restarts; keeping it off the RAM-backed /tmp avoids out-of-memory kills.
     volumes: [hfcache:/opt/hf-cache]

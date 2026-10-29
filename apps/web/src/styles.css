@@ -273,3 +273,6 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .ask-label { font-size: 13px; font-weight: 600; color: var(--muted); }
 .ask-result { width: 100%; max-width: 560px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
 .ask-result .suggestion { padding: 8px 0; }
+/* Clean and minimal captions are sentence case, like the export. */
+.live-caption.clean, .live-caption.minimal { text-transform: none; font-weight: 700; font-size: 5.2cqw; }
+.live-caption.minimal { font-weight: 500; font-size: 4.6cqw; }

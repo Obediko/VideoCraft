@@ -1,6 +1,10 @@
 import { assTime, escapeAss } from "./index.js";
 
-export interface GraphicItem { kind: "title" | "callout" | "lower-third"; text: string; subtitle?: string; startUs: number; endUs: number; position?: "top" | "center" | "bottom"; color?: string; }
+export interface GraphicItem { kind: "title" | "callout" | "lower-third"; text: string; subtitle?: string; startUs: number; endUs: number; position?: "top" | "center" | "bottom"; color?: string;
+  /** The speaker's face during this graphic (output pixels): the graphic moves so it does not cover it. */
+  face?: { x0: number; y0: number; x1: number; y1: number };
+  /** The caption band during this graphic, when it differs from the default `avoid` band. */
+  avoid?: { topY: number; bottomY: number }; }
 export interface ProgressBar { startUs: number; endUs: number; color?: string; }
 
 const DEFAULT_ACCENT = "#F5A524";
@@ -55,9 +59,20 @@ export function renderGraphicsAss(items: GraphicItem[], progress: ProgressBar | 
       const margin = Math.round(W * 0.06);
       // Sit just above the caption band when captions are burned in, so the two never overlap.
       const preferred = Math.round(H * (vertical ? 0.66 : 0.8));
-      const baseline = options.avoid && preferred > options.avoid.topY - pad ? Math.max(Math.round(H * 0.2), options.avoid.topY - pad) : preferred;
+      const avoid = item.avoid ?? options.avoid;
+      let baseline = avoid && preferred > avoid.topY - pad ? Math.max(Math.round(H * 0.2), avoid.topY - pad) : preferred;
       const barWidth = Math.max(6, Math.round(base * 0.012));
       const blockHeight = nameSize + (item.subtitle ? roleSize + Math.round(pad * 0.4) : 0) + pad;
+      // Lower thirds sit at the left; when that would cover the face, move below it (if clear of the captions) or above it.
+      const face = item.face;
+      const blockRight = margin + barWidth + pad + Math.round(W * 0.55);
+      const hits = (b: number) => face !== undefined && b > face.y0 - pad && b - blockHeight < face.y1 + pad && margin < face.x1 && blockRight > face.x0;
+      if (hits(baseline)) {
+        const below = Math.round(face!.y1 + pad + blockHeight);
+        const above = Math.round(face!.y0 - pad);
+        if (below <= (avoid ? avoid.topY - pad : H * 0.94)) baseline = below;
+        else if (above - blockHeight >= H * 0.06) baseline = above;
+      }
       const top = baseline - blockHeight;
       const slide = (from: number, to: number, delay: number) => "\\move(" + from + "," + top + "," + to + "," + top + "," + delay + "," + (delay + 260) + ")";
       lines.push(event(1, item.startUs, item.endUs, "Shape", "{\\an7" + slide(-barWidth, margin, 0) + "\\bord0\\shad0\\1c&H" + accent + "&\\fad(0," + fadeOut + ")\\p1}m 0 0 l " + barWidth + " 0 " + barWidth + " " + blockHeight + " 0 " + blockHeight + "{\\p0}"));
@@ -66,10 +81,18 @@ export function renderGraphicsAss(items: GraphicItem[], progress: ProgressBar | 
       if (item.subtitle?.trim()) lines.push(event(2, item.startUs, item.endUs, "Role", "{\\an7\\move(" + (-W / 2) + "," + (top + Math.round(pad / 2) + nameSize + Math.round(pad * 0.4)) + "," + textX + "," + (top + Math.round(pad / 2) + nameSize + Math.round(pad * 0.4)) + ",120,390)\\fad(0," + fadeOut + ")}" + escapeAss(item.subtitle.trim())));
       continue;
     }
-    let y = Math.round(H * (item.position === "top" ? 0.18 : item.position === "bottom" ? (vertical ? 0.64 : 0.74) : 0.42));
     const half = Math.round((item.kind === "title" ? titleSize * (item.subtitle ? 1.9 : 1.2) : calloutSize * 1.2) / 2) + pad;
+    const avoid = item.avoid ?? options.avoid;
+    const slots = { top: Math.round(H * 0.18), center: Math.round(H * 0.42), bottom: Math.round(H * (vertical ? 0.64 : 0.74)) };
+    const wanted = item.position ?? "center";
+    const inBand = (y: number) => avoid !== undefined && y + half > avoid.topY && y - half < avoid.bottomY;
+    const onFace = (y: number) => item.face !== undefined && y + half > item.face.y0 && y - half < item.face.y1;
+    // The chosen position first; if it covers the face or the captions, the nearest other slot that covers neither.
+    const order = wanted === "top" ? ["top", "center", "bottom"] : wanted === "bottom" ? ["bottom", "center", "top"] : ["center", "top", "bottom"];
+    const clear = order.map((key) => slots[key as keyof typeof slots]).find((y) => !inBand(y) && !onFace(y));
+    let y = clear ?? slots[wanted];
     // Keep text graphics out of the caption band: move above it when they would overlap.
-    if (options.avoid && y + half > options.avoid.topY && y - half < options.avoid.bottomY) y = Math.max(half, options.avoid.topY - half);
+    if (clear === undefined && avoid && inBand(y)) y = Math.max(half, avoid.topY - half);
     const style = item.kind === "title" ? "Title" : "Callout";
     // Pop: scale up from 70% with a quick fade in, then fade out at the end.
     const pop = "\\fscx70\\fscy70\\t(0,220,\\fscx100\\fscy100)\\fad(160," + fadeOut + ")";
