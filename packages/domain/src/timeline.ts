@@ -168,6 +168,14 @@ export function applyTimelineOperations(timeline: Timeline, operations: Timeline
         audio.clips.push({ id, assetId: GENERATED_PREFIX + "sfx", sourceStartUs: 0, sourceEndUs: durationUs, timelineStartUs: 0, timelineEndUs: durationUs, transform: { role: "sfx", kind: operation.kind, volumeDb: operation.volumeDb ?? -10, anchorAssetId: operation.anchorAssetId, anchorSourceUs: operation.anchorSourceUs, durationUs } });
         break;
       }
+      case "add-voiceover": {
+        const audio = ensureTrack(tracks, "audio", "music");
+        const base = "vo-" + operation.anchorSourceUs;
+        let id = base;
+        for (let n = 2; tracks.some((track) => track.clips.some((clip) => clip.id === id)); n += 1) id = base + "-" + n;
+        audio.clips.push({ id, assetId: operation.assetId, sourceStartUs: 0, sourceEndUs: operation.durationUs, timelineStartUs: 0, timelineEndUs: operation.durationUs, transform: { role: "voiceover", volumeDb: operation.volumeDb ?? 0, duck: operation.duck ?? true, anchorAssetId: operation.anchorAssetId, anchorSourceUs: operation.anchorSourceUs, durationUs: operation.durationUs } });
+        break;
+      }
       case "set-progress-bar": {
         for (const track of tracks) if (track.kind === "overlay") track.clips = track.clips.filter((clip) => clip.transform?.role !== "progress");
         if (operation.enabled) ensureTrack(tracks, "overlay", "graphics").clips.push({ id: "progress", assetId: GENERATED_PREFIX + "progress", sourceStartUs: 0, sourceEndUs: 1, timelineStartUs: 0, timelineEndUs: 1, transform: { role: "progress", ...(operation.color ? { color: operation.color } : {}) } });
@@ -265,13 +273,13 @@ export function normalizeTimeline(timeline: Timeline): Timeline {
   for (const track of tracks) {
     if (track.kind !== "audio") continue;
     track.clips = track.clips.flatMap((clip) => {
-      if (clip.transform?.role === "sfx") {
+      if (clip.transform?.role === "sfx" || clip.transform?.role === "voiceover") {
         // A sound effect plays at its moment; it may ring past a cut but not past the end.
         const host = video?.clips.find((candidate) => candidate.assetId === String(clip.transform!.anchorAssetId) && Number(clip.transform!.anchorSourceUs) >= candidate.sourceStartUs && Number(clip.transform!.anchorSourceUs) < candidate.sourceEndUs);
         if (!host) return [];
         const start = host.timelineStartUs + (Number(clip.transform.anchorSourceUs) - host.sourceStartUs);
         const end = Math.min(start + Number(clip.transform.durationUs), videoEnd);
-        return end - start >= 50_000 ? [{ ...clip, timelineStartUs: start, timelineEndUs: end, sourceEndUs: end - start }] : [];
+        return end - start >= 50_000 ? [{ ...clip, timelineStartUs: start, timelineEndUs: end, sourceEndUs: clip.sourceStartUs + (end - start) }] : [];
       }
       return clip.transform?.role !== "music" ? [clip] : videoEnd > 0 ? [{ ...clip, timelineStartUs: 0, timelineEndUs: videoEnd, sourceEndUs: clip.sourceStartUs + videoEnd }] : [];
     });
@@ -391,6 +399,12 @@ export function parseTimelineOperations(value: unknown): TimelineOperation[] {
         if (zoom === undefined && look === undefined && transitionIn === undefined && transitionOut === undefined) return fail("set-clip-effects needs at least one effect");
         return { type: "set-clip-effects", clipId: op.clipId, ...(zoom ? { zoom } : {}), ...(look ? { look } : {}), ...(transitionIn ? { transitionIn } : {}), ...(transitionOut ? { transitionOut } : {}) };
       }
+      case "add-voiceover":
+        if (!isId(op.assetId) || !isId(op.anchorAssetId) || !isUs(op.anchorSourceUs)) return fail("add-voiceover needs assetId, anchorAssetId and anchorSourceUs");
+        if (!isUs(op.durationUs) || (op.durationUs as number) < 200_000 || (op.durationUs as number) > 3_600_000_000) return fail("add-voiceover needs a duration of 0.2s-1h");
+        if (op.volumeDb !== undefined && !(typeof op.volumeDb === "number" && op.volumeDb >= -30 && op.volumeDb <= 6)) return fail("add-voiceover volumeDb must be between -30 and 6");
+        if (op.duck !== undefined && typeof op.duck !== "boolean") return fail("add-voiceover duck must be true or false");
+        return { type: "add-voiceover", assetId: op.assetId, anchorAssetId: op.anchorAssetId, anchorSourceUs: op.anchorSourceUs as number, durationUs: op.durationUs as number, ...(op.volumeDb === undefined ? {} : { volumeDb: op.volumeDb as number }), ...(op.duck === undefined ? {} : { duck: op.duck }) };
       case "set-background": {
         if (op.clipId !== undefined && !isId(op.clipId)) return fail("set-background clipId must be an id");
         if (typeof op.background !== "string" || !(BACKGROUNDS as readonly string[]).includes(op.background)) return fail("set-background background must be one of " + BACKGROUNDS.join(", "));

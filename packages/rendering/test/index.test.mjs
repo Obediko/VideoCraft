@@ -337,3 +337,19 @@ cv2.imwrite(${JSON.stringify(backdrop)}, np.tile(np.array([200, 40, 40], np.uint
     assert.ok(face2[0] > 120 && face2[0] > face2[2], "person in front: " + face2);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("real ffmpeg: a voice-over plays at its moment and the original sound dips under it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vc-vo-"));
+  try {
+    const source = join(dir, "talk.mp4"); const narration = join(dir, "vo.m4a"); const out = join(dir, "out.mp4");
+    execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=25:duration=4", "-f", "lavfi", "-i", "sine=frequency=440:duration=4", "-shortest", "-pix_fmt", "yuv420p", "-c:v", "libx264", "-c:a", "aac", source]);
+    execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=1500:duration=1.5", "-c:a", "aac", narration]);
+    const voice = { id: "audio", kind: "audio", clips: [{ id: "vo", assetId: "vo", sourceStartUs: 0, sourceEndUs: 1_500_000, timelineStartUs: 2_000_000, timelineEndUs: 3_500_000, transform: { role: "voiceover", volumeDb: 0, duck: true } }] };
+    const planner = new FfmpegCommandPlanner({ resolve: async (id) => (id === "vo" ? narration : source), hasAudio: async () => true });
+    await new FfmpegProcess().run(await planner.plan(revision([clip("c", 0, 4_000_000, 0)], [voice]), { ...settings, width: 320, height: 240, normalizeLoudness: false }, out));
+    const rms = (start, freq, length = 0.6) => { const r = execFileSync("sh", ["-c", "ffmpeg -v info -ss " + start + " -t " + length + " -i '" + out + "' -af bandpass=f=" + freq + ":w=200,astats -f null - 2>&1 | grep 'RMS level dB' | tail -1"]).toString(); return Number(/(-?[\d.]+)\s*$/.exec(r.trim())[1]); };
+    assert.ok(rms(2.5, 1500) > rms(0.5, 1500) + 20, "narration is heard only at its moment");
+    assert.ok(rms(0.5, 440) - rms(2.5, 440) > 8, "the original dips under the narration: " + rms(0.5, 440) + " vs " + rms(2.5, 440));
+    assert.ok(Math.abs(rms(3.62, 440, 0.3) - rms(0.5, 440, 0.3)) < 3, "and comes back after it: " + rms(3.62, 440, 0.3));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { LivePreview, type LivePreviewHandle } from "./LivePreview.js";
 import { StockSearch } from "./StockSearch.js";
+import { VoiceOver } from "./VoiceOver.js";
 import type { FaceTrack } from "./preview.js";
 import { cueOps, keptWords, rangeForWords, removeRangeOps, restoreRangeOps, secondsFromBrief, sourceToTimeline, timelineToSource, type Word } from "./story.js";
 
@@ -100,6 +101,7 @@ export function App() {
   const [captionDrafts, setCaptionDrafts] = useState<Record<string, string>>({});
   const [previewMode, setPreviewMode] = useState<"edit" | "source" | "render">("edit");
   const liveRef = useRef<LivePreviewHandle | null>(null);
+  const recordAnchor = useRef<{ anchorAssetId: string; anchorSourceUs: number; where: string } | undefined>(undefined);
   const liveUsRef = useRef(0);
   const lastLiveReport = useRef(0);
   const [liveUs, setLiveUs] = useState(0);
@@ -141,7 +143,7 @@ export function App() {
   const selectedClip = videoClips.find((clip) => clip.id === selectedClipId);
   const musicClip = timeline.tracks.find((track) => track.kind === "audio")?.clips.find((clip) => clip.transform?.role === "music");
   const musicName = musicClip ? String(assets.find((asset) => asset.id === musicClip.assetId)?.metadata.filename ?? "music") : "";
-  const audioAssets = assets.filter((asset) => asset.kind === "audio");
+  const audioAssets = assets.filter((asset) => asset.kind === "audio" && !asset.metadata.voiceover && !String(asset.metadata.filename ?? "").startsWith("Voice-over "));
   const [musicAssetId, setMusicAssetId] = useState("");
   const [brollAssetId, setBrollAssetId] = useState("");
   const [brollSeconds, setBrollSeconds] = useState(3);
@@ -164,6 +166,7 @@ export function App() {
   const graphicsClips = overlayClips.filter((clip) => clip.transform?.role === "graphic");
   const progressClip = overlayClips.find((clip) => clip.transform?.role === "progress");
   const sfxClips = timeline.tracks.filter((track) => track.kind === "audio").flatMap((track) => track.clips).filter((clip) => clip.transform?.role === "sfx");
+  const voiceovers = timeline.tracks.filter((track) => track.kind === "audio").flatMap((track) => track.clips).filter((clip) => clip.transform?.role === "voiceover");
   const looks = new Set(videoClips.map((clip) => String(clip.transform?.look ?? "none")));
   const wholeLook = looks.size === 1 ? [...looks][0]! : "mixed";
   const brolls = overlayClips.filter((clip) => clip.transform?.role === "broll");
@@ -179,7 +182,7 @@ export function App() {
 
   // Signed playback URLs for the footage, cutaways and music on the timeline; fetched once per asset (they last an hour).
   const backgroundAssets = videoClips.map((clip) => clip.transform?.backgroundAssetId).filter((id): id is string => typeof id === "string");
-  const neededAssets = [...new Set([sourceAssetId, ...videoClips.map((clip) => clip.assetId), ...brolls.map((clip) => clip.assetId), ...backgroundAssets, ...(musicClip ? [musicClip.assetId] : [])].filter((id) => id && !id.startsWith("generated:")))];
+  const neededAssets = [...new Set([sourceAssetId, ...videoClips.map((clip) => clip.assetId), ...brolls.map((clip) => clip.assetId), ...backgroundAssets, ...voiceovers.map((clip) => clip.assetId), ...(musicClip ? [musicClip.assetId] : [])].filter((id) => id && !id.startsWith("generated:")))];
   useEffect(() => {
     const missing = neededAssets.filter((id) => !sourceUrls[id]);
     if (!token || !projectId || missing.length === 0) return;
@@ -750,7 +753,7 @@ export function App() {
   const assetName = (id: string) => { const asset = assets.find((item) => item.id === id); return asset ? String(asset.metadata.filename ?? asset.kind) : id.startsWith("generated:") ? "Generated" : "Media"; };
   const clipLabel = (kind: string, clip: TimelineClip) => kind === "caption" ? String(clip.transform?.text ?? "Caption")
     : kind === "overlay" ? (clip.transform?.role === "graphic" ? String(clip.transform?.text ?? "Text") : clip.transform?.role === "progress" ? "Progress bar" : "Cutaway · " + assetName(clip.assetId))
-    : kind === "audio" ? (clip.transform?.role === "sfx" ? "Sound · " + (SFX_LABEL[String(clip.transform?.kind)] ?? "effect") : "Music · " + assetName(clip.assetId))
+    : kind === "audio" ? (clip.transform?.role === "sfx" ? "Sound · " + (SFX_LABEL[String(clip.transform?.kind)] ?? "effect") : clip.transform?.role === "voiceover" ? "Voice-over · " + assetName(clip.assetId) : "Music · " + assetName(clip.assetId))
     : assetName(clip.assetId) + [clip.transform?.zoom ? " · " + (clip.transform.zoom === "punch" ? "punch-in" : "push-in") : "", clip.transform?.transitionIn ? " · " + (TRANSITION_LABEL[String(clip.transform.transitionIn)] ?? "") + " in" : ""].join("");
   // Semantic tracks: the story, what is shown over it, text, and sound.
   const lanes = [
@@ -1047,6 +1050,17 @@ export function App() {
         <label className="checkbox"><input type="checkbox" checked={musicDuck} onChange={(event) => setMusicDuck(event.target.checked)} /> Lower it while people speak</label>
         {audioAssets.length > 0 && <button className="btn" onClick={() => void applyEdit([{ type: "set-music", assetId: musicAssetId, volumeDb: musicVolume, duck: musicDuck }], "Music set")} disabled={busy || revision === 0 || !musicAssetId}>{musicClip ? "Use this track instead" : "Use this track"}</button>}
         {musicClip && <button className="btn" onClick={() => void applyEdit([{ type: "clear-music" }], "Music removed")} disabled={busy}>Remove music</button>}
+        <h3>Voice-over</h3>
+        <VoiceOver projectId={projectId} apiBase={API} token={token} request={request} disabled={busy || revision === 0}
+          onRecording={(active) => { if (active) recordAnchor.current = anchorPoint(); const live = liveRef.current; if (!live) return; live.setMuted(active); if (active) live.play(); else live.pause(); }}
+          onAdd={(asset, options) => {
+            setAssets((current) => [...current.filter((a) => a.id !== asset.id), asset as unknown as Asset]);
+            // A recording starts where the playhead was when recording began.
+            const anchor = recordAnchor.current ?? anchorPoint(); recordAnchor.current = undefined;
+            if (!anchor) { setStatus("Add a video clip first"); return; }
+            void applyEdit([{ type: "add-voiceover", assetId: asset.id, anchorAssetId: anchor.anchorAssetId, anchorSourceUs: anchor.anchorSourceUs, durationUs: Math.max(200_000, Number(asset.durationUs ?? 0) || 3_000_000), volumeDb: options.volumeDb, duck: options.duck }], "Voice-over added " + anchor.where);
+          }} />
+        {voiceovers.length > 0 && <ul className="item-list">{voiceovers.map((clip) => <li key={clip.id}><span>{formatSeconds(clip.timelineStartUs)}–{formatSeconds(clip.timelineEndUs)} · {assetName(clip.assetId)}</span><button className="btn" onClick={() => void applyEdit([{ type: "remove-clip", clipId: clip.id, reason: "Voice-over removed" }], "Voice-over removed")} disabled={busy}>Remove</button></li>)}</ul>}
         <h3>Sound effects</h3>
         <label>Sound effect<select value={sfxKind} onChange={(event) => setSfxKind(event.target.value)}>{Object.entries(SFX_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
         <button className="btn" onClick={addSoundEffect} disabled={busy || revision === 0}>{selection ? "Add at the selected words" : "Add sound at the playhead"}</button>
@@ -1062,7 +1076,7 @@ export function App() {
     </section>;
 
   const inspector = selected ? <aside className="inspector" aria-label="Selected">
-    <div className="row-between"><h2>{selected.kind === "video" ? "Selected clip" : selected.kind === "caption" ? "Caption" : selected.clip.transform?.role === "graphic" ? "Text on screen" : selected.clip.transform?.role === "broll" ? "Cutaway" : selected.clip.transform?.role === "sfx" ? "Sound effect" : selected.clip.transform?.role === "music" ? "Music" : "Selected"}</h2><button className="btn icon" aria-label="Close" onClick={() => setSelectedClipId("")}>×</button></div>
+    <div className="row-between"><h2>{selected.kind === "video" ? "Selected clip" : selected.kind === "caption" ? "Caption" : selected.clip.transform?.role === "graphic" ? "Text on screen" : selected.clip.transform?.role === "broll" ? "Cutaway" : selected.clip.transform?.role === "sfx" ? "Sound effect" : selected.clip.transform?.role === "voiceover" ? "Voice-over" : selected.clip.transform?.role === "music" ? "Music" : "Selected"}</h2><button className="btn icon" aria-label="Close" onClick={() => setSelectedClipId("")}>×</button></div>
     <p className="small"><strong>{clipLabel(selected.kind, selected.clip)}</strong></p>
     <p className="mono small muted">{formatSeconds(selected.clip.timelineStartUs)}–{formatSeconds(selected.clip.timelineEndUs)} in the edit</p>
     {selectedClip ? <div className="clip-panel stack" aria-label="Selected clip">

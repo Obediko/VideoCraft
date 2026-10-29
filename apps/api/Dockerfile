@@ -5,7 +5,7 @@ ENV PORT=8080
 
 # FFmpeg/ffprobe: upload inspection and silence detection. Python: faster-whisper transcription and scene detection.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ffmpeg ca-certificates python3 python3-venv \
+  && apt-get install -y --no-install-recommends ffmpeg ca-certificates python3 python3-venv libgl1 libglib2.0-0 \
   && rm -rf /var/lib/apt/lists/*
 COPY workers/transcription/requirements.txt /tmp/transcription-requirements.txt
 COPY workers/scenes/requirements.txt /tmp/scenes-requirements.txt
