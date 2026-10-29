@@ -591,16 +591,16 @@ export function App() {
   const fit = proposal ? (proposal.confidence >= 0.7 ? "strong" : proposal.confidence >= 0.45 ? "fair" : "weak") : "";
   const accepted = proposal?.status === "accepted";
   const next: { title: string; detail: string; action?: { label: string; run: () => void; disabled?: boolean } } =
-    !userEmail ? { title: "Sign in", detail: "Create an account or sign in in the Project panel on the left." }
+    !userEmail ? { title: "Sign in", detail: "Create an account or sign in in the Project panel." }
     : !projectId && !projectsLoaded ? { title: "Loading your projects…", detail: "Opening the project you last worked on." }
-    : !projectId && projects.length > 0 ? { title: "Open your project", detail: "You have " + projects.length + " project" + (projects.length === 1 ? "" : "s") + ". Open the latest, pick another under Existing project (left), or create a new one.", action: { label: "Open latest project", run: () => { const latest = [...projects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]; if (latest) void openProject(latest); } } }
+    : !projectId && projects.length > 0 ? { title: "Open your project", detail: "You have " + projects.length + " project" + (projects.length === 1 ? "" : "s") + ". Open the latest, pick another under Open a project, or create a new one.", action: { label: "Open latest project", run: () => { const latest = [...projects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]; if (latest) void openProject(latest); } } }
     : !projectId ? { title: "Create a project", detail: "Name it, then click Create project.", action: { label: "Create project", run: () => void createProject() } }
-    : !hasVideo ? { title: "Upload a video", detail: "Use Upload media in the Asset reference panel on the left. A talk, interview or vlog works best." }
+    : !hasVideo ? { title: "Upload a video", detail: "Use Upload media in the Asset reference panel. A talk, interview or vlog works best." }
     : proposal?.status === "proposed" ? { title: "Review the suggested highlights", detail: "Each clip says why it was chosen, with the transcript as evidence. Accept to build your cut, or adjust the goal and try again.", action: { label: "Accept highlights", run: () => void decideProposal("accepted") } }
     : renderJobId && !renderUrl && !/^(failed|cancelled)/.test(renderJobStatus) ? { title: "Exporting…", detail: "Rendering " + (renderJobStatus || "queued") + ". This takes roughly as long as the video itself." }
     : renderUrl ? { title: "Your video is ready", detail: "Play it in the Preview panel or download it. Edit further and export again any time." }
     : accepted ? { title: "Export your video", detail: "Fine-tune below if you like (trim, captions, music, B-roll, graphics), pick a platform next to Export video, then export.", action: { label: "Export video", run: () => void submitRender() } }
-    : { title: "Create highlights", detail: "Tell VideoCraft your goal and audience (left), then let it transcribe the video and pick the strongest moments.", action: { label: "Create highlights", run: () => void createHighlights() } };
+    : { title: "Create highlights", detail: "Tell VideoCraft your goal and audience in the Tailoring brief panel, then let it transcribe the video and pick the strongest moments.", action: { label: "Create highlights", run: () => void createHighlights() } };
 
   return <div className="app-shell">
     <header className="topbar">
@@ -674,7 +674,7 @@ export function App() {
           <p className="muted">Upload media, choose it from the project library, then place a non-destructive clip on the timeline.</p>
           <label>Upload media<select value={uploadKind} onChange={(event) => setUploadKind(event.target.value)}><option value="video">Video</option><option value="audio">Audio</option><option value="image">Image</option><option value="caption">Caption</option></select><input type="file" accept="video/*,audio/*,image/*" onChange={uploadAsset} disabled={busy || !projectId} /></label>
           <label>Project library<select value={assetId} onChange={(event) => setAssetId(event.target.value)}><option value="">Choose an asset</option>{assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.kind} · {String(asset.metadata.filename ?? asset.id.slice(0, 8))}</option>)}</select></label>
-          <label>Registered asset ID<input value={assetId} onChange={(event) => setAssetId(event.target.value)} placeholder="asset ID" /></label>
+          <details className="advanced"><summary>Advanced</summary><label>Registered asset ID<input value={assetId} onChange={(event) => setAssetId(event.target.value)} placeholder="asset ID" /></label></details>
           <button className="secondary" onClick={addClip} disabled={!assetId}>Add video clip</button>
           <button className="secondary" onClick={transcribeAsset} disabled={busy || !projectId || !assetId}>Transcribe</button>
         </section>
@@ -690,7 +690,7 @@ export function App() {
           <div className="ruler"><span>00:00</span><span>00:10</span><span>00:20</span><span>00:30</span></div>
           <div className="track-list">
             {timeline.tracks.length === 0 && <div className="empty-state">Your non-destructive timeline is empty. Add a registered asset to begin.</div>}
-            {timeline.tracks.map((track) => <div className="track" key={track.id}><div className="track-label">{trackName[track.kind] ?? track.kind}</div><div className="track-lane">{track.clips.map((clip) => <button type="button" className={"clip" + (selectedClipId === clip.id ? " selected" : "")} key={clip.id} style={{ width: Math.max(1.5, ((clip.timelineEndUs - clip.timelineStartUs) / Math.max(1, timeline.durationUs)) * 100) + "%" }} title={clipLabel(track.kind, clip) + " · " + formatSeconds(clip.timelineEndUs - clip.timelineStartUs)} aria-label={clipLabel(track.kind, clip) + ", " + formatSeconds(clip.sourceEndUs - clip.sourceStartUs)} aria-pressed={selectedClipId === clip.id} onClick={() => setSelectedClipId(clip.id)} onKeyDown={(event) => handleClipKeyDown(event, clip)}><strong>{clipLabel(track.kind, clip)}</strong>{track.kind === "video" && <small>{formatSeconds(clip.sourceEndUs - clip.sourceStartUs)}</small>}</button>)}</div></div>)}
+            {timeline.tracks.map((track) => <div className="track" key={track.id}><div className="track-label">{trackName[track.kind] ?? track.kind}</div><div className="track-lane">{track.clips.map((clip) => <button type="button" className={"clip" + (clip.transform?.role === "progress" ? " progress" : "") + (selectedClipId === clip.id ? " selected" : "")} key={clip.id} style={{ left: (clip.timelineStartUs / Math.max(1, timeline.durationUs)) * 100 + "%", width: ((clip.timelineEndUs - clip.timelineStartUs) / Math.max(1, timeline.durationUs)) * 100 + "%" }} title={clipLabel(track.kind, clip) + " · " + formatSeconds(clip.timelineEndUs - clip.timelineStartUs)} aria-label={clipLabel(track.kind, clip) + ", " + formatSeconds(clip.sourceEndUs - clip.sourceStartUs)} aria-pressed={selectedClipId === clip.id} onClick={() => setSelectedClipId(clip.id)} onKeyDown={(event) => handleClipKeyDown(event, clip)}><strong>{clipLabel(track.kind, clip)}</strong>{track.kind === "video" && <small>{formatSeconds(clip.sourceEndUs - clip.sourceStartUs)}</small>}</button>)}</div></div>)}
           </div>
         </div>
         {selectedClip && <section className="panel clip-panel" aria-label="Selected clip">

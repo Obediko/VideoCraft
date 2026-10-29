@@ -152,11 +152,11 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), "no horizontal page scroll after accepting");
     const clips = page.locator("button.clip");
     await clips.first().waitFor();
-    const videoClipCount = await page.locator(".track", { has: page.locator(".track-label", { hasText: /^video$/ }) }).locator("button.clip").count();
+    const videoClipCount = await page.locator(".track", { has: page.locator(".track-label", { hasText: /^Video$/ }) }).locator("button.clip").count();
     assert.ok(videoClipCount >= 1);
 
     // Editing through the UI: select, move, trim, remove nothing yet.
-    const videoClips = page.locator(".track", { has: page.locator(".track-label", { hasText: /^video$/ }) }).locator("button.clip");
+    const videoClips = page.locator(".track", { has: page.locator(".track-label", { hasText: /^Video$/ }) }).locator("button.clip");
     await videoClips.first().click();
     const before = await page.getByText(/of source/).first().innerText();
     await page.getByRole("button", { name: "Trim end −0.5s" }).click();
