@@ -152,6 +152,19 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
     await nextStep.filter({ hasText: "Review the suggested highlights" }).waitFor();
     await nextStep.getByRole("button", { name: "Accept highlights" }).click();
     await waitStatus(/Proposal accepted/);
+    // The edit check: a last look before export, with fixes to accept.
+    await nextStep.filter({ hasText: "Check your edit" }).waitFor();
+    await nextStep.getByRole("button", { name: "Check my edit" }).click();
+    await waitStatus(/Check done: /, 120_000);
+    const checkPanel = page.locator(".check-panel");
+    const findings = await checkPanel.locator(".issue-list li").allInnerTexts();
+    console.log("# edit check findings: " + findings.map((f) => f.replace(/\s+/g, " ")).join(" | "));
+    if (await checkPanel.getByRole("button", { name: "Apply selected fixes" }).isEnabled().catch(() => false)) {
+      await checkPanel.getByRole("button", { name: "Apply selected fixes" }).click();
+      await waitStatus(/Check done: /, 120_000);
+      const after = await checkPanel.locator(".issue-list li").allInnerTexts();
+      assert.ok(after.filter((f) => /^\s*Fix\b/.test(f)).length < findings.filter((f) => /^\s*Fix\b/.test(f)).length, "applying fixes clears them: " + after.join(" | "));
+    }
     await nextStep.filter({ hasText: "Export your video" }).waitFor();
     // Accepting fills the timeline with clips and caption cues; the page itself must not start scrolling sideways.
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), "no horizontal page scroll after accepting");
@@ -233,6 +246,19 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
       await page.waitForFunction(() => { const v = document.querySelector(".preview-screen video"); return v && !v.paused && v.currentTime > 0; }, null, { timeout: 30_000 });
     } else console.log("# note: this Chromium cannot decode H.264; in-browser playback was not exercised");
 
+    // Check again after the manual edits (the trim above can clip a word) and apply whatever fixes it proposes.
+    await checkPanel.getByRole("button", { name: "Check again" }).click();
+    await waitStatus(/Check done: /, 120_000);
+    const late = await checkPanel.locator(".issue-list li").allInnerTexts();
+    console.log("# edit check after manual edits: " + late.map((f) => f.replace(/\s+/g, " ")).join(" | "));
+    if (await checkPanel.getByRole("button", { name: "Apply selected fixes" }).isEnabled().catch(() => false)) {
+      await checkPanel.getByRole("button", { name: "Apply selected fixes" }).click();
+      await waitStatus(/Check done: /, 120_000);
+      const lateAfter = await checkPanel.locator(".issue-list li").allInnerTexts();
+      console.log("# after fixes: " + lateAfter.map((f) => f.replace(/\s+/g, " ")).join(" | "));
+      assert.ok(lateAfter.filter((f) => /^\s*Fix\b/.test(f)).length < late.filter((f) => /^\s*Fix\b/.test(f)).length, "applying fixes clears them");
+    }
+
     // Export for a 9:16 platform and verify the file the browser is offered.
     await page.getByLabel("Platform").selectOption("tiktok");
     await nextStep.getByRole("button", { name: "Export video" }).click();
@@ -281,6 +307,9 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
     await director.locator(".suggestion-list li", { has: page.locator(".badge", { hasText: /^Format$/ }) }).locator('input[type="checkbox"]').uncheck();
     await nextStep.getByRole("button", { name: "Apply plan" }).click();
     await waitStatus(/Plan applied \(revision \d+\)\. Music: Upbeat/, 120_000);
+    await nextStep.filter({ hasText: "Check your edit" }).waitFor();
+    await nextStep.getByRole("button", { name: "Check my edit" }).click();
+    await waitStatus(/Check done: /, 120_000);
     await nextStep.filter({ hasText: "Export your video" }).waitFor();
     assert.equal(await page.getByLabel("Platform").inputValue(), "tiktok", "the unticked format change is not applied");
     const overlayChips = (await page.locator(".track", { has: page.locator(".track-label", { hasText: /^Overlays$/ }) }).locator("button.clip strong").allInnerTexts()).join(" | ");
