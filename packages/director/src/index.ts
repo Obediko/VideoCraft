@@ -29,7 +29,7 @@ export type Suggestion =
   | { id: string; kind: "cut"; title: string; reason: string; segments: Array<{ startS: number; endS: number }> }
   | { id: string; kind: "title" | "callout" | "lower-third"; title: string; reason: string; text: string; subtitle?: string; atS: number; durationS: number; position?: "top" | "center" | "bottom" }
   | { id: string; kind: "music"; title: string; reason: string; mood: (typeof MOODS)[number] }
-  | { id: string; kind: "broll"; title: string; reason: string; assetId: string; atS: number; durationS: number; mode: "full" | "pip" }
+  | { id: string; kind: "broll"; title: string; reason: string; assetId: string; atS: number; durationS: number; mode: "full" | "pip" | "behind" }
   | { id: string; kind: "progress"; title: string; reason: string }
   | { id: string; kind: "platform"; title: string; reason: string; platform: (typeof PLATFORMS)[number] }
   | { id: string; kind: "advice"; title: string; reason: string }
@@ -39,7 +39,9 @@ export type Suggestion =
   /** Fade in from and out to black, plus this transition where the edit jumps to a new part of the talk. */
   | { id: string; kind: "transitions"; title: string; reason: string; transition: "dip-black" | "dip-white" | "flash" }
   /** A whoosh on transitions and a pop when on-screen text appears. */
-  | { id: string; kind: "sfx"; title: string; reason: string };
+  | { id: string; kind: "sfx"; title: string; reason: string }
+  /** What is behind the person in the whole video: blurred, or a plain colour (the person is cut out and kept). */
+  | { id: string; kind: "background"; title: string; reason: string; background: "blur" | "color"; color?: string };
 
 export interface DirectorPlan {
   summary: string;
@@ -124,7 +126,7 @@ export function sanitizePlan(raw: unknown, input: DirectorInput, source: Directo
     } else if (kind === "broll") {
       const assetId = text(s.assetId, 80); const atS = num(s.atS);
       if (!assetIds.has(assetId) || !(atS >= 0 && atS < input.durationS)) return;
-      suggestions.push({ ...base(s, index), kind: "broll", assetId, atS, durationS: clamp(num(s.durationS) || 2.5, 0.5, 10), mode: s.mode === "pip" ? "pip" : "full" });
+      suggestions.push({ ...base(s, index), kind: "broll", assetId, atS, durationS: clamp(num(s.durationS) || 2.5, 0.5, 10), mode: s.mode === "pip" ? "pip" : s.mode === "behind" ? "behind" : "full" });
     } else if (kind === "progress") {
       if (!suggestions.some((existing) => existing.kind === "progress")) suggestions.push({ ...base(s, index), kind: "progress" });
     } else if (kind === "platform") {
@@ -133,6 +135,10 @@ export function sanitizePlan(raw: unknown, input: DirectorInput, source: Directo
       const b = base(s, index); if (b.reason || b.title) suggestions.push({ ...b, kind: "advice" });
     } else if (kind === "look") {
       if (LOOKS.includes(s.look as never) && !suggestions.some((e) => e.kind === "look")) suggestions.push({ ...base(s, index), kind: "look", look: s.look as (typeof LOOKS)[number] });
+    } else if (kind === "background") {
+      const background = s.background === "color" ? "color" : s.background === "blur" ? "blur" : undefined;
+      const color = typeof s.color === "string" && /^#[0-9a-fA-F]{6}$/.test(s.color) ? s.color : undefined;
+      if (background && !suggestions.some((e) => e.kind === "background")) suggestions.push({ ...base(s, index), kind: "background", background, ...(background === "color" && color ? { color } : {}) });
     } else if (kind === "zooms") {
       if ((s.style === "punch" || s.style === "push") && !suggestions.some((e) => e.kind === "zooms")) suggestions.push({ ...base(s, index), kind: "zooms", style: s.style });
     } else if (kind === "transitions") {
@@ -181,11 +187,13 @@ export class RuleDirector implements Director {
     const look = LOOKS.find((l) => t.includes(l)) ?? (/black and white|b&w|monochrome|grey/.test(t) ? "mono" : /warm/.test(t) ? "warm" : /colou?rful|punchy|bright/.test(t) ? "vivid" : /film|moody/.test(t) ? "cinematic" : undefined);
     if (look) raw.push({ id: "look", kind: "look", title: (look === "mono" ? "Black and white" : look[0]!.toUpperCase() + look.slice(1)) + " look", reason: "As you asked.", look });
     if (hints.mood && /music|song|sound|track|mood|vibe/.test(t)) raw.push({ id: "music", kind: "music", title: hints.mood[0]!.toUpperCase() + hints.mood.slice(1) + " music", reason: "As you asked.", mood: hints.mood });
+    if (/background|backdrop|green ?screen/.test(t) && /blur|soft|out of focus|bokeh/.test(t)) raw.push({ id: "background", kind: "background", title: "Blur the background", reason: "As you asked: you stay sharp, what is behind you is blurred.", background: "blur" });
+    else if (/(remove|replace|change|plain|clean|get rid of).{0,20}(background|backdrop)|green ?screen/.test(t)) raw.push({ id: "background", kind: "background", title: "Plain background", reason: "As you asked: you are cut out and placed on a plain colour. Pick a photo or clip in Visuals → Background to use that instead.", background: "color", color: "#1F2A24" });
     if (/zoom|punch/.test(t)) raw.push({ id: "zooms", kind: "zooms", title: /slow|push|gentle/.test(t) ? "Slow push-ins" : "Punch in on alternate parts", reason: "As you asked.", style: /slow|push|gentle/.test(t) ? "push" : "punch" });
     if (/transition|fade|dip|flash/.test(t)) raw.push({ id: "transitions", kind: "transitions", title: /flash/.test(t) ? "Flash between topics" : /white/.test(t) ? "Dip to white between topics" : "Fade in and out, dip to black between topics", reason: "As you asked.", transition: /flash/.test(t) ? "flash" : /white/.test(t) ? "dip-white" : "dip-black" });
     if (/youtube|16:9|landscape|square|1:1|vertical|9:16|reel|tiktok|short/.test(t) && !shorter) raw.push({ id: "platform", kind: "platform", title: "Export for " + hints.platform, reason: "As you asked.", platform: hints.platform });
     const plan = sanitizePlan({ summary: summary || "Changes for your request.", profile: { intent: input.brief, targetSeconds: target ?? input.current.seconds }, suggestions: raw }, input, "rules");
-    return raw.length ? plan : { ...plan, suggestions: [{ id: "advice", kind: "advice", title: "I can't do that without the AI director", reason: "The built-in rules understand length (shorter, 30 seconds), look (warm, black and white), music mood, zooms, transitions and format. Add an OpenAI key for anything else." }] };
+    return raw.length ? plan : { ...plan, suggestions: [{ id: "advice", kind: "advice", title: "I can't do that without the AI director", reason: "The built-in rules understand length (shorter, 30 seconds), look (warm, black and white), background (blur or plain), music mood, zooms, transitions and format. Add an OpenAI key for anything else." }] };
   }
   async plan(input: DirectorInput): Promise<DirectorPlan> {
     const hints = briefHints(input.brief);
@@ -252,6 +260,7 @@ Rules:
 - "look": one colour look for the whole video: warm, clean, cinematic, vivid, soft or mono (field look). Choose from the mood and what the frames look like.
 - "zooms": style "punch" (alternate tighter framings at cuts; energetic short-form) or "push" (slow push-in; calm or long-form).
 - "transitions": fades at the start and end plus transition "dip-black", "dip-white" or "flash" where the edit jumps to a new part. Do not add transitions inside a continuous thought.
+- "background": only when the creator asks: "blur" (keep the person sharp, blur what is behind) or "color" with a calm #RRGGBB colour (field color).
 - "sfx": subtle whooshes on transitions and pops when text appears; only for energetic short-form.
 - "advice": what you see in the frames that the creator could improve that you cannot change (lighting, framing, background, sound), kindly and concretely.
 Every suggestion needs a short title and a reason that cites what you saw or heard. Never invent facts, names, numbers or quotes.`;
@@ -262,15 +271,16 @@ const SCHEMA = {
     summary: { type: "string" },
     profile: { type: "object", additionalProperties: false, required: ["intent", "audience", "channel", "tone", "targetSeconds"], properties: { intent: { type: "string" }, audience: { type: "string" }, channel: { type: "string" }, tone: { type: "string" }, targetSeconds: { type: "number" } } },
     suggestions: { type: "array", items: { type: "object", additionalProperties: false,
-      required: ["id", "kind", "title", "reason", "segments", "text", "subtitle", "atS", "durationS", "position", "mood", "assetId", "mode", "platform", "look", "style", "transition"],
+      required: ["id", "kind", "title", "reason", "segments", "text", "subtitle", "atS", "durationS", "position", "mood", "assetId", "mode", "platform", "look", "style", "transition", "background", "color"],
       properties: {
-        id: { type: "string" }, kind: { type: "string", enum: ["cut", "title", "callout", "lower-third", "music", "broll", "progress", "platform", "look", "zooms", "transitions", "sfx", "advice"] },
+        id: { type: "string" }, kind: { type: "string", enum: ["cut", "title", "callout", "lower-third", "music", "broll", "progress", "platform", "look", "zooms", "transitions", "sfx", "background", "advice"] },
         title: { type: "string" }, reason: { type: "string" },
         segments: { type: "array", items: { type: "object", additionalProperties: false, required: ["startS", "endS"], properties: { startS: { type: "number" }, endS: { type: "number" } } } },
         text: { type: "string" }, subtitle: { type: "string" }, atS: { type: "number" }, durationS: { type: "number" },
         position: { type: "string", enum: ["top", "center", "bottom", ""] }, mood: { type: "string", enum: [...MOODS, ""] }, assetId: { type: "string" },
-        mode: { type: "string", enum: ["full", "pip", ""] }, platform: { type: "string", enum: [...PLATFORMS, ""] },
+        mode: { type: "string", enum: ["full", "pip", "behind", ""] }, platform: { type: "string", enum: [...PLATFORMS, ""] },
         look: { type: "string", enum: [...LOOKS, ""] }, style: { type: "string", enum: ["punch", "push", ""] }, transition: { type: "string", enum: ["dip-black", "dip-white", "flash", ""] },
+        background: { type: "string", enum: ["blur", "color", ""] }, color: { type: "string" },
       } } },
   },
 };
@@ -404,6 +414,8 @@ export function effectOperations(plan: DirectorPlan, accepted: Set<string>, time
   if (pieces.length === 0) return ops;
   const look = chosen.find((s): s is Extract<Suggestion, { kind: "look" }> => s.kind === "look");
   if (look) ops.push({ type: "set-look", look: look.look });
+  const background = chosen.find((s): s is Extract<Suggestion, { kind: "background" }> => s.kind === "background");
+  if (background) ops.push({ type: "set-background", background: background.background, ...(background.color ? { color: background.color } : {}) });
   const zooms = chosen.find((s): s is Extract<Suggestion, { kind: "zooms" }> => s.kind === "zooms");
   const transitions = chosen.find((s): s is Extract<Suggestion, { kind: "transitions" }> => s.kind === "transitions");
   const sfx = chosen.some((s) => s.kind === "sfx");

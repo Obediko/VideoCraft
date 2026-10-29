@@ -184,3 +184,19 @@ test("graphics anchor like b-roll, can be edited, and the progress bar spans the
   assert.throws(() => parse2([{ type: "add-graphic", kind: "banner", text: "x", anchorAssetId: "talk", anchorSourceUs: 0, durationUs: 1_000_000 }]), /kind/);
   assert.throws(() => parse2([{ type: "set-progress-bar", enabled: true, color: "red" }]), /RRGGBB/);
 });
+
+test("set-background changes one clip or all, and assetsUsedBy includes background media", async () => {
+  const { applyTimelineOperations: apply, assetsUsedBy } = await import("../dist/index.js");
+  let t = apply({ durationUs: 0, tracks: [] }, [{ type: "insert-clip", assetId: "a", sourceStartUs: 0, sourceEndUs: 1_000_000, reason: "r" }, { type: "insert-clip", assetId: "a", sourceStartUs: 2_000_000, sourceEndUs: 3_000_000, reason: "r" }]);
+  const [c1, c2] = t.tracks.find((x) => x.kind === "video").clips;
+  t = apply(t, [{ type: "set-background", background: "blur", edge: 2, feather: 4 }]);
+  assert.ok(t.tracks[0].clips.every((c) => c.transform.background === "blur" && c.transform.matteEdge === 2 && c.transform.matteFeather === 4));
+  t = apply(t, [{ type: "set-background", clipId: c2.id, background: "media", assetId: "photo" }]);
+  const after = t.tracks[0].clips;
+  assert.equal(after.find((c) => c.id === c1.id).transform.background, "blur");
+  assert.equal(after.find((c) => c.id === c2.id).transform.backgroundAssetId, "photo");
+  assert.deepEqual([...assetsUsedBy(t)].sort(), ["a", "photo"]);
+  t = apply(t, [{ type: "set-background", background: "none" }]);
+  assert.ok(t.tracks[0].clips.every((c) => !c.transform));
+  assert.throws(() => apply(t, [{ type: "set-background", clipId: "nope", background: "blur" }]));
+});

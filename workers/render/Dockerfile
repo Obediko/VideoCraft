@@ -12,6 +12,7 @@ REQ
 ENV REFRAME_PYTHON=/opt/venv/bin/python
 ENV REFRAME_SCRIPT=/app/workers/reframe/focus.py
 ENV FACES_SCRIPT=/app/workers/reframe/faces.py
+ENV MATTE_SCRIPT=/app/workers/reframe/matte.py
 
 WORKDIR /app
 COPY . .

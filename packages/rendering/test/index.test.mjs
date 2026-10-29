@@ -299,3 +299,41 @@ cv2.imwrite(${JSON.stringify(frame)}, canvas)`]);
     assert.deepEqual(track(noFace).boxes.filter(Boolean), [], "no false faces on a test pattern");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("real video: the background behind the person is replaced, and a cutaway can sit behind them", { skip: !haveCv }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vc-bg-"));
+  try {
+    const frame = join(dir, "frame.png"); const source = join(dir, "person.mp4"); const backdrop = join(dir, "backdrop.png");
+    // The astronaut photo on a mid-grey studio wall, in a 9:16 frame.
+    execFileSync(python, ["-c", `
+import cv2, numpy as np
+from skimage import data
+img = cv2.cvtColor(data.astronaut(), cv2.COLOR_RGB2BGR)
+canvas = np.full((1280, 720, 3), 128, np.uint8)
+canvas[600:1112, 104:616] = img
+cv2.imwrite(${JSON.stringify(frame)}, canvas)
+cv2.imwrite(${JSON.stringify(backdrop)}, np.tile(np.array([200, 40, 40], np.uint8), (720, 1280, 1)))`]);
+    execFileSync("ffmpeg", ["-v", "error", "-y", "-loop", "1", "-framerate", "25", "-t", "3", "-i", frame, "-pix_fmt", "yuv420p", "-c:v", "libx264", source]);
+    const matteScript = new URL("../../../workers/reframe/matte.py", import.meta.url).pathname;
+    let n = 0;
+    const resolver = {
+      resolve: async (id) => (id === "photo" ? backdrop : source), isStill: async (id) => id === "photo",
+      matte: async (_id, s, e, o) => { const out = join(dir, "matte" + n++ + ".mp4"); execFileSync(python, [matteScript, source, String(s / 1e6), String(e / 1e6), out, String(o.edge), String(o.feather)]); return out; },
+    };
+    const settings = { ...PLATFORM_PRESETS.tiktok.settings, width: 360, height: 640, captionStyle: undefined };
+    const pixel = (path, x, y) => [...execFileSync("ffmpeg", ["-v", "error", "-ss", "1", "-i", path, "-frames:v", "1", "-vf", "crop=4:4:" + x + ":" + y + ",scale=1:1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"])];
+    // 1. A solid colour background: the wall turns blue-green, the face stays.
+    const coloured = join(dir, "coloured.mp4");
+    await new FfmpegProcess().run(await new FfmpegCommandPlanner(resolver).plan(revision([{ ...clip("c", 0, 2_000_000, 0), transform: { background: "color", backgroundColor: "#1060C0" } }]), settings, coloured));
+    const wall = pixel(coloured, 20, 40); const face = pixel(coloured, 165, 370);
+    assert.ok(wall[2] > 150 && wall[0] < 60, "wall replaced: " + wall);
+    assert.ok(face[0] > 120 && face[0] > face[2], "face kept: " + face);
+    // 2. A photo placed behind the person for the middle second only.
+    const behindOut = join(dir, "behind.mp4");
+    const overlay = { id: "o", kind: "overlay", clips: [{ id: "b", assetId: "photo", sourceStartUs: 0, sourceEndUs: 1_000_000, timelineStartUs: 500_000, timelineEndUs: 1_500_000, transform: { role: "broll", mode: "behind", motion: "none" } }] };
+    await new FfmpegProcess().run(await new FfmpegCommandPlanner(resolver).plan(revision([clip("c", 0, 2_000_000, 0)], [overlay]), settings, behindOut));
+    const wall2 = pixel(behindOut, 20, 40); const face2 = pixel(behindOut, 165, 370);
+    assert.ok(wall2[0] < 100 && wall2[2] > 150, "cutaway behind: " + wall2);
+    assert.ok(face2[0] > 120 && face2[0] > face2[2], "person in front: " + face2);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

@@ -1,6 +1,9 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { mkdtemp, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { UUID } from "@videocraft/domain";
 import type { ObjectStorage } from "@videocraft/storage";
@@ -23,12 +26,35 @@ export async function sendRanged(request: FastifyRequest, reply: FastifyReply, p
 }
 
 export interface MediaRouteDependencies {
-  assets: { listForProject(projectId: UUID): Promise<Array<{ id: UUID; storageKey: string; kind: string; metadata: Record<string, unknown> }>> };
+  assets: { listForProject(projectId: UUID): Promise<Array<{ id: UUID; storageKey: string; kind: string; durationUs?: number; metadata: Record<string, unknown> }>> };
   storage: ObjectStorage; signingSecret: string;
   authenticate(request: FastifyRequest): Promise<{ userId: UUID } | null>;
   authorize: { canAccess(principal: { userId: UUID }, projectId: UUID, role: "viewer" | "editor"): Promise<boolean> };
   /** Face tracking (OpenCV worker), so the live preview places captions off the speaker's face. Optional. */
   faces?: { script: string; executable?: string };
+  /** Person mattes for previewing background changes (OpenCV worker). Optional. */
+  matte?: { script: string; executable?: string };
+}
+
+/** Where an asset's preview matte is kept (beside the asset, so deleting the project removes it). */
+export function matteKey(projectId: string, assetId: string): string { return "projects/" + projectId + "/assets/" + assetId + ".matte.mp4"; }
+
+async function storedExists(storage: ObjectStorage, key: string): Promise<boolean> {
+  try {
+    if (storage.list) return (await storage.list(key)).some((item) => item.key === key && item.size > 0);
+    return (await stat(storage.resolve(key))).size > 0;
+  } catch { return false; }
+}
+
+function runWorker(executable: string, args: string[], timeoutMs: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(executable, args, { shell: false, stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => { stderr = (stderr + chunk).slice(-2000); });
+    const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
+    child.once("error", (cause) => { clearTimeout(timer); reject(cause); });
+    child.once("close", (code) => { clearTimeout(timer); if (code === 0) resolve(); else reject(new Error("worker failed: " + stderr)); });
+  });
 }
 
 const MIME_BY_EXTENSION: Record<string, string> = { mp4: "video/mp4", m4v: "video/mp4", mov: "video/quicktime", webm: "video/webm", mkv: "video/x-matroska", mp3: "audio/mpeg", wav: "audio/wav", m4a: "audio/mp4", ogg: "audio/ogg", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg" };
@@ -82,6 +108,56 @@ export function registerMediaRoutes(server: FastifyInstance, dependencies: Media
       detecting.set(asset.id, job); running = job;
     }
     return reply.code(202).send({ pending: true, retryAfterSeconds: 5 });
+  });
+  // Preview matte (the person cut-out) for an asset: made once in the background at preview size, then served signed.
+  const matting = new Map<string, Promise<unknown>>();
+  const matteFailedAt = new Map<string, number>();
+  server.get("/v1/projects/:projectId/assets/:assetId/matte-url", async (request, reply) => {
+    const principal = await dependencies.authenticate(request);
+    if (!principal) return error(reply, 401, "unauthorized", "Authentication required");
+    const params = request.params as { projectId?: string; assetId?: string };
+    if (!params.projectId || !params.assetId) return error(reply, 400, "invalid_request", "projectId and assetId are required");
+    if (!(await dependencies.authorize.canAccess(principal, params.projectId, "viewer"))) return error(reply, 403, "forbidden", "Project access denied");
+    const asset = await find(params.projectId, params.assetId);
+    if (!asset || asset.kind !== "video") return error(reply, 404, "not_found", "Video not found");
+    const key = matteKey(params.projectId, asset.id);
+    if (!matting.has(asset.id) && (await storedExists(dependencies.storage, key))) {
+      const expires = Math.floor(Date.now() / 1000) + 3600;
+      if (dependencies.storage.createDownloadUrl) return { url: await dependencies.storage.createDownloadUrl(key, 3600), expires };
+      const signature = sign(params.projectId + ":" + asset.id + ":" + key + ":" + expires, dependencies.signingSecret);
+      return { url: "/v1/projects/" + params.projectId + "/assets/" + asset.id + "/matte?expires=" + expires + "&signature=" + signature, expires };
+    }
+    if (!dependencies.matte) return error(reply, 503, "matte_unavailable", "Background preview is not configured");
+    if (!matting.has(asset.id) && Date.now() - (matteFailedAt.get(asset.id) ?? 0) < 10 * 60_000) return error(reply, 422, "matte_failed", "The person could not be cut out of this video");
+    if (!matting.has(asset.id)) {
+      const config = dependencies.matte;
+      const job = running.then(async () => {
+        const directory = await mkdtemp(join(tmpdir(), "videocraft-matte-"));
+        try {
+          let input = join(directory, "input.media");
+          if (dependencies.storage.downloadToFile) await dependencies.storage.downloadToFile(asset.storageKey, input); else input = dependencies.storage.resolve(asset.storageKey);
+          const out = join(directory, "matte.mp4");
+          const seconds = typeof asset.durationUs === "number" ? asset.durationUs / 1e6 : 4 * 3600;
+          await runWorker(config.executable ?? "python3", [config.script, input, "0", seconds.toFixed(3), out, "0", "2", "480"], 60 * 60_000);
+          await dependencies.storage.putFile(out, key);
+        } finally { await rm(directory, { recursive: true, force: true }).catch(() => undefined); }
+      }).catch((cause: unknown) => { request.log.warn({ err: cause, assetId: asset.id }, "preview matte failed"); matteFailedAt.set(asset.id, Date.now()); })
+        .finally(() => matting.delete(asset.id));
+      matting.set(asset.id, job); running = job;
+    }
+    return reply.code(202).send({ pending: true, retryAfterSeconds: 8 });
+  });
+  server.get("/v1/projects/:projectId/assets/:assetId/matte", async (request, reply) => {
+    const params = request.params as { projectId?: string; assetId?: string };
+    if (!params.projectId || !params.assetId) return error(reply, 400, "invalid_request", "projectId and assetId are required");
+    const asset = await find(params.projectId, params.assetId);
+    if (!asset) return error(reply, 404, "not_found", "Asset not found");
+    const key = matteKey(params.projectId, asset.id);
+    const query = request.query as { expires?: string; signature?: string };
+    const signed = typeof query.expires === "string" && typeof query.signature === "string" && Number.isSafeInteger(Number(query.expires)) && Number(query.expires) >= Math.floor(Date.now() / 1000)
+      && verify(params.projectId + ":" + asset.id + ":" + key + ":" + query.expires, query.signature, dependencies.signingSecret);
+    if (!signed) return error(reply, 401, "invalid_download_signature", "Matte URL is missing or expired");
+    return sendRanged(request, reply, dependencies.storage.resolve(key), "video/mp4");
   });
   server.get("/v1/projects/:projectId/assets/:assetId/media", async (request, reply) => {
     const params = request.params as { projectId?: string; assetId?: string };

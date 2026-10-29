@@ -15,6 +15,11 @@ export interface AssetPathResolver {
   focus?(assetId: string, startUs: number, endUs: number): Promise<{ x: number; y: number; confidence: number } | null>;
   /** Where the speaker's face is through the asset, so captions and text can stay off it. Null when unknown. */
   faces?(assetId: string): Promise<FaceTrack | null>;
+  /**
+   * A person matte for a source range of the asset (path to a greyscale video starting at the range start, at the
+   * source frame rate): white where the person is. Null when matting is unavailable; backgrounds are then skipped.
+   */
+  matte?(assetId: string, startUs: number, endUs: number, options: { edge: number; feather: number }): Promise<string | null>;
   /** Display size of the asset's picture (after rotation). Needed to place text around faces. */
   dimensions?(assetId: string): Promise<{ width: number; height: number } | null>;
 }
@@ -157,6 +162,32 @@ export class FfmpegCommandPlanner {
       sfxInputs.push(nextInput++);
       args.push("-i", path);
     }
+    // Backgrounds behind the person (blur, colour, a photo or clip) and cutaways placed behind them need a matte.
+    const behind = brolls.map((broll) => broll.transform?.mode === "behind");
+    const overlapsBehind = (clip: TimelineClip) => brolls.some((broll, i) => behind[i] && broll.timelineStartUs < clip.timelineEndUs && broll.timelineEndUs > clip.timelineStartUs);
+    const matteInputs: Array<number | undefined> = [];
+    const backgroundInputs: Array<{ index: number; still: boolean } | undefined> = [];
+    for (const clip of clips) {
+      const kind = String(clip.transform?.background ?? "none");
+      const wanted = (kind !== "none" && BACKGROUND_KINDS.has(kind)) || overlapsBehind(clip);
+      let matteIndex: number | undefined;
+      if (wanted && this.assets.matte) {
+        const edge = clampNumber(Number(clip.transform?.matteEdge ?? 0), -8, 8); const feather = clampNumber(Number(clip.transform?.matteFeather ?? 2), 0, 12);
+        const path = await this.assets.matte(clip.assetId, clip.sourceStartUs, clip.sourceEndUs, { edge: Math.round(edge), feather: Math.round(feather) }).catch(() => null);
+        if (path) { matteIndex = nextInput++; args.push("-t", ((clip.sourceEndUs - clip.sourceStartUs) / 1_000_000).toFixed(6), "-i", path); }
+      }
+      matteInputs.push(matteIndex);
+      const backgroundAsset = clip.transform?.backgroundAssetId;
+      if (matteIndex !== undefined && kind === "media" && typeof backgroundAsset === "string") {
+        const still = this.assets.isStill ? await this.assets.isStill(backgroundAsset) : false;
+        const length = ((clip.sourceEndUs - clip.sourceStartUs) / 1_000_000).toFixed(6);
+        const index = nextInput++;
+        if (still) args.push("-loop", "1", "-framerate", String(fps), "-t", length, "-i", await this.assets.resolve(backgroundAsset));
+        else args.push("-stream_loop", "-1", "-t", length, "-i", await this.assets.resolve(backgroundAsset));
+        backgroundInputs.push({ index, still });
+      } else backgroundInputs.push(undefined);
+    }
+    const anyBehind = behind.some(Boolean) && matteInputs.some((index) => index !== undefined);
     const totalSeconds = clips.reduce((sum, clip) => sum + (clip.sourceEndUs - clip.sourceStartUs), 0) / 1_000_000;
 
     const contain = "scale=" + width + ":" + height + ":force_original_aspect_ratio=decrease,pad=" + width + ":" + height + ":(ow-iw)/2:(oh-ih)/2:color=black";
@@ -182,9 +213,39 @@ export class FfmpegCommandPlanner {
     const useEmbeddedAudio = !externalAudio && [...audioPresent.values()].some(Boolean);
     const filters: string[] = [];
     const concatInputs: string[] = [];
+    const matteConcat: string[] = [];
     clips.forEach((clip, index) => {
       const length = (clip.sourceEndUs - clip.sourceStartUs) / 1_000_000;
-      filters.push("[" + index + ":v]setpts=PTS-STARTPTS," + fits[index] + ",fps=" + fps + clipEffects(clips, index, width, height, length) + ",setsar=1,format=yuv420p[v" + index + "]");
+      const matteIndex = matteInputs[index];
+      if (matteIndex === undefined) {
+        filters.push("[" + index + ":v]setpts=PTS-STARTPTS," + fits[index] + ",fps=" + fps + clipEffects(clips, index, width, height, length) + ",setsar=1,format=yuv420p[v" + index + "]");
+        if (anyBehind) matteConcat.push("color=c=white:s=" + width + "x" + height + ":r=" + fps + ":d=" + length.toFixed(6) + ",format=gray,setsar=1[mw" + index + "]");
+      } else {
+        // The matte is framed exactly like the picture (same fit, frame rate and zoom), then used as its alpha.
+        const zoom = clipZoom(clip, width, height, length);
+        const kind = String(clip.transform?.background ?? "none");
+        filters.push("[" + index + ":v]setpts=PTS-STARTPTS," + fits[index] + ",fps=" + fps + zoom + ",setsar=1,format=yuv420p,split=2[fg" + index + "][src" + index + "]");
+        filters.push("[" + matteIndex + ":v]setpts=PTS-STARTPTS," + fits[index] + ",fps=" + fps + zoom + ",setsar=1,format=gray" + (anyBehind ? ",split=2[ma" + index + "][mw" + index + "]" : "[ma" + index + "]"));
+        let base: string | undefined;
+        if (kind === "blur") { filters.push("[src" + index + "]boxblur=luma_radius=" + Math.max(8, Math.round(Math.min(width, height) / 40)) + ":luma_power=2[bg" + index + "]"); base = "[bg" + index + "]"; }
+        else {
+          filters.push("[src" + index + "]nullsink");
+          if (kind === "color") { filters.push("color=c=0x" + hexColour(clip.transform?.backgroundColor) + ":s=" + width + "x" + height + ":r=" + fps + ":d=" + length.toFixed(6) + ",format=yuv420p,setsar=1[bg" + index + "]"); base = "[bg" + index + "]"; }
+          else if (kind === "media" && backgroundInputs[index]) {
+            filters.push("[" + backgroundInputs[index]!.index + ":v]setpts=PTS-STARTPTS,scale=" + width + ":" + height + ":force_original_aspect_ratio=increase,crop=" + width + ":" + height + ",fps=" + fps + ",trim=duration=" + length.toFixed(6) + ",setsar=1,format=yuv420p[bg" + index + "]");
+            base = "[bg" + index + "]";
+          }
+        }
+        const finish = clipFinish(clips, index, length);
+        if (base) {
+          filters.push("[fg" + index + "][ma" + index + "]alphamerge[cut" + index + "]");
+          filters.push(base + "[cut" + index + "]overlay=format=auto:shortest=1" + finish + ",setsar=1,format=yuv420p[v" + index + "]");
+        } else {
+          // No background change on this clip (the matte is only for a cutaway behind the person).
+          filters.push("[ma" + index + "]nullsink");
+          filters.push("[fg" + index + "]null" + finish + ",setsar=1,format=yuv420p[v" + index + "]");
+        }
+      }
       concatInputs.push("[v" + index + "]");
       if (useEmbeddedAudio) {
         if (audioPresent.get(clip.assetId)) {
@@ -197,11 +258,17 @@ export class FfmpegCommandPlanner {
       }
     });
     filters.push(concatInputs.join("") + "concat=n=" + clips.length + ":v=1:a=" + (useEmbeddedAudio ? 1 : 0) + "[vcat]" + (useEmbeddedAudio ? "[acat]" : ""));
+    if (anyBehind) {
+      filters.push(...matteConcat);
+      filters.push(clips.map((_, index) => "[mw" + index + "]").join("") + "concat=n=" + clips.length + ":v=1:a=0[mcat]");
+      // The person, cut out of the finished picture, goes back on top of cutaways placed behind them.
+      filters.push("[vcat]split=2[vbase][vperson]", "[vperson][mcat]alphamerge[person]");
+    }
 
     const style = resolveCaptionStyle(settings.captionStyle);
     const faceFor = this.faceLocator(faceData, clips, focusUsed, settings.fit === "cover" ? "cover" : "contain", { width, height });
     const cues = style ? placeCaptions(captionCues(tracks, videoTrack, revision.timeline.durationUs), style, { width, height }, faceFor) : [];
-    let videoLabel = "[vcat]";
+    let videoLabel = anyBehind ? "[vbase]" : "[vcat]";
     brolls.forEach((broll, index) => {
       const start = (broll.timelineStartUs / 1_000_000).toFixed(6);
       const end = (broll.timelineEndUs / 1_000_000).toFixed(6);
@@ -220,6 +287,11 @@ export class FfmpegCommandPlanner {
       filters.push(videoLabel + "[b" + index + "]overlay=" + position + ":enable='between(t," + start + "," + end + ")':eof_action=pass[ov" + index + "]");
       videoLabel = "[ov" + index + "]";
     });
+    if (anyBehind) {
+      const windows = brolls.map((broll, index) => (behind[index] ? "between(t," + (broll.timelineStartUs / 1_000_000).toFixed(6) + "," + (broll.timelineEndUs / 1_000_000).toFixed(6) + ")" : "")).filter(Boolean);
+      filters.push(videoLabel + "[person]overlay=format=auto:enable='" + windows.join("+") + "'[behind]");
+      videoLabel = "[behind]";
+    }
     // Motion graphics (title cards, callouts, lower thirds, progress bar): above b-roll, beneath captions.
     const overlayClips = tracks.filter((track) => track.kind === "overlay").flatMap((track) => track.clips);
     const faceAndBand = (startUs: number, endUs: number): Pick<GraphicItem, "face" | "avoid"> => {
@@ -358,11 +430,22 @@ export class FfmpegProcess {
 
 /** Zoom, look and transitions for one clip (appended to its chain after framing). */
 export function clipEffects(clips: TimelineClip[], index: number, width: number, height: number, lengthS: number): string {
+  return clipZoom(clips[index]!, width, height, lengthS) + clipFinish(clips, index, lengthS);
+}
+
+/** The clip's zoom (framing only, so a matte can be framed the same way). */
+export function clipZoom(clip: TimelineClip, width: number, height: number, lengthS: number): string {
+  const t = clip.transform ?? {};
+  // Zooms keep faces in frame: the crop sits a little above centre.
+  if (t.zoom === "punch") return ",scale=" + even(Math.round(width * 1.12)) + ":-2,crop=" + width + ":" + height + ":(iw-ow)/2:(ih-oh)*0.4";
+  if (t.zoom === "push") return ",scale=w='2*trunc(" + width + "*(1+0.08*t/" + Math.max(0.1, lengthS).toFixed(3) + ")/2)':h=-2:eval=frame,crop=" + width + ":" + height + ":(iw-ow)/2:(ih-oh)*0.4";
+  return "";
+}
+
+/** The clip's look and transitions (applied after any background change). */
+export function clipFinish(clips: TimelineClip[], index: number, lengthS: number): string {
   const clip = clips[index]!; const t = clip.transform ?? {};
   const parts: string[] = [];
-  // Zooms keep faces in frame: the crop sits a little above centre.
-  if (t.zoom === "punch") parts.push("scale=" + even(Math.round(width * 1.12)) + ":-2,crop=" + width + ":" + height + ":(iw-ow)/2:(ih-oh)*0.4");
-  else if (t.zoom === "push") parts.push("scale=w='2*trunc(" + width + "*(1+0.08*t/" + Math.max(0.1, lengthS).toFixed(3) + ")/2)':h=-2:eval=frame,crop=" + width + ":" + height + ":(iw-ow)/2:(ih-oh)*0.4");
   const look = typeof t.look === "string" ? LOOK_FILTERS[t.look] : undefined;
   if (look) parts.push(look);
   // A transition at a cut is shared: the outgoing clip fades out, the incoming one fades in (no overlap, so timing is unchanged).
@@ -382,6 +465,9 @@ export function coverCrop(width: number, height: number, focus: { x: number; y: 
   const fy = Math.min(1, Math.max(0, focus.y)).toFixed(4);
   return "crop=" + width + ":" + height + ":x='min(max(iw*" + fx + "-" + width + "/2,0),iw-" + width + ")':y='min(max(ih*" + fy + "-" + height + "/2,0),ih-" + height + ")'";
 }
+
+const BACKGROUND_KINDS = new Set(["blur", "color", "media"]);
+function hexColour(value: unknown): string { return typeof value === "string" && /^#[0-9a-fA-F]{6}$/.test(value) ? value.slice(1).toUpperCase() : "1F2A24"; }
 
 function seconds(microseconds: number): string {
   if (!Number.isSafeInteger(microseconds) || microseconds < 0) throw new Error("Time values must be non-negative safe integers");

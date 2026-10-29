@@ -30,7 +30,7 @@ type DirectorPlan = { summary: string; profile: { intent: string; audience: stri
 const PLAN_GROUPS: Array<{ name: string; kinds: string[] }> = [
   { name: "Story", kinds: ["cut"] },
   { name: "Text on screen", kinds: ["title", "callout", "lower-third", "progress"] },
-  { name: "Look", kinds: ["look", "zooms", "broll"] },
+  { name: "Look", kinds: ["look", "background", "zooms", "broll"] },
   { name: "Sound", kinds: ["music", "sfx"] },
   { name: "Pacing", kinds: ["transitions"] },
   { name: "Format", kinds: ["platform"] },
@@ -108,6 +108,8 @@ export function App() {
   const [sourceRetry, setSourceRetry] = useState(0);
   const [faceTracks, setFaceTracks] = useState<Record<string, FaceTrack>>({});
   const [faceRetry, setFaceRetry] = useState(0);
+  const [matteUrls, setMatteUrls] = useState<Record<string, string>>({});
+  const [matteRetry, setMatteRetry] = useState(0);
   const [musicVolume, setMusicVolume] = useState(-16);
   const [musicMood, setMusicMood] = useState("auto");
   const [musicDuck, setMusicDuck] = useState(true);
@@ -143,7 +145,12 @@ export function App() {
   const [musicAssetId, setMusicAssetId] = useState("");
   const [brollAssetId, setBrollAssetId] = useState("");
   const [brollSeconds, setBrollSeconds] = useState(3);
-  const [brollMode, setBrollMode] = useState<"full" | "pip">("full");
+  const [brollMode, setBrollMode] = useState<"full" | "pip" | "behind">("full");
+  const [bgKind, setBgKind] = useState<"none" | "blur" | "color" | "media">("blur");
+  const [bgColor, setBgColor] = useState("#1F2A24");
+  const [bgAssetId, setBgAssetId] = useState("");
+  const [bgEdge, setBgEdge] = useState(0);
+  const [bgFeather, setBgFeather] = useState(2);
   const brollAssets = assets.filter((asset) => asset.kind === "image" || (asset.kind === "video" && !videoClips.some((clip) => clip.assetId === asset.id)));
   const [gfxKind, setGfxKind] = useState<"title" | "callout" | "lower-third">("title");
   const [gfxText, setGfxText] = useState("");
@@ -171,7 +178,8 @@ export function App() {
   const edited = revision > 0 && videoClips.length > 0;
 
   // Signed playback URLs for the footage, cutaways and music on the timeline; fetched once per asset (they last an hour).
-  const neededAssets = [...new Set([sourceAssetId, ...videoClips.map((clip) => clip.assetId), ...brolls.map((clip) => clip.assetId), ...(musicClip ? [musicClip.assetId] : [])].filter((id) => id && !id.startsWith("generated:")))];
+  const backgroundAssets = videoClips.map((clip) => clip.transform?.backgroundAssetId).filter((id): id is string => typeof id === "string");
+  const neededAssets = [...new Set([sourceAssetId, ...videoClips.map((clip) => clip.assetId), ...brolls.map((clip) => clip.assetId), ...backgroundAssets, ...(musicClip ? [musicClip.assetId] : [])].filter((id) => id && !id.startsWith("generated:")))];
   useEffect(() => {
     const missing = neededAssets.filter((id) => !sourceUrls[id]);
     if (!token || !projectId || missing.length === 0) return;
@@ -208,6 +216,24 @@ export function App() {
     }
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, [token, projectId, faceAssets.join(","), faceRetry]);
+  // Person cut-outs for previewing background changes and cutaways behind you (made once per video, in the background).
+  const matteAssets = [...new Set(videoClips.filter((clip) => (clip.transform?.background && clip.transform.background !== "none") || brolls.some((b) => b.transform?.mode === "behind" && b.timelineStartUs < clip.timelineEndUs && b.timelineEndUs > clip.timelineStartUs)).map((clip) => clip.assetId))];
+  useEffect(() => {
+    const missing = matteAssets.filter((id) => !matteUrls[id]);
+    if (!token || !projectId || missing.length === 0) return;
+    let cancelled = false; let timer: ReturnType<typeof setTimeout> | undefined;
+    for (const id of missing) {
+      request("/v1/projects/" + projectId + "/assets/" + id + "/matte-url")
+        .then((result) => {
+          if (cancelled) return;
+          if (result.pending) { timer = setTimeout(() => setMatteRetry((n) => n + 1), (result.retryAfterSeconds ?? 8) * 1000); return; }
+          if (typeof result.url === "string") setMatteUrls((current) => ({ ...current, [id]: /^https?:\/\//.test(result.url) ? result.url : API + result.url }));
+        })
+        .catch(() => undefined);
+    }
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [token, projectId, matteAssets.join(","), matteRetry]);
+  const stillAssets = useMemo(() => Object.fromEntries(assets.map((asset) => [asset.id, asset.kind === "image"])), [assets]);
   const assetSizes = useMemo(() => Object.fromEntries(assets.filter((asset) => Number(asset.metadata.width) > 0 && Number(asset.metadata.height) > 0).map((asset) => [asset.id, { width: Number(asset.metadata.width), height: Number(asset.metadata.height) }])), [assets]);
 
   // Selecting a clip cues the player to the start of that clip's source range.
@@ -397,7 +423,7 @@ export function App() {
     try {
       const result = await request("/v1/projects/" + project.id, { method: "DELETE", body: JSON.stringify({ confirmName: deleteConfirm }) });
       setProjects((current) => current.filter((item) => item.id !== project.id));
-      resetProjectState(); setProjectId(""); setSourceUrls({}); setFaceTracks({}); setDeleteConfirm(""); setScreen("projects");
+      resetProjectState(); setProjectId(""); setSourceUrls({}); setFaceTracks({}); setMatteUrls({}); setDeleteConfirm(""); setScreen("projects");
       if (recall(LAST_PROJECT_KEY) === project.id) remember(LAST_PROJECT_KEY, "");
       setStatus("Deleted “" + project.name + "” and its " + result.removedObjects + " stored file" + (result.removedObjects === 1 ? "" : "s"));
     } catch (error) { setStatus(errorMessage(error)); }
@@ -807,7 +833,7 @@ export function App() {
 
   const player = <div className="player">
     <div className="preview-tabs" role="tablist"><button role="tab" aria-selected={previewMode === "edit"} className={previewMode === "edit" ? "on" : ""} onClick={() => setPreviewMode("edit")} disabled={videoClips.length === 0}>Edit</button><button role="tab" aria-selected={previewMode === "source"} className={previewMode === "source" ? "on" : ""} onClick={() => setPreviewMode("source")}>Original</button><button role="tab" aria-selected={previewMode === "render"} className={previewMode === "render" ? "on" : ""} onClick={() => setPreviewMode("render")}>Export</button></div>
-    {previewMode === "edit" && videoClips.length > 0 ? <LivePreview ref={liveRef} tracks={timeline.tracks} durationUs={timeline.durationUs} urls={sourceUrls} shape={(PLATFORMS[platform]?.width ?? 9) < (PLATFORMS[platform]?.height ?? 16) ? "tall" : PLATFORMS[platform]?.width === PLATFORMS[platform]?.height ? "square" : "wide"} fit={PLATFORMS[platform]?.fit ?? "cover"} output={{ width: PLATFORMS[platform]?.width ?? 1080, height: PLATFORMS[platform]?.height ?? 1920 }} captionStyle={PLATFORMS[platform]?.captionStyle ?? "bold-pop"} faces={faceTracks} sizes={assetSizes} onTime={onLiveTime} />
+    {previewMode === "edit" && videoClips.length > 0 ? <LivePreview ref={liveRef} tracks={timeline.tracks} durationUs={timeline.durationUs} urls={sourceUrls} shape={(PLATFORMS[platform]?.width ?? 9) < (PLATFORMS[platform]?.height ?? 16) ? "tall" : PLATFORMS[platform]?.width === PLATFORMS[platform]?.height ? "square" : "wide"} fit={PLATFORMS[platform]?.fit ?? "cover"} output={{ width: PLATFORMS[platform]?.width ?? 1080, height: PLATFORMS[platform]?.height ?? 1920 }} captionStyle={PLATFORMS[platform]?.captionStyle ?? "bold-pop"} faces={faceTracks} sizes={assetSizes} mattes={matteUrls} stills={stillAssets} onTime={onLiveTime} />
     : <div className={"preview-screen " + ((PLATFORMS[platform]?.width ?? 9) < (PLATFORMS[platform]?.height ?? 16) ? "tall" : "wide")}>{previewMode === "render" ? (renderUrl ? <video controls src={renderUrl} /> : <span>{renderJobId ? "Exporting " + renderJobStatus : "Your exported video will play here"}</span>) : (sourceUrl ? <video ref={playerRef} controls src={sourceUrl} onTimeUpdate={stopAtClipEnd} /> : <span>{sourceNote || "Preparing the preview…"}</span>)}</div>}
     {previewMode === "source" && sourceNote && sourceUrl && <p className="muted small">{sourceNote}</p>}
   </div>;
@@ -986,16 +1012,26 @@ export function App() {
         <h3>Look</h3>
         <label>Look for the whole video<select value={wholeLook} disabled={busy || revision === 0} onChange={(event) => { if (event.target.value !== "mixed") void applyEdit([{ type: "set-look", look: event.target.value }], "Look: " + (LOOK_LABEL[event.target.value] ?? event.target.value)); }}>{wholeLook === "mixed" && <option value="mixed">Mixed (set per clip)</option>}{Object.entries(LOOK_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
         <p className="muted small">Zooms and transitions are set per clip: select a clip on the timeline.</p>
+        <h3>Background</h3>
+        <p className="muted small">Change what is behind you: you are cut out of the picture and kept in front.{selectedClip ? " Applies to the selected clip." : " Applies to the whole video (select a clip to change just that one)."}</p>
+        <label>Behind me<select value={bgKind} onChange={(event) => setBgKind(event.target.value as typeof bgKind)}><option value="none">Original</option><option value="blur">Blurred</option><option value="color">A colour</option><option value="media">A photo or clip</option></select></label>
+        {bgKind === "color" && <label>Colour<input type="color" value={bgColor} onChange={(event) => setBgColor(event.target.value)} /></label>}
+        {bgKind === "media" && <label>Photo or clip<select value={bgAssetId} onChange={(event) => setBgAssetId(event.target.value)}><option value="">Choose (upload or add from Free stock below)</option>{brollAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.kind === "image" ? "Photo" : "Clip"} · {String(asset.metadata.filename ?? asset.id.slice(0, 8))}</option>)}</select></label>}
+        {bgKind !== "none" && <>
+          <label>Edge ({bgEdge === 0 ? "as found" : bgEdge > 0 ? "looser +" + bgEdge : "tighter " + bgEdge})<input type="range" min={-8} max={8} step={1} value={bgEdge} onChange={(event) => setBgEdge(Number(event.target.value))} /></label>
+          <label>Softness ({bgFeather})<input type="range" min={0} max={12} step={1} value={bgFeather} onChange={(event) => setBgFeather(Number(event.target.value))} /></label>
+        </>}
+        <button className="btn" disabled={busy || revision === 0 || (bgKind === "media" && !bgAssetId)} onClick={() => void applyEdit([{ type: "set-background", ...(selectedClip ? { clipId: selectedClip.id } : {}), background: bgKind, ...(bgKind === "color" ? { color: bgColor } : {}), ...(bgKind === "media" ? { assetId: bgAssetId } : {}), ...(bgKind !== "none" ? { edge: bgEdge, feather: bgFeather } : {}) }], bgKind === "none" ? "Original background" : "Background changed" + (selectedClip ? " on this clip" : ""))}>{bgKind === "none" ? "Use the original background" : selectedClip ? "Change this clip's background" : "Change the background"}</button>
         <h3>Cutaways</h3>
         <label className="btn file-btn">Upload a photo or clip<input type="file" accept="image/*,video/*" aria-label="Upload a photo or clip" onChange={(event) => void uploadAsset(event, "media")} disabled={busy} /></label>
         <label>Cutaway media<select value={brollAssetId} onChange={(event) => setBrollAssetId(event.target.value)}><option value="">Choose a photo or clip</option>{brollAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.kind === "image" ? "Photo" : "Clip"} · {String(asset.metadata.filename ?? asset.id.slice(0, 8))}</option>)}</select></label>
         <label>On screen for (seconds)<input type="number" min={0.5} max={60} step={0.5} value={brollSeconds} onChange={(event) => setBrollSeconds(Math.max(0.5, Number(event.target.value) || 3))} /></label>
-        <label>Style<select value={brollMode} onChange={(event) => setBrollMode(event.target.value as "full" | "pip")}><option value="full">Full frame</option><option value="pip">Corner inset</option></select></label>
+        <label>Style<select value={brollMode} onChange={(event) => setBrollMode(event.target.value as "full" | "pip" | "behind")}><option value="full">Full frame</option><option value="pip">Corner inset</option><option value="behind">Behind me</option></select></label>
         <button className="btn" onClick={() => addBroll()} disabled={busy || revision === 0 || !brollAssetId}>{selection ? "Add at the selected words" : "Add at the playhead"}</button>
         <h3>Free stock</h3>
         <StockSearch projectId={projectId} request={request} disabled={busy || revision === 0} orientation={(PLATFORMS[platform]?.width ?? 9) < (PLATFORMS[platform]?.height ?? 16) ? "portrait" : PLATFORMS[platform]?.width === PLATFORMS[platform]?.height ? "square" : "landscape"}
           onUse={(asset) => { setAssets((current) => [...current.filter((a) => a.id !== asset.id), asset as unknown as Asset]); setBrollAssetId(asset.id); addBroll(asset.id); }} />
-        {brolls.length > 0 && <ul className="item-list broll-list">{brolls.map((clip) => <li key={clip.id}><span>{formatSeconds(clip.timelineStartUs)}–{formatSeconds(clip.timelineEndUs)} · {assetName(clip.assetId)} · {clip.transform?.mode === "pip" ? "inset" : "full"}</span><button className="btn" onClick={() => void applyEdit([{ type: "remove-clip", clipId: clip.id, reason: "Cutaway removed" }], "Cutaway removed")} disabled={busy}>Remove</button></li>)}</ul>}
+        {brolls.length > 0 && <ul className="item-list broll-list">{brolls.map((clip) => <li key={clip.id}><span>{formatSeconds(clip.timelineStartUs)}–{formatSeconds(clip.timelineEndUs)} · {assetName(clip.assetId)} · {clip.transform?.mode === "pip" ? "inset" : clip.transform?.mode === "behind" ? "behind you" : "full"}</span><button className="btn" onClick={() => void applyEdit([{ type: "remove-clip", clipId: clip.id, reason: "Cutaway removed" }], "Cutaway removed")} disabled={busy}>Remove</button></li>)}</ul>}
       </div>
     </section>
     : mode === "audio" ? <section className="pane" aria-label="Audio">
@@ -1106,7 +1142,7 @@ function describeSuggestion(item: Suggestion): string {
   if (item.kind === "cut" && item.segments) return item.segments.length + " part" + (item.segments.length === 1 ? "" : "s") + ", " + Math.round(item.segments.reduce((sum, seg) => sum + seg.endS - seg.startS, 0)) + " seconds: " + item.segments.map((seg) => formatClock(seg.startS * 1e6) + "–" + formatClock(seg.endS * 1e6)).join(", ");
   if (item.kind === "music") return "Mood: " + (item.mood ?? "") + ", lowered while people speak";
   if (item.kind === "platform") return PLATFORMS[item.platform ?? ""]?.label ?? "";
-  if (item.kind === "look") return "Whole video";
+  if (item.kind === "look" || item.kind === "background") return "Whole video";
   if (typeof item.atS === "number" && item.kind !== "advice") return "At " + formatClock(item.atS * 1e6) + " of the original" + (item.durationS ? ", for " + item.durationS.toFixed(1) + " s" : "");
   return item.kind === "advice" ? item.reason : "";
 }

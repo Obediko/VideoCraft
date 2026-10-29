@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { AssetRepository } from "@videocraft/application";
 import type { Project, ProjectRevision, RenderJob, RenderJobRepository, RenderSettings, RendererPort } from "@videocraft/domain";
+import { assetsUsedBy } from "@videocraft/domain";
 import type { RenderTask } from "./index.js";
 
 export interface CloudflareQueueOptions {
@@ -42,7 +43,7 @@ export class CloudflareQueueRenderQueue implements RendererPort {
 
     const projectAssets = this.assets ? await this.assets.listForProject(input.project.id) : [];
     // Only the assets this revision uses are staged; a project's unused uploads are never downloaded.
-    const used = new Set(input.revision.timeline.tracks.flatMap((track) => track.clips.map((clip) => clip.assetId)));
+    const used = assetsUsedBy(input.revision.timeline);
     const assetStorageKeys = Object.fromEntries(projectAssets.filter((asset) => used.has(asset.id)).map((asset) => [asset.id, asset.storageKey]));
     const task: RenderTask = {
       jobId,
