@@ -171,7 +171,10 @@ export class RuleDirector implements Director {
     }
     chosen.sort((a, b) => a.startS - b.startS);
     const first = chosen[0];
-    const hook = first ? first.text.split(/(?<=[.!?])\s/)[0]!.slice(0, 60) : "";
+    // A short hook from the first line: at most seven whole words, no trailing punctuation.
+    const sentence = first ? first.text.split(/(?<=[.!?])\s/)[0]! : "";
+    const hookWords = sentence.split(/\s+/).filter(Boolean);
+    const hook = (hookWords.slice(0, 7).join(" ") + (hookWords.length > 7 ? "…" : "")).replace(/[,;:.!?]+(…)?$/, "$1");
     const raw = {
       summary: "Built-in rules picked the strongest moments for your brief and added a title, matching music and the " + (hints.platform === "tiktok" ? "9:16" : hints.platform === "youtube" ? "YouTube 16:9" : "1:1 feed") + " format. Add an OpenAI key for an AI director that also looks at your footage.",
       profile: { intent: input.brief, audience: "", channel: hints.channel, tone: hints.mood ?? "", targetSeconds: target },

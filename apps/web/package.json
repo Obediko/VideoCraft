@@ -7,9 +7,12 @@
     "build": "vite build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "dev": "vite",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test": "tsc -p tsconfig.test.json && node --test test/*.test.mjs"
   },
   "dependencies": {
+    "@fontsource/ibm-plex-mono": "^5.1.1",
+    "@fontsource/ibm-plex-sans": "^5.1.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
@@ -19,6 +22,7 @@
     "@types/react-dom": "^19.0.2",
     "@vitejs/plugin-react": "^4.3.4",
     "typescript": "^5.7.2",
-    "vite": "^6.0.5"
+    "vite": "^6.0.5",
+    "@videocraft/domain": "0.1.0"
   }
 }

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { cueOps, keptWords, rangeForWords, removeRangeOps, restoreRangeOps, secondsFromBrief, sourceToTimeline, timelineToSource, type Word } from "./story.js";
 
 type TimelineClip = {
   id: string;
@@ -15,19 +16,33 @@ type Timeline = { durationUs: number; tracks: Array<{ id: string; kind: string; 
 type Evidence = { source: string; reference: string; excerpt?: string; startUs?: number; endUs?: number };
 type Operation = { type: string; reason?: string; score?: number; sourceStartUs?: number; sourceEndUs?: number; [key: string]: unknown };
 type Proposal = { id: string; rationale: string; confidence: number; evidence: Evidence[]; operations: Operation[]; status: string };
-const PLATFORMS: Record<string, { label: string; width: number; height: number; fit: "cover" | "contain"; captionStyle: string }> = {
-  tiktok: { label: "TikTok / Reels / Shorts 9:16", width: 1080, height: 1920, fit: "cover", captionStyle: "bold-pop" },
-  youtube: { label: "YouTube 16:9", width: 1920, height: 1080, fit: "contain", captionStyle: "clean" },
-  square: { label: "Feed 1:1", width: 1080, height: 1080, fit: "cover", captionStyle: "clean" },
-  preview: { label: "Quick preview 720p", width: 1280, height: 720, fit: "contain", captionStyle: "clean" },
+const PLATFORMS: Record<string, { label: string; short: string; width: number; height: number; fit: "cover" | "contain"; captionStyle: string }> = {
+  tiktok: { label: "Reel / Short / TikTok · 9:16", short: "Short 9:16", width: 1080, height: 1920, fit: "cover", captionStyle: "bold-pop" },
+  youtube: { label: "YouTube · 16:9", short: "YouTube 16:9", width: 1920, height: 1080, fit: "contain", captionStyle: "clean" },
+  square: { label: "Feed · 1:1", short: "Feed 1:1", width: 1080, height: 1080, fit: "cover", captionStyle: "clean" },
+  preview: { label: "Quick preview · 720p", short: "Preview 720p", width: 1280, height: 720, fit: "contain", captionStyle: "clean" },
 };
 type Suggestion = { id: string; kind: string; title: string; reason: string; text?: string; subtitle?: string; atS?: number; durationS?: number; segments?: Array<{ startS: number; endS: number }>; mood?: string; platform?: string; assetId?: string; mode?: string };
 type DirectorPlan = { summary: string; profile: { intent: string; audience: string; channel: string; tone: string; targetSeconds: number }; suggestions: Suggestion[]; source: "ai" | "rules"; model?: string; note?: string };
-const KIND_LABEL: Record<string, string> = { cut: "The cut", title: "Title", callout: "Callout", "lower-third": "Name caption", music: "Music", broll: "Cutaway", progress: "Progress bar", platform: "Format", advice: "Tip", look: "Look", zooms: "Zooms", transitions: "Transitions", sfx: "Sound effects" };
+const PLAN_GROUPS: Array<{ name: string; kinds: string[] }> = [
+  { name: "Story", kinds: ["cut"] },
+  { name: "Text on screen", kinds: ["title", "callout", "lower-third", "progress"] },
+  { name: "Look", kinds: ["look", "zooms", "broll"] },
+  { name: "Sound", kinds: ["music", "sfx"] },
+  { name: "Pacing", kinds: ["transitions"] },
+  { name: "Format", kinds: ["platform"] },
+  { name: "Tips from the director", kinds: ["advice"] },
+];
 const LOOK_LABEL: Record<string, string> = { none: "Natural (no look)", warm: "Warm", clean: "Clean & crisp", cinematic: "Cinematic", vivid: "Vivid", soft: "Soft", mono: "Black & white" };
 const ZOOM_LABEL: Record<string, string> = { none: "No zoom", punch: "Punch in (tighter framing)", push: "Slow push-in" };
 const TRANSITION_LABEL: Record<string, string> = { cut: "Cut", "dip-black": "Dip to black", "dip-white": "Dip to white", flash: "Flash" };
 const SFX_LABEL: Record<string, string> = { whoosh: "Whoosh", pop: "Pop", hit: "Boom", riser: "Riser" };
+const MODES = [
+  { id: "story", label: "Story" }, { id: "captions", label: "Captions" }, { id: "visuals", label: "Visuals" },
+  { id: "audio", label: "Audio" }, { id: "brand", label: "Brand" }, { id: "review", label: "Review" },
+] as const;
+type Mode = (typeof MODES)[number]["id"];
+type Screen = "projects" | "describe" | "plan" | "edit" | "check" | "export";
 /** Ruler ticks every 1/2/5/10/15/30/60 s so that there are about 6–12 of them. */
 function rulerTicks(durationUs: number): number[] {
   const total = Math.max(1, durationUs / 1e6);
@@ -39,9 +54,11 @@ type CheckIssue = { id: string; severity: "fix" | "warn" | "info"; kind: string;
 type CheckResult = { issues: CheckIssue[]; ai: boolean; scanned: boolean; note?: string; revision: number };
 type Project = { id: string; name: string; revision: number; createdAt: string; updatedAt: string };
 type Asset = { id: string; kind: string; storageKey: string; durationUs?: number; metadata: Record<string, string | number | boolean> };
+type Segment = { id: string; startUs: number; endUs: number; text: string; words: Word[] };
 
 const API = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
 const LAST_PROJECT_KEY = "videocraft.lastProject";
+const LAST_SCREEN_KEY = "videocraft.lastScreen";
 // One refresh at a time per tab: the server rotates the session on every refresh, so parallel refreshes would race.
 let refreshInFlight: Promise<{ accessToken: string; user: { email: string } }> | null = null;
 function refreshSession(): Promise<{ accessToken: string; user: { email: string } }> {
@@ -50,7 +67,9 @@ function refreshSession(): Promise<{ accessToken: string; user: { email: string 
     .finally(() => { setTimeout(() => { refreshInFlight = null; }, 0); });
   return refreshInFlight;
 }
-function rememberProject(id: string) { try { localStorage.setItem(LAST_PROJECT_KEY, id); } catch { /* storage unavailable */ } }
+function remember(key: string, value: string) { try { localStorage.setItem(key, value); } catch { /* storage unavailable */ } }
+function recall(key: string): string { try { return localStorage.getItem(key) ?? ""; } catch { return ""; } }
+function kindOfFile(file: File): string { return file.type.startsWith("audio/") ? "audio" : file.type.startsWith("image/") ? "image" : "video"; }
 
 export function App() {
   const [token, setToken] = useState("");
@@ -58,29 +77,24 @@ export function App() {
   const [password, setPassword] = useState("");
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [userEmail, setUserEmail] = useState("");
+  const [sessionChecked, setSessionChecked] = useState(false);
+  const [screen, setScreenState] = useState<Screen>("projects");
+  const [mode, setMode] = useState<Mode>("story");
   const [projectId, setProjectId] = useState("");
-  const [projectName, setProjectName] = useState(() => "Video " + new Date().toLocaleDateString(undefined, { day: "numeric", month: "short" }) + " " + new Date().toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }));
+  const [projectName, setProjectName] = useState("");
   const [projects, setProjects] = useState<Project[]>([]);
   const [assets, setAssets] = useState<Asset[]>([]);
-  const [intent, setIntent] = useState("Create a clear short-form explainer");
-  const [audience, setAudience] = useState("People discovering the product");
-  const [channel, setChannel] = useState("short-form");
-  const [timeline, setTimeline] = useState<Timeline>({ durationUs: 30_000_000, tracks: [] });
-  const [assetId, setAssetId] = useState("");
+  const [timeline, setTimeline] = useState<Timeline>({ durationUs: 0, tracks: [] });
   const [proposal, setProposal] = useState<Proposal | null>(null);
   const [revision, setRevision] = useState(0);
   const [status, setStatus] = useState("Ready");
-  const [uploadKind, setUploadKind] = useState("video");
   const [renderJobId, setRenderJobId] = useState("");
   const [renderJobStatus, setRenderJobStatus] = useState("");
   const [renderUrl, setRenderUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [selectedClipId, setSelectedClipId] = useState("");
-  const [targetSeconds, setTargetSeconds] = useState(30);
   const [platform, setPlatform] = useState("tiktok");
   const [captionDrafts, setCaptionDrafts] = useState<Record<string, string>>({});
-  const [segmentStart, setSegmentStart] = useState("0");
-  const [segmentEnd, setSegmentEnd] = useState("10");
   const [previewMode, setPreviewMode] = useState<"source" | "render">("source");
   const [sourceUrls, setSourceUrls] = useState<Record<string, string>>({});
   const playerRef = useRef<HTMLVideoElement | null>(null);
@@ -98,13 +112,21 @@ export function App() {
   const [planText, setPlanText] = useState<Record<string, string>>({});
   const [check, setCheck] = useState<CheckResult | null>(null);
   const [fixPicked, setFixPicked] = useState<Record<string, boolean>>({});
+  const [segments, setSegments] = useState<Segment[]>([]);
+  const [segmentsFor, setSegmentsFor] = useState("");
+  const [transcribing, setTranscribing] = useState<{ assetId: string; promise: Promise<void> } | null>(null);
+  const [selection, setSelection] = useState<{ from: number; to: number } | null>(null);
+  const [newName, setNewName] = useState("");
+  const setScreen = (next: Screen) => { setScreenState(next); remember(LAST_SCREEN_KEY, next); };
 
   const videoTrack = useMemo(() => timeline.tracks.find((track) => track.kind === "video"), [timeline]);
   const videoClips = useMemo(() => [...(videoTrack?.clips ?? [])].sort((a, b) => a.timelineStartUs - b.timelineStartUs), [videoTrack]);
   const captionCues = useMemo(() => timeline.tracks.filter((track) => track.kind === "caption").flatMap((track) => track.clips).sort((a, b) => a.timelineStartUs - b.timelineStartUs), [timeline]);
+  const allClips = timeline.tracks.flatMap((track) => track.clips.map((clip) => ({ clip, kind: track.kind })));
+  const selected = allClips.find((item) => item.clip.id === selectedClipId);
   const selectedClip = videoClips.find((clip) => clip.id === selectedClipId);
   const musicClip = timeline.tracks.find((track) => track.kind === "audio")?.clips.find((clip) => clip.transform?.role === "music");
-  const musicName = musicClip ? String(assets.find((asset) => asset.id === musicClip.assetId)?.metadata.filename ?? musicClip.assetId.slice(0, 8)) : "";
+  const musicName = musicClip ? String(assets.find((asset) => asset.id === musicClip.assetId)?.metadata.filename ?? "music") : "";
   const audioAssets = assets.filter((asset) => asset.kind === "audio");
   const [musicAssetId, setMusicAssetId] = useState("");
   const [brollAssetId, setBrollAssetId] = useState("");
@@ -116,7 +138,7 @@ export function App() {
   const [gfxSubtitle, setGfxSubtitle] = useState("");
   const [gfxSeconds, setGfxSeconds] = useState(3);
   const [gfxPosition, setGfxPosition] = useState<"top" | "center" | "bottom">("top");
-  const [gfxColor, setGfxColor] = useState("#F5A524");
+  const [gfxColor, setGfxColor] = useState("#A8C49A");
   const [gfxDrafts, setGfxDrafts] = useState<Record<string, string>>({});
   const [sfxKind, setSfxKind] = useState("whoosh");
   const overlayClips = timeline.tracks.filter((track) => track.kind === "overlay").flatMap((track) => track.clips);
@@ -125,9 +147,16 @@ export function App() {
   const sfxClips = timeline.tracks.filter((track) => track.kind === "audio").flatMap((track) => track.clips).filter((clip) => clip.transform?.role === "sfx");
   const looks = new Set(videoClips.map((clip) => String(clip.transform?.look ?? "none")));
   const wholeLook = looks.size === 1 ? [...looks][0]! : "mixed";
-  const brolls = timeline.tracks.filter((track) => track.kind === "overlay").flatMap((track) => track.clips).filter((clip) => clip.transform?.role === "broll");
-  const sourceAssetId = selectedClip?.assetId ?? videoClips[0]?.assetId ?? "";
+  const brolls = overlayClips.filter((clip) => clip.transform?.role === "broll");
+  const mainVideo = assets.find((asset) => asset.id === videoClips[0]?.assetId && asset.kind === "video") ?? [...assets].reverse().find((asset) => asset.kind === "video");
+  const sourceAssetId = selectedClip?.assetId ?? videoClips[0]?.assetId ?? mainVideo?.id ?? "";
   const sourceUrl = sourceUrls[sourceAssetId] ?? "";
+  const words = useMemo(() => segments.flatMap((segment) => segment.words).sort((a, b) => a.startUs - b.startUs), [segments]);
+  const kept = useMemo(() => (segmentsFor ? keptWords(words, videoClips, segmentsFor) : []), [words, videoClips, segmentsFor]);
+  const keptUs = videoClips.reduce((sum, clip) => sum + clip.sourceEndUs - clip.sourceStartUs, 0);
+  const currentProject = projects.find((project) => project.id === projectId);
+  const hasVideo = assets.some((asset) => asset.kind === "video");
+  const edited = revision > 0 && videoClips.length > 0;
 
   // Signed playback URLs for the original upload; fetched once per asset (they last an hour).
   useEffect(() => {
@@ -139,7 +168,7 @@ export function App() {
         if (cancelled) return;
         // Formats browsers cannot play get a preview proxy; it is generated after upload.
         if (result.pending) { setSourceNote("Preparing a browser preview of this video…"); timer = setTimeout(() => setSourceRetry((n) => n + 1), (result.retryAfterSeconds ?? 5) * 1000); return; }
-        setSourceNote(result.proxy ? "Previewing a 720p proxy; exports use the original" : "");
+        setSourceNote(result.proxy ? "Previewing a 720p copy; exports use the original" : "");
         setSourceUrls((current) => ({ ...current, [sourceAssetId]: /^https?:\/\//.test(result.url) ? result.url : API + result.url }));
       })
       .catch(() => undefined);
@@ -152,6 +181,15 @@ export function App() {
     if (player && selectedClip && sourceUrl && previewMode === "source") player.currentTime = selectedClip.sourceStartUs / 1_000_000;
   }, [selectedClipId, sourceUrl, previewMode]);
 
+  // The transcript of the main video, for editing by words.
+  useEffect(() => {
+    const id = videoClips[0]?.assetId ?? mainVideo?.id;
+    if (!token || !projectId || !id || segmentsFor === id || transcribing?.assetId === id) return;
+    let cancelled = false;
+    request("/v1/projects/" + projectId + "/assets/" + id + "/transcript").then((result) => { if (!cancelled && result.segments?.length) { setSegments(result.segments); setSegmentsFor(id); } }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [token, projectId, videoClips[0]?.assetId, mainVideo?.id, segmentsFor, transcribing]);
+
   async function refreshLearned() {
     if (!token) return;
     try { setLearned(await request("/v1/me/preferences")); } catch { setLearned(null); }
@@ -162,9 +200,13 @@ export function App() {
     catch (error) { setStatus(errorMessage(error)); }
     finally { setBusy(false); }
   }
-  // What the highlight finder has learned is refreshed whenever the person's choices could have changed it.
   useEffect(() => { void refreshLearned(); }, [token, proposal?.status, revision, renderJobId]);
 
+  function seekSource(sourceUs: number) {
+    const player = playerRef.current;
+    setPreviewMode("source");
+    if (player) player.currentTime = sourceUs / 1_000_000;
+  }
   function playSelectedClip() {
     const player = playerRef.current;
     if (!player || !selectedClip) { setStatus("Select a clip to play it"); return; }
@@ -181,55 +223,47 @@ export function App() {
     const at = Math.round(player.currentTime * 1_000_000);
     if (edge === "start") trimSelectedClip(at - selectedClip.sourceStartUs, 0); else trimSelectedClip(0, at - selectedClip.sourceEndUs);
   }
-  /** B-roll is anchored to the source moment under the playhead (or the selected clip's start). */
-  function addBroll() {
-    const anchorClip = selectedClip ?? videoClips[0];
-    if (!anchorClip) { setStatus("Add a video clip first"); return; }
-    const player = playerRef.current;
-    const playheadUs = player && previewMode === "source" && sourceUrl ? Math.round(player.currentTime * 1_000_000) : anchorClip.sourceStartUs;
-    // A playhead outside the cut falls back to the start of the selected clip.
-    const host = videoClips.find((clip) => clip.assetId === anchorClip.assetId && playheadUs >= clip.sourceStartUs && playheadUs < clip.sourceEndUs);
-    const anchorUs = host ? playheadUs : anchorClip.sourceStartUs;
-    void applyEdit([{ type: "add-broll", assetId: brollAssetId, anchorAssetId: anchorClip.assetId, anchorSourceUs: anchorUs, durationUs: Math.round(brollSeconds * 1_000_000), mode: brollMode }], host ? "B-roll added" : "B-roll added at the start of the selected clip");
-  }
-  /** Composes an instrumental for the saved cut (its length, lifting at its cuts) and lays it under the video. */
-  async function generateMusicBed() {
-    if (!projectId || revision === 0) { setStatus("Accept highlights or save a revision first, so the music can match the cut"); return; }
-    setBusy(true);
-    setStatus("Composing music for this cut…");
-    try {
-      const result = await request("/v1/projects/" + projectId + "/music/generate", { method: "POST", body: JSON.stringify({ revision, mood: musicMood, brief: { intent, audience, channel }, seed: Math.floor(Math.random() * 1_000_000_000) }) });
-      setAssets((current) => [...current.filter((asset) => asset.id !== result.asset.id), result.asset]);
-      setMusicAssetId(result.asset.id);
-      setBusy(false);
-      await applyEdit([{ type: "set-music", assetId: result.asset.id, volumeDb: musicVolume, duck: musicDuck }], "Music added: " + result.music.description);
-    } catch (error) { setStatus(errorMessage(error)); setBusy(false); }
-  }
-
-  /** Anchor point under the playhead (or the selected clip's start), shared by b-roll and graphics. */
-  function playheadAnchor(): { anchorAssetId: string; anchorSourceUs: number; atPlayhead: boolean } | undefined {
+  /** Anchor point: the selected words, else the playhead, else the selected clip's start. */
+  function anchorPoint(): { anchorAssetId: string; anchorSourceUs: number; where: string } | undefined {
+    if (selection && segmentsFor && words[selection.from]) {
+      const at = words[Math.min(selection.from, selection.to)]!.startUs;
+      if (sourceToTimeline(videoClips, segmentsFor, at) !== undefined) return { anchorAssetId: segmentsFor, anchorSourceUs: at, where: "at the selected words" };
+    }
     const anchorClip = selectedClip ?? videoClips[0];
     if (!anchorClip) return undefined;
     const player = playerRef.current;
     const playheadUs = player && previewMode === "source" && sourceUrl ? Math.round(player.currentTime * 1_000_000) : anchorClip.sourceStartUs;
     const inside = videoClips.some((clip) => clip.assetId === anchorClip.assetId && playheadUs >= clip.sourceStartUs && playheadUs < clip.sourceEndUs);
-    return { anchorAssetId: anchorClip.assetId, anchorSourceUs: inside ? playheadUs : anchorClip.sourceStartUs, atPlayhead: inside };
+    return { anchorAssetId: anchorClip.assetId, anchorSourceUs: inside ? playheadUs : anchorClip.sourceStartUs, where: inside ? "at the playhead" : "at the start of the selected clip" };
+  }
+  function addBroll() {
+    const anchor = anchorPoint();
+    if (!anchor) { setStatus("Add a video clip first"); return; }
+    void applyEdit([{ type: "add-broll", assetId: brollAssetId, anchorAssetId: anchor.anchorAssetId, anchorSourceUs: anchor.anchorSourceUs, durationUs: Math.round(brollSeconds * 1_000_000), mode: brollMode }], "Cutaway added " + anchor.where);
   }
   function addSoundEffect() {
-    const anchor = playheadAnchor();
+    const anchor = anchorPoint();
     if (!anchor) { setStatus("Add a video clip first"); return; }
-    void applyEdit([{ type: "add-sfx", kind: sfxKind, anchorAssetId: anchor.anchorAssetId, anchorSourceUs: anchor.anchorSourceUs }], (SFX_LABEL[sfxKind] ?? "Sound") + (anchor.atPlayhead ? " added" : " added at the start of the selected clip"));
+    void applyEdit([{ type: "add-sfx", kind: sfxKind, anchorAssetId: anchor.anchorAssetId, anchorSourceUs: anchor.anchorSourceUs }], (SFX_LABEL[sfxKind] ?? "Sound") + " added " + anchor.where);
   }
-  function addGraphic() {
-    const anchor = playheadAnchor();
+  function addGraphic(text = gfxText, kind = gfxKind) {
+    const anchor = anchorPoint();
     if (!anchor) { setStatus("Add a video clip first"); return; }
-    if (!gfxText.trim()) { setStatus("Enter the graphic's text"); return; }
-    void applyEdit([{ type: "add-graphic", kind: gfxKind, text: gfxText.trim(), ...(gfxSubtitle.trim() ? { subtitle: gfxSubtitle.trim() } : {}), anchorAssetId: anchor.anchorAssetId, anchorSourceUs: anchor.anchorSourceUs, durationUs: Math.round(gfxSeconds * 1_000_000), position: gfxKind === "lower-third" ? "bottom" : gfxPosition, color: gfxColor }], anchor.atPlayhead ? "Graphic added" : "Graphic added at the start of the selected clip").then((ok) => { if (ok) { setGfxText(""); setGfxSubtitle(""); } });
+    if (!text.trim()) { setStatus("Enter the text first"); return; }
+    void applyEdit([{ type: "add-graphic", kind, text: text.trim(), ...(gfxSubtitle.trim() && kind !== "callout" ? { subtitle: gfxSubtitle.trim() } : {}), anchorAssetId: anchor.anchorAssetId, anchorSourceUs: anchor.anchorSourceUs, durationUs: Math.round(gfxSeconds * 1_000_000), position: kind === "lower-third" ? "bottom" : gfxPosition, color: gfxColor }], (kind === "title" ? "Title" : kind === "callout" ? "Callout" : "Name caption") + " added " + anchor.where).then((ok) => { if (ok) { setGfxText(""); setGfxSubtitle(""); } });
   }
-  function markSegmentFromPlayhead(edge: "start" | "end") {
-    const player = playerRef.current;
-    if (!player) return;
-    (edge === "start" ? setSegmentStart : setSegmentEnd)(player.currentTime.toFixed(2));
+  /** Composes an instrumental for the saved cut (its length, lifting at its cuts) and lays it under the video. */
+  async function generateMusicBed() {
+    if (!projectId || revision === 0) { setStatus("Make a cut first, so the music can match it"); return; }
+    setBusy(true);
+    setStatus("Composing music for this cut…");
+    try {
+      const result = await request("/v1/projects/" + projectId + "/music/generate", { method: "POST", body: JSON.stringify({ revision, mood: musicMood, brief: { intent: brief || projectName, audience: "", channel: platform === "youtube" ? "youtube" : "short-form" }, seed: Math.floor(Math.random() * 1_000_000_000) }) });
+      setAssets((current) => [...current.filter((asset) => asset.id !== result.asset.id), result.asset]);
+      setMusicAssetId(result.asset.id);
+      setBusy(false);
+      await applyEdit([{ type: "set-music", assetId: result.asset.id, volumeDb: musicVolume, duck: musicDuck }], "Music added: " + result.music.description);
+    } catch (error) { setStatus(errorMessage(error)); setBusy(false); }
   }
 
   async function request(path: string, init: RequestInit = {}, accessToken = token, retried = false): Promise<any> {
@@ -259,19 +293,12 @@ export function App() {
     } catch (error) { setStatus(errorMessage(error)); }
     finally { setBusy(false); }
   }
+  useEffect(() => {
+    if (token) return;
+    refreshSession().then((result) => { setToken(result.accessToken); setUserEmail(result.user.email); }).catch(() => undefined).finally(() => setSessionChecked(true));
+  }, []);
 
-  async function restoreSession() {
-    try {
-      const result = await refreshSession();
-      setToken(result.accessToken);
-      setUserEmail(result.user.email);
-    } catch { /* A first visit has no refresh session. */ }
-  }
-
-  useEffect(() => { if (!token) void restoreSession(); }, []);
-
-  // After signing in (or a page reload), reopen the project the person was working on instead of
-  // showing an empty editor that invites them to create yet another project.
+  // After signing in (or a reload), come back to the project and step the person was on.
   const [projectsLoaded, setProjectsLoaded] = useState(false);
   useEffect(() => {
     if (!token || projectId) return;
@@ -281,109 +308,107 @@ export function App() {
       const list: Project[] = result.projects ?? [];
       setProjects(list);
       setProjectsLoaded(true);
-      let remembered = "";
-      try { remembered = localStorage.getItem(LAST_PROJECT_KEY) ?? ""; } catch { /* storage unavailable */ }
-      const target = list.find((project) => project.id === remembered) ?? [...list].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
-      if (target) void openProject(target);
+      const target = list.find((project) => project.id === recall(LAST_PROJECT_KEY));
+      const last = recall(LAST_SCREEN_KEY) as Screen;
+      if (target && last && last !== "projects") void openProject(target, last);
     }).catch(() => { if (!cancelled) setProjectsLoaded(true); });
     return () => { cancelled = true; };
   }, [token]);
 
   async function signOut() {
     await request("/auth/logout", { method: "POST" }).catch(() => undefined);
-    setToken("");
-    setUserEmail("");
-    setProjects([]);
-    setProjectId("");
+    setToken(""); setUserEmail(""); setProjects([]); setProjectId(""); setScreen("projects");
     setStatus("Signed out");
   }
 
+  function resetProjectState() {
+    setAssets([]); setTimeline({ durationUs: 0, tracks: [] }); setRevision(0); setProposal(null);
+    setPlan(null); setPlanApplied(false); setCheck(null); setSegments([]); setSegmentsFor(""); setSelection(null); setSelectedClipId("");
+    setRenderJobId(""); setRenderJobStatus(""); setRenderUrl(""); setBrief("");
+  }
+
   async function createProject() {
+    const name = (newName.trim() || "Video " + new Date().toLocaleDateString(undefined, { day: "numeric", month: "short" }) + " " + new Date().toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })).replace(/\s+/g, " ");
     // Same rule as the server: names are unique per person, ignoring case and extra spaces.
-    const key = projectName.trim().replace(/\s+/g, " ").toLowerCase();
-    const clash = projects.find((project) => project.name.trim().replace(/\s+/g, " ").toLowerCase() === key);
-    if (clash) { setStatus("You already have a project called \"" + clash.name + "\". Choose a different name, or open it under Existing project."); return; }
+    const clash = projects.find((project) => project.name.trim().replace(/\s+/g, " ").toLowerCase() === name.toLowerCase());
+    if (clash) { setStatus("You already have a video called \"" + clash.name + "\". Choose a different name."); return; }
     setBusy(true);
     try {
-      const result = await request("/v1/projects", { method: "POST", body: JSON.stringify({ name: projectName }) });
-      setProjectId(result.project.id);
-      rememberProject(result.project.id);
-      setAssets([]);
-      setTimeline({ durationUs: 30_000_000, tracks: [] });
-      setRevision(0);
-      setProposal(null);
+      const result = await request("/v1/projects", { method: "POST", body: JSON.stringify({ name }) });
+      resetProjectState();
+      setProjectId(result.project.id); setProjectName(result.project.name); remember(LAST_PROJECT_KEY, result.project.id);
       setProjects((current) => [...current.filter((project) => project.id !== result.project.id), result.project]);
+      setNewName(""); setScreen("describe");
       setStatus("Project created");
     } catch (error) { setStatus(errorMessage(error)); }
     finally { setBusy(false); }
   }
 
   async function deleteProject() {
-    const project = projects.find((item) => item.id === projectId);
+    const project = currentProject;
     if (!project || deleteConfirm.trim().toLowerCase() !== project.name.trim().toLowerCase()) return;
     setBusy(true);
     try {
       const result = await request("/v1/projects/" + project.id, { method: "DELETE", body: JSON.stringify({ confirmName: deleteConfirm }) });
       setProjects((current) => current.filter((item) => item.id !== project.id));
-      setProjectId(""); setAssets([]); setTimeline({ durationUs: 30_000_000, tracks: [] }); setRevision(0);
-      setProposal(null); setPlan(null); setPlanApplied(false); setCheck(null);
-      setRenderJobId(""); setRenderJobStatus(""); setRenderUrl(""); setSourceUrls({}); setDeleteConfirm("");
-      try { if (localStorage.getItem(LAST_PROJECT_KEY) === project.id) localStorage.removeItem(LAST_PROJECT_KEY); } catch { /* storage unavailable */ }
+      resetProjectState(); setProjectId(""); setSourceUrls({}); setDeleteConfirm(""); setScreen("projects");
+      if (recall(LAST_PROJECT_KEY) === project.id) remember(LAST_PROJECT_KEY, "");
       setStatus("Deleted “" + project.name + "” and its " + result.removedObjects + " stored file" + (result.removedObjects === 1 ? "" : "s"));
     } catch (error) { setStatus(errorMessage(error)); }
     finally { setBusy(false); }
   }
 
-  async function refreshProjects() {
-    if (!token) { setStatus("Enter an API token first"); return; }
+  async function openProject(project: Project, preferred?: Screen) {
     setBusy(true);
     try {
-      const result = await request("/v1/projects");
-      setProjects(result.projects);
-      setStatus(result.projects.length ? "Projects refreshed" : "No projects found");
-    } catch (error) { setStatus(errorMessage(error)); }
-    finally { setBusy(false); }
-  }
-
-  async function openProject(project: Project) {
-    setBusy(true);
-    try {
-      setProjectId(project.id);
-      rememberProject(project.id);
-      setProjectName(project.name);
-      setRevision(project.revision);
-      setProposal(null);
-      setPlan(null); setPlanApplied(false); setCheck(null);
-      setRenderJobId("");
-      setRenderJobStatus("");
-      setRenderUrl("");
+      resetProjectState();
+      setProjectId(project.id); remember(LAST_PROJECT_KEY, project.id); setProjectName(project.name); setRevision(project.revision);
       const [assetResult, revisionResult] = await Promise.all([
         request("/v1/projects/" + project.id + "/assets"),
         project.revision > 0 ? request("/v1/projects/" + project.id + "/revisions/" + project.revision) : Promise.resolve(null),
       ]);
       setAssets(assetResult.assets);
-      if (revisionResult) {
-        setTimeline(revisionResult.revision.timeline);
-      } else {
-        setTimeline({ durationUs: 30_000_000, tracks: [] });
-      }
+      const opened: Timeline = revisionResult ? revisionResult.revision.timeline : { durationUs: 0, tracks: [] };
+      setTimeline(opened);
+      if (revisionResult?.revision.tailoring?.intent) setBrief(revisionResult.revision.tailoring.intent);
+      const hasCut = (opened.tracks.find((track) => track.kind === "video")?.clips.length ?? 0) > 0;
+      const target: Screen = preferred && (hasCut || preferred === "describe") ? preferred : hasCut ? "edit" : "describe";
+      setScreen(target === "plan" ? (hasCut ? "edit" : "describe") : target);
       setStatus("Opened " + project.name);
     } catch (error) { setStatus(errorMessage(error)); }
     finally { setBusy(false); }
   }
 
-  async function uploadAsset(event: { currentTarget: HTMLInputElement }) {
+  /** Transcription starts as soon as a video is uploaded, so it runs while the person describes the video. */
+  function startTranscription(assetId: string, pid = projectId) {
+    const base = "/v1/projects/" + pid + "/assets/" + assetId + "/transcript";
+    const promise = (async () => {
+      const existing = await request(base).catch(() => ({ segments: [] }));
+      const result = existing.segments?.length ? existing : await request(base, { method: "POST" });
+      if (!result.segments?.length) throw new Error("No speech was found in this video");
+      setSegments(result.segments); setSegmentsFor(assetId);
+    })();
+    const tracked = promise.finally(() => setTranscribing((current) => (current?.promise === tracked ? null : current)));
+    setTranscribing({ assetId, promise: tracked });
+    tracked.catch((error) => setStatus(errorMessage(error)));
+    return tracked;
+  }
+
+  async function uploadAsset(event: { currentTarget: HTMLInputElement }, purpose: "main" | "media") {
     const input = event.currentTarget; // React clears currentTarget once the handler yields
     const file = input.files?.[0];
-    if (!file || !projectId) { setStatus(projectId ? "Choose a media file first" : "Create a project first"); return; }
+    if (!file || !projectId) { setStatus(projectId ? "Choose a file first" : "Create a project first"); return; }
+    const kind = purpose === "main" ? "video" : kindOfFile(file);
     setBusy(true);
+    setStatus("Uploading " + file.name + "…");
     try {
       const form = new FormData(); form.append("file", file);
-      const response = await fetch(API + "/v1/projects/" + projectId + "/assets/upload?kind=" + encodeURIComponent(uploadKind), { method: "POST", body: form, headers: token ? { authorization: "Bearer " + token } : {} });
+      const response = await fetch(API + "/v1/projects/" + projectId + "/assets/upload?kind=" + encodeURIComponent(kind), { method: "POST", body: form, headers: token ? { authorization: "Bearer " + token } : {} });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error?.message ?? "Upload failed");
       setAssets((current) => [...current.filter((asset) => asset.id !== body.asset.id), body.asset]);
-      setAssetId(body.asset.id); setStatus("Uploaded asset " + body.asset.id.slice(0, 8));
+      setStatus("Uploaded " + file.name);
+      if (purpose === "main") void startTranscription(body.asset.id);
     } catch (error) { setStatus(errorMessage(error)); }
     finally { setBusy(false); input.value = ""; }
   }
@@ -403,31 +428,6 @@ export function App() {
     setStatus("Render is still running; check back in a moment");
   }
 
-  function addClip() {
-    if (!assetId.trim()) { setStatus("Register an asset and enter its asset ID first"); return; }
-    const videoEndUs = videoClips.reduce((end, existing) => Math.max(end, existing.timelineEndUs), 0);
-    const knownAsset = assets.find((asset) => asset.id === assetId.trim());
-    const assetLengthUs = knownAsset?.durationUs && knownAsset.durationUs > 0 ? knownAsset.durationUs : 10_000_000;
-    const clip: TimelineClip = {
-      id: "clip-" + Date.now(),
-      assetId: assetId.trim(),
-      sourceStartUs: 0,
-      sourceEndUs: assetLengthUs,
-      timelineStartUs: videoEndUs,
-      timelineEndUs: videoEndUs + assetLengthUs,
-    };
-    setSelectedClipId(clip.id);
-    setTimeline((current) => ({
-      ...current,
-      durationUs: Math.max(current.durationUs, videoEndUs + assetLengthUs),
-      tracks: current.tracks.some((track) => track.kind === "video")
-        ? current.tracks.map((track) => track.kind === "video" ? { ...track, clips: [...track.clips, clip] } : track)
-        : [...current.tracks, { id: "video-1", kind: "video", clips: [clip] }],
-    }));
-    setStatus("Clip added to the non-destructive timeline");
-  }
-
-  /** Saved revisions are edited on the server (ripple edit, captions follow the cuts); unsaved drafts edit locally. */
   async function applyEdit(operations: Array<Record<string, unknown>>, message: string) {
     if (!projectId || !revision) return false;
     setBusy(true);
@@ -443,133 +443,64 @@ export function App() {
   }
 
   function nudgeSelectedClip(direction: -1 | 1, clipId = selectedClipId) {
-    if (!clipId) { setStatus("Select a clip first"); return; }
-    const message = direction < 0 ? "Clip moved earlier" : "Clip moved later";
-    if (revision > 0) {
-      const index = videoClips.findIndex((clip) => clip.id === clipId);
-      const target = index + direction;
-      if (index < 0 || target < 0 || target >= videoClips.length) { setStatus("Clip is already at the " + (direction < 0 ? "start" : "end")); return; }
-      const order = videoClips.map((clip) => clip.id);
-      [order[index], order[target]] = [order[target] as string, order[index] as string];
-      void applyEdit([{ type: "reorder-clips", clipIds: order }], message);
-      return;
-    }
-    setTimeline((current) => ({
-      ...current,
-      tracks: current.tracks.map((track) => ({
-        ...track,
-        clips: track.clips.map((clip) => {
-          if (clip.id !== clipId) return clip;
-          const duration = clip.timelineEndUs - clip.timelineStartUs;
-          const nextStart = Math.max(0, Math.min(current.durationUs - duration, clip.timelineStartUs + direction * 500_000));
-          return { ...clip, timelineStartUs: nextStart, timelineEndUs: nextStart + duration };
-        }),
-      })),
-    }));
-    setStatus(message);
+    const index = videoClips.findIndex((clip) => clip.id === clipId);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= videoClips.length) { setStatus("That part is already at the " + (direction < 0 ? "start" : "end")); return; }
+    const order = videoClips.map((clip) => clip.id);
+    [order[index], order[target]] = [order[target] as string, order[index] as string];
+    void applyEdit([{ type: "reorder-clips", clipIds: order }], direction < 0 ? "Clip moved earlier" : "Clip moved later");
   }
-
   function removeSelectedClip(clipId = selectedClipId) {
-    if (!clipId) { setStatus("Select a clip first"); return; }
+    if (!clipId) return;
     setSelectedClipId("");
-    if (revision > 0) { void applyEdit([{ type: "remove-clip", clipId, reason: "Removed in the editor" }], "Clip removed"); return; }
-    setTimeline((current) => ({ ...current, tracks: current.tracks.map((track) => ({ ...track, clips: track.clips.filter((clip) => clip.id !== clipId) })).filter((track) => track.clips.length > 0) }));
-    setStatus("Clip removed from the non-destructive timeline");
+    void applyEdit([{ type: "remove-clip", clipId, reason: "Removed in the editor" }], "Removed");
   }
-
   function trimSelectedClip(startDeltaUs: number, endDeltaUs: number) {
     if (!selectedClip) { setStatus("Select a clip first"); return; }
-    if (revision === 0) { setStatus("Save a revision before trimming"); return; }
     const source = assets.find((asset) => asset.id === selectedClip.assetId);
     const start = Math.max(0, selectedClip.sourceStartUs + startDeltaUs);
     const end = Math.min(source?.durationUs ?? Number.MAX_SAFE_INTEGER, selectedClip.sourceEndUs + endDeltaUs);
     if (end - start < 300_000) { setStatus("A clip must stay at least 0.3s long"); return; }
     void applyEdit([{ type: "trim-clip", clipId: selectedClip.id, sourceStartUs: start, sourceEndUs: end }], "Clip trimmed");
   }
-
-  function addSegment() {
-    const start = Number(segmentStart);
-    const end = Number(segmentEnd);
-    const source = assets.find((asset) => asset.id === (selectedClip?.assetId ?? assetId));
-    if (!source) { setStatus("Choose the source asset first"); return; }
-    if (!(start >= 0) || !(end > start)) { setStatus("Enter a start and end in seconds (end after start)"); return; }
-    if (source.durationUs && end * 1_000_000 > source.durationUs) { setStatus("The segment ends after the source video does"); return; }
-    if (revision === 0) { setStatus("Save a revision before adding segments"); return; }
-    void applyEdit([{ type: "insert-clip", assetId: source.id, sourceStartUs: Math.round(start * 1e6), sourceEndUs: Math.round(end * 1e6), reason: "Added in the editor" }], "Segment added");
-  }
-
   function saveCaption(clip: TimelineClip) {
     const text = (captionDrafts[clip.id] ?? String(clip.transform?.text ?? "")).trim();
     if (!text) { setStatus("A caption cannot be empty"); return; }
     void applyEdit([{ type: "update-caption", clipId: clip.id, text }], "Caption corrected").then((ok) => { if (ok) setCaptionDrafts((current) => { const { [clip.id]: _removed, ...rest } = current; return rest; }); });
   }
-
-  function handleClipKeyDown(event: KeyboardEvent<HTMLButtonElement>, clip: TimelineClip) {
-    if (event.key === "ArrowLeft") { event.preventDefault(); setSelectedClipId(clip.id); nudgeSelectedClip(-1, clip.id); }
-    if (event.key === "ArrowRight") { event.preventDefault(); setSelectedClipId(clip.id); nudgeSelectedClip(1, clip.id); }
+  function handleClipKeyDown(event: KeyboardEvent<HTMLButtonElement>, clip: TimelineClip, kind: string) {
+    if (kind === "video" && event.key === "ArrowLeft") { event.preventDefault(); setSelectedClipId(clip.id); nudgeSelectedClip(-1, clip.id); }
+    if (kind === "video" && event.key === "ArrowRight") { event.preventDefault(); setSelectedClipId(clip.id); nudgeSelectedClip(1, clip.id); }
     if (event.key === "Delete" || event.key === "Backspace") { event.preventDefault(); setSelectedClipId(clip.id); removeSelectedClip(clip.id); }
   }
 
-  async function transcribeAsset() {
-    if (!projectId || !assetId) { setStatus("Choose an uploaded video first"); return; }
-    setBusy(true);
-    setStatus("Transcribing… this can take a few minutes for long videos");
-    try {
-      const result = await request("/v1/projects/" + projectId + "/assets/" + assetId + "/transcript", { method: "POST" });
-      const words = result.segments.reduce((total: number, segment: { words: unknown[] }) => total + segment.words.length, 0);
-      setStatus("Transcribed " + result.segments.length + " segments (" + words + " timed words)");
-    } catch (error) { setStatus(errorMessage(error)); }
-    finally { setBusy(false); }
+  // Editing by transcript.
+  function pickWord(index: number, extend: boolean) {
+    setSelection((current) => (extend && current ? { from: current.from, to: index } : { from: index, to: index }));
+    const word = words[index];
+    if (word) seekSource(word.startUs);
+  }
+  const selectionRange = selection && words.length ? rangeForWords(words, selection.from, selection.to) : null;
+  const selectionKept = selection ? kept.slice(Math.min(selection.from, selection.to), Math.max(selection.from, selection.to) + 1) : [];
+  const selectionText = selection ? words.slice(Math.min(selection.from, selection.to), Math.max(selection.from, selection.to) + 1).map((w) => w.text).join(" ") : "";
+  function cutSelection() {
+    if (!selectionRange || !segmentsFor) return;
+    const ops = removeRangeOps(selectionRange, videoClips, captionCues, words, segmentsFor);
+    if (!ops.length) { setStatus("Those words are already cut"); return; }
+    void applyEdit(ops, "Cut “" + selectionText.slice(0, 40) + (selectionText.length > 40 ? "…" : "") + "”").then((ok) => { if (ok) setSelection(null); });
+  }
+  function restoreSelection() {
+    if (!selectionRange || !segmentsFor) return;
+    const ops = restoreRangeOps(selectionRange, videoClips, words, segmentsFor);
+    if (!ops.length) { setStatus("Those words are already in the cut"); return; }
+    void applyEdit(ops, "Brought back “" + selectionText.slice(0, 40) + (selectionText.length > 40 ? "…" : "") + "”").then((ok) => { if (ok) setSelection(null); });
   }
 
-  async function saveRevision() {
-    if (!projectId) { setStatus("Create a project first"); return; }
-    setBusy(true);
-    try {
-      const result = await request("/v1/projects/" + projectId + "/revisions", { method: "POST", body: JSON.stringify({ timeline }) });
-      setRevision(result.revision.revision);
-      setStatus("Revision " + result.revision.revision + " saved");
-    } catch (error) { setStatus(errorMessage(error)); }
-    finally { setBusy(false); }
-  }
-
-  async function analyzeBrief() {
-    if (!projectId) { setStatus("Create a project first"); return; }
-    setBusy(true);
-    try {
-      const result = await request("/v1/projects/" + projectId + "/intent/analyze", { method: "POST", body: JSON.stringify({ prompt: intent }) });
-      const profile = result.analysis.profile; setIntent(profile.intent); setAudience(profile.audience); setChannel(profile.channel); setStatus("Brief analyzed into a tailoring profile");
-    } catch (error) { setStatus(errorMessage(error)); }
-    finally { setBusy(false); }
-  }
-
-  async function previewProposal() {
-    if (!projectId || !revision) { setStatus("Save a revision before requesting a proposal"); return; }
-    setBusy(true);
-    try {
-      const result = await request("/v1/projects/" + projectId + "/proposals", {
-        method: "POST",
-        body: JSON.stringify({ revision, strategyId: "highlight-reel", profile: { intent, audience, channel, targetDurationUs: Math.round(targetSeconds * 1_000_000), constraints: [] } }),
-      });
-      setProposal(result.proposal);
-      setStatus("Proposal ready for review");
-    } catch (error) { setStatus(errorMessage(error)); }
-    finally { setBusy(false); }
-  }
-
-  /**
-   * The main path in one click: transcribe the video (unless already done), lay the whole video on the
-   * timeline, save it, and ask for highlights matching the brief. Each step reports progress.
-   */
   /** Make sure the video is transcribed and on the timeline; returns the revision to work from. */
   async function prepareSource(video: Asset, steps: number): Promise<number> {
-    const base = "/v1/projects/" + projectId + "/assets/" + video.id + "/transcript";
-    const existing = await request(base).catch(() => ({ segments: [] }));
-    if (!existing.segments?.length) {
-      setStatus("Step 1 of " + steps + ": listening to the video (the first run downloads the speech model and can take a few minutes)…");
-      const result = await request(base, { method: "POST" });
-      if (!result.segments?.length) throw new Error("No speech was found in this video, so there is nothing to cut from");
-    }
+    setStatus("Step 1 of " + steps + ": listening to the video (the first run downloads the speech model and can take a few minutes)…");
+    if (transcribing?.assetId === video.id) await transcribing.promise;
+    else if (segmentsFor !== video.id) await startTranscription(video.id);
     setStatus("Step 2 of " + steps + ": preparing the timeline…");
     const lengthUs = video.durationUs && video.durationUs > 0 ? video.durationUs : 10_000_000;
     const usesVideo = videoClips.some((clip) => clip.assetId === video.id);
@@ -584,13 +515,11 @@ export function App() {
     return workingRevision;
   }
 
-  const currentVideo = () => assets.find((asset) => asset.id === assetId && asset.kind === "video") ?? videoClips.map((clip) => assets.find((asset) => asset.id === clip.assetId)).find((asset) => asset?.kind === "video") ?? [...assets].reverse().find((asset) => asset.kind === "video");
-
   async function planVideo() {
-    const video = currentVideo();
+    const video = mainVideo;
     if (!projectId || !video) { setStatus("Upload a video first"); return; }
-    if (!brief.trim()) { setStatus("Describe the video first: what it is about, who it is for, and where it will go"); document.querySelector<HTMLTextAreaElement>(".director-panel textarea")?.focus(); return; }
-    setBusy(true); setPlan(null); setPlanApplied(false);
+    if (!brief.trim()) { setStatus("Describe the video first: what it is about, who it is for, and where it will go"); document.querySelector<HTMLTextAreaElement>("#brief")?.focus(); return; }
+    setBusy(true); setPlan(null); setPlanApplied(false); setProposal(null);
     try {
       const workingRevision = await prepareSource(video, 3);
       setStatus("Step 3 of 3: the director is watching and reading your video…");
@@ -599,9 +528,18 @@ export function App() {
       setPlan(next);
       setPicked(Object.fromEntries(next.suggestions.map((item) => [item.id, item.kind !== "advice"])));
       setPlanText(Object.fromEntries(next.suggestions.filter((item) => typeof item.text === "string" && item.text).map((item) => [item.id, item.text!])));
+      setScreen("plan");
       setStatus("Plan ready: " + next.suggestions.length + " suggestions. Untick anything you don't want, then apply");
-      setTimeout(() => document.querySelector(".director-panel")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
     } catch (error) { setStatus(errorMessage(error)); }
+    finally { setBusy(false); }
+  }
+
+  async function editMyself() {
+    const video = mainVideo;
+    if (!projectId || !video) { setStatus("Upload a video first"); return; }
+    setBusy(true);
+    try { await prepareSource(video, 2); setScreen("edit"); setStatus("The whole video is on the timeline. Cut words in the transcript, or use the tools on the left"); }
+    catch (error) { setStatus(errorMessage(error)); }
     finally { setBusy(false); }
   }
 
@@ -610,16 +548,14 @@ export function App() {
     setBusy(true);
     setStatus("Building your edit from the plan…");
     try {
-      const edited = { ...plan, suggestions: plan.suggestions.map((item) => planText[item.id] !== undefined ? { ...item, text: planText[item.id]!.trim() || item.text } : item) };
-      const accepted = edited.suggestions.filter((item) => picked[item.id]).map((item) => item.id);
-      const result = await request("/v1/projects/" + projectId + "/director/apply", { method: "POST", body: JSON.stringify({ revision, plan: edited, accepted }) });
+      const editedPlan = { ...plan, suggestions: plan.suggestions.map((item) => planText[item.id] !== undefined ? { ...item, text: planText[item.id]!.trim() || item.text } : item) };
+      const accepted = editedPlan.suggestions.filter((item) => picked[item.id]).map((item) => item.id);
+      const result = await request("/v1/projects/" + projectId + "/director/apply", { method: "POST", body: JSON.stringify({ revision, plan: editedPlan, accepted }) });
       setRevision(result.revision.revision); setTimeline(result.revision.timeline);
       setRenderUrl(""); setRenderJobId(""); setRenderJobStatus("");
       if (result.platform && PLATFORMS[result.platform]) setPlatform(result.platform);
       if (result.music) { const listed = await request("/v1/projects/" + projectId + "/assets").catch(() => null); if (listed) setAssets(listed.assets); }
-      const tailoring = result.revision.tailoring;
-      if (tailoring) { setIntent(tailoring.intent ?? intent); setAudience(tailoring.audience ?? audience); setChannel(tailoring.channel ?? channel); if (tailoring.targetDurationUs) setTargetSeconds(Math.round(tailoring.targetDurationUs / 1e6)); }
-      setPlanApplied(true); setCheck(null);
+      setPlanApplied(true); setCheck(null); setScreen("edit");
       setStatus("Plan applied (revision " + result.revision.revision + ")" + (result.music ? ". Music: " + result.music.description : ""));
     } catch (error) { setStatus(errorMessage(error)); }
     finally { setBusy(false); }
@@ -635,11 +571,9 @@ export function App() {
       setFixPicked(Object.fromEntries(result.issues.filter((issue: CheckIssue) => issue.fix).map((issue: CheckIssue) => [issue.id, issue.severity === "fix"])));
       const fixable = result.issues.filter((issue: CheckIssue) => issue.fix).length;
       setStatus("Check done: " + (result.issues.length === 0 ? "nothing to fix" : result.issues.length + " finding" + (result.issues.length === 1 ? "" : "s") + (fixable ? ", " + fixable + " with a fix" : "")));
-      setTimeout(() => document.querySelector(".check-panel")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
     } catch (error) { setStatus(errorMessage(error)); }
     finally { setBusy(false); }
   }
-
   async function applyFixes() {
     if (!projectId || !check) return;
     const fixes = check.issues.filter((issue) => issue.fix && fixPicked[issue.id]).map((issue) => ({ title: issue.title, ...(typeof issue.atS === "number" ? { atS: issue.atS } : {}), operations: issue.fix!.operations }));
@@ -654,253 +588,427 @@ export function App() {
       await runCheck(result.revision.revision);
     } catch (error) { setStatus(errorMessage(error)); setBusy(false); }
   }
+  function showIssue(issue: CheckIssue) {
+    if (typeof issue.atS !== "number") return;
+    const at = timelineToSource(videoClips, Math.round(issue.atS * 1e6));
+    if (at) seekSource(at.sourceUs);
+  }
 
   async function createHighlights() {
-    const video = currentVideo();
+    const video = mainVideo;
     if (!projectId || !video) { setStatus("Upload a video first"); return; }
-    setBusy(true);
-    setProposal(null);
+    setBusy(true); setProposal(null); setPlan(null);
     try {
       const workingRevision = await prepareSource(video, 3);
       setStatus("Step 3 of 3: choosing the best moments for your goal…");
+      const target = secondsFromBrief(brief) ?? (platform === "youtube" ? 90 : 30);
       const found = await request("/v1/projects/" + projectId + "/proposals", {
         method: "POST",
-        body: JSON.stringify({ revision: workingRevision, strategyId: "highlight-reel", profile: { intent, audience, channel, targetDurationUs: Math.round(targetSeconds * 1_000_000), constraints: [] } }),
+        body: JSON.stringify({ revision: workingRevision, strategyId: "highlight-reel", profile: { intent: brief.trim() || "The strongest, clearest moments", audience: "", channel: platform === "youtube" ? "youtube" : "short-form", targetDurationUs: target * 1_000_000, constraints: [] } }),
       });
       setProposal(found.proposal);
+      setScreen("plan");
       const picks = groupHighlights(found.proposal.operations).length;
       setStatus(picks ? "Highlights ready: review the " + picks + " suggested highlight" + (picks === 1 ? "" : "s") + ", then Accept" : found.proposal.rationale);
-      setTimeout(() => document.querySelector(".proposal-panel")?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
     } catch (error) { setStatus(errorMessage(error)); }
     finally { setBusy(false); }
   }
-
   async function decideProposal(decision: "accepted" | "rejected") {
     if (!projectId || !proposal) return;
     setBusy(true);
     try {
       const result = await request("/v1/projects/" + projectId + "/proposals/" + proposal.id + "/decision", { method: "POST", body: JSON.stringify({ decision }) });
       if (result.revision) { setRevision(result.revision.revision); setTimeline(result.revision.timeline); }
-      setProposal({ ...proposal, status: decision }); if (decision === "accepted") setCheck(null);
+      setProposal({ ...proposal, status: decision });
+      if (decision === "accepted") { setCheck(null); setScreen("edit"); }
       setStatus("Proposal " + decision);
     } catch (error) { setStatus(errorMessage(error)); }
     finally { setBusy(false); }
   }
 
   async function submitRender() {
-    if (!projectId || !revision) { setStatus("Save a revision before rendering"); return; }
+    if (!projectId || !revision) { setStatus("Make a cut before exporting"); return; }
     setBusy(true);
     try {
+      const preset = PLATFORMS[platform]!;
       const result = await request("/v1/projects/" + projectId + "/renders", {
         method: "POST",
-        body: JSON.stringify({
-          revision,
-          idempotencyKey: projectId + ":" + revision + ":" + platform,
-          settings: { format: "mp4", videoCodec: "libx264", audioCodec: "aac", width: PLATFORMS[platform]!.width, height: PLATFORMS[platform]!.height, frameRate: 30, fit: PLATFORMS[platform]!.fit, captionStyle: PLATFORMS[platform]!.captionStyle },
-        }),
+        body: JSON.stringify({ revision, idempotencyKey: projectId + ":" + revision + ":" + platform, settings: { format: "mp4", videoCodec: "libx264", audioCodec: "aac", width: preset.width, height: preset.height, frameRate: 30, fit: preset.fit, captionStyle: preset.captionStyle } }),
       });
-      setRenderJobId(result.job.id); setRenderUrl(""); setRenderJobStatus("queued 0%"); setStatus("Export started (" + (PLATFORMS[platform]?.label ?? platform) + ")…"); void pollRender(result.job.id);
+      setRenderJobId(result.job.id); setRenderUrl(""); setRenderJobStatus("queued 0%"); setStatus("Export started (" + preset.label + ")…"); void pollRender(result.job.id);
     } catch (error) { setStatus(errorMessage(error)); }
     finally { setBusy(false); }
   }
 
-  const hasVideo = assets.some((asset) => asset.kind === "video");
-  const proposalHighlights = proposal ? groupHighlights(proposal.operations) : [];
   useEffect(() => {
     if (!projectId || revision === 0) return;
     setProjects((current) => current.map((project) => project.id === projectId && project.revision !== revision ? { ...project, revision, updatedAt: new Date().toISOString() } : project));
   }, [revision, projectId]);
   const assetName = (id: string) => { const asset = assets.find((item) => item.id === id); return asset ? String(asset.metadata.filename ?? asset.kind) : id.startsWith("generated:") ? "Generated" : "Media"; };
   const clipLabel = (kind: string, clip: TimelineClip) => kind === "caption" ? String(clip.transform?.text ?? "Caption")
-    : kind === "overlay" ? (clip.transform?.role === "graphic" ? String(clip.transform?.text ?? "Graphic") : clip.transform?.role === "progress" ? "Progress bar" : "B-roll · " + assetName(clip.assetId))
+    : kind === "overlay" ? (clip.transform?.role === "graphic" ? String(clip.transform?.text ?? "Text") : clip.transform?.role === "progress" ? "Progress bar" : "Cutaway · " + assetName(clip.assetId))
     : kind === "audio" ? (clip.transform?.role === "sfx" ? "Sound · " + (SFX_LABEL[String(clip.transform?.kind)] ?? "effect") : "Music · " + assetName(clip.assetId))
     : assetName(clip.assetId) + [clip.transform?.zoom ? " · " + (clip.transform.zoom === "punch" ? "punch-in" : "push-in") : "", clip.transform?.transitionIn ? " · " + (TRANSITION_LABEL[String(clip.transform.transitionIn)] ?? "") + " in" : ""].join("");
-  const trackName: Record<string, string> = { video: "Video", caption: "Captions", overlay: "Overlays", audio: "Sound" };
-  const fit = proposal ? (proposal.confidence >= 0.7 ? "strong" : proposal.confidence >= 0.45 ? "fair" : "weak") : "";
-  const accepted = proposal?.status === "accepted";
-  const next: { title: string; detail: string; action?: { label: string; run: () => void; disabled?: boolean } } =
-    !userEmail ? { title: "Sign in", detail: "Create an account or sign in in the Project panel." }
-    : !projectId && !projectsLoaded ? { title: "Loading your projects…", detail: "Opening the project you last worked on." }
-    : !projectId && projects.length > 0 ? { title: "Open your project", detail: "You have " + projects.length + " project" + (projects.length === 1 ? "" : "s") + ". Open the latest, pick another under Open a project, or create a new one.", action: { label: "Open latest project", run: () => { const latest = [...projects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]; if (latest) void openProject(latest); } } }
-    : !projectId ? { title: "Create a project", detail: "Name it, then click Create project.", action: { label: "Create project", run: () => void createProject() } }
-    : !hasVideo ? { title: "Upload a video", detail: "Use Upload media in the Asset reference panel. A talk, interview or vlog works best." }
-    : plan && !planApplied ? { title: "Review the director's plan", detail: "Each suggestion says why. Untick what you don't want, edit any on-screen text, then apply.", action: { label: "Apply plan", run: () => void applyPlan() } }
-    : proposal?.status === "proposed" ? { title: "Review the suggested highlights", detail: "Each clip says why it was chosen, with the transcript as evidence. Accept to build your cut, or adjust the goal and try again.", action: { label: "Accept highlights", run: () => void decideProposal("accepted") } }
-    : renderJobId && !renderUrl && !/^(failed|cancelled)/.test(renderJobStatus) ? { title: "Exporting…", detail: "Rendering " + (renderJobStatus || "queued") + ". This takes roughly as long as the video itself." }
-    : renderUrl ? { title: "Your video is ready", detail: "Play it in the Preview panel or download it. Edit further and export again any time." }
-    : (accepted || planApplied) && !check ? { title: "Check your edit", detail: "A last look before export: clipped words, long pauses, black or frozen picture, text that goes by too fast and music balance. Each comes with a fix you can accept.", action: { label: "Check my edit", run: () => void runCheck() } }
-    : accepted || planApplied ? { title: "Export your video", detail: "Fine-tune below if you like (trim, captions, music, B-roll, graphics), pick a platform next to Export video, then export.", action: { label: "Export video", run: () => void submitRender() } }
-    : { title: "Describe your video", detail: "Say in your own words what it is about, who it is for and where it will go. The director plans the whole edit; you approve each part.", action: { label: "Plan my video", run: () => void planVideo() } };
+  // Semantic tracks: the story, what is shown over it, text, and sound.
+  const lanes = [
+    { name: "Story", kind: "video", clips: videoClips },
+    { name: "Visuals", kind: "overlay", clips: brolls },
+    { name: "Text", kind: "overlay", clips: [...graphicsClips, ...(progressClip ? [progressClip] : [])] },
+    { name: "Captions", kind: "caption", clips: captionCues },
+    { name: "Sound", kind: "audio", clips: timeline.tracks.filter((track) => track.kind === "audio").flatMap((track) => track.clips) },
+  ].filter((lane) => lane.clips.length > 0 || lane.name === "Story");
+  const steps: Array<{ label: string; screen: Screen; enabled: boolean; done: boolean }> = [
+    { label: "Upload", screen: "describe", enabled: true, done: hasVideo },
+    { label: "Describe", screen: "describe", enabled: hasVideo, done: edited },
+    { label: "Edit", screen: "edit", enabled: edited, done: edited && Boolean(check) },
+    { label: "Check", screen: "check", enabled: edited, done: Boolean(check) && check?.revision === revision },
+    { label: "Export", screen: "export", enabled: edited, done: Boolean(renderUrl) },
+  ];
+  const stepBar = <nav aria-label="Workflow" className="steps">{steps.map((step, index) => {
+    const isCurrent = index === 0 ? screen === "describe" && !hasVideo : index === 1 ? (screen === "describe" && hasVideo) || screen === "plan" : index === 2 ? screen === "edit" : index === 3 ? screen === "check" : screen === "export";
+    return <button key={step.label} type="button" className={"step" + (isCurrent ? " current" : "") + (step.done && !isCurrent ? " done" : "")} aria-current={isCurrent ? "step" : undefined} disabled={!step.enabled || busy} onClick={() => setScreen(step.screen)}><span className="num" aria-hidden="true">{step.done && !isCurrent ? "✓" : index + 1}</span><span className="step-label">{step.label}</span></button>;
+  })}</nav>;
 
-  return <div className="app-shell">
-    <header className="topbar">
-      <div><span className="eyebrow">AI VIDEO WORKSPACE</span><h1>VideoCraft</h1></div>
-      <div className="status-pill" role="status" aria-live="polite" title={status}><span className="status-dot" />{status}</div>
-    </header>
-    <main className="workspace">
-      <aside className="sidebar">
-        <section className="panel">
-          <h2>Project</h2>
-          {userEmail ? <div className="auth-session"><span>Signed in as {userEmail}</span><button className="secondary" onClick={signOut} disabled={busy}>Sign out</button></div> : <><div className="auth-tabs"><button className={authMode === "login" ? "" : "secondary"} onClick={() => setAuthMode("login")}>Sign in</button><button className={authMode === "register" ? "" : "secondary"} onClick={() => setAuthMode("register")}>Create account</button></div><label>Email<input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label><label>Password<input type="password" autoComplete={authMode === "login" ? "current-password" : "new-password"} value={password} onChange={(event) => setPassword(event.target.value)} minLength={10} /></label><button onClick={authenticate} disabled={busy || !email || password.length < 10}>{authMode === "login" ? "Sign in" : "Create account"}</button></>}
-          {projectId && <p className="current-project">Working on <strong>{projects.find((project) => project.id === projectId)?.name ?? projectName}</strong></p>}
-          {projects.length > 0 && <label>Open a project<select value={projectId} onChange={(event) => { const project = projects.find((item) => item.id === event.target.value); if (project) void openProject(project); }}><option value="">Choose a project</option>{[...projects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map((project) => <option key={project.id} value={project.id}>{project.name} · {project.revision > 0 ? "revision " + project.revision : "not edited yet"} · {new Date(project.updatedAt).toLocaleDateString(undefined, { day: "numeric", month: "short" })}</option>)}</select></label>}
-          <button className="secondary" onClick={refreshProjects} disabled={busy || !token}>Refresh list</button>
-          {projectId && (() => { const current = projects.find((project) => project.id === projectId); return current ? <details className="danger-zone" onToggle={() => setDeleteConfirm("")}><summary>Delete this project</summary>
-            <p className="muted">Deletes “{current.name}”, its uploads, edits and exports for good. This cannot be undone.</p>
-            <label>Type the project name to confirm<input value={deleteConfirm} onChange={(event) => setDeleteConfirm(event.target.value)} placeholder={current.name} autoComplete="off" /></label>
-            <button className="danger" onClick={deleteProject} disabled={busy || deleteConfirm.trim().toLowerCase() !== current.name.trim().toLowerCase()}>Delete project</button>
-          </details> : null; })()}
-          <details className="new-project"><summary>New project</summary>
-            <label>Name<input value={projectName} maxLength={120} onChange={(event) => setProjectName(event.target.value)} /></label>
-            <button onClick={createProject} disabled={busy || !projectName.trim()}>Create project</button>
-          </details>
+  const statusPill = <div className="status-pill" role="status" aria-live="polite" title={status}><span className={"status-dot" + (busy ? " busy" : "")} />{status}</div>;
+
+  // ── Sign in ────────────────────────────────────────────────────────────────────────────────
+  if (!userEmail) {
+    return <div className="app-shell">
+      <header className="topbar"><span className="brand">VideoCraft</span><div className="spacer" />{statusPill}</header>
+      <main className="center-page">
+        <section className="card auth-card" aria-label="Sign in">
+          <h1>{authMode === "login" ? "Sign in" : "Create your account"}</h1>
+          <p className="muted">Describe your video in your own words; VideoCraft makes the first cut and you approve every part.</p>
+          <div className="segmented" role="tablist"><button role="tab" aria-selected={authMode === "login"} className={authMode === "login" ? "on" : ""} onClick={() => setAuthMode("login")}>Sign in</button><button role="tab" aria-selected={authMode === "register"} className={authMode === "register" ? "on" : ""} onClick={() => setAuthMode("register")}>Create account</button></div>
+          <label>Email<input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label>
+          <label>Password<input type="password" autoComplete={authMode === "login" ? "current-password" : "new-password"} value={password} onChange={(event) => setPassword(event.target.value)} minLength={10} /></label>
+          <button className="primary" onClick={authenticate} disabled={busy || !email || password.length < 10}>{authMode === "login" ? "Sign in" : "Create account"}</button>
+          {!sessionChecked && <p className="muted">Checking for an existing session…</p>}
         </section>
-        <section className="panel">
-          <h2>Tailoring brief</h2>
-          <label>Intent<textarea value={intent} onChange={(event) => setIntent(event.target.value)} /></label>
-          <label>Audience<input value={audience} onChange={(event) => setAudience(event.target.value)} /></label>
-          <label>Channel<input value={channel} onChange={(event) => setChannel(event.target.value)} /></label>
-          <button className="secondary" onClick={analyzeBrief} disabled={busy || !projectId}>Analyze brief</button>
-          <label>Target length (seconds)<input type="number" min={5} max={600} value={targetSeconds} onChange={(event) => setTargetSeconds(Math.max(5, Number(event.target.value) || 30))} /></label>
-          <button onClick={createHighlights} disabled={busy || !projectId || !hasVideo}>Create highlights</button>
-          <button className="secondary" onClick={previewProposal} disabled={busy || !revision}>Re-run on current timeline</button>
+      </main>
+    </div>;
+  }
+
+  // ── Videos (projects) ─────────────────────────────────────────────────────────────────────
+  if (screen === "projects" || !projectId) {
+    const sorted = [...projects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    return <div className="app-shell">
+      <header className="topbar"><span className="brand">VideoCraft</span><div className="spacer" />{statusPill}<details className="menu"><summary className="btn">{userEmail}</summary><div className="menu-body"><button className="btn" onClick={signOut} disabled={busy}>Sign out</button></div></details></header>
+      <main className="page">
+        <div className="page-head">
+          <div><h1>Your videos</h1><p className="muted">Pick up where you left off, or start a new one.</p></div>
+          <form className="new-video" onSubmit={(event) => { event.preventDefault(); void createProject(); }}>
+            <label className="sr-only" htmlFor="new-name">Name for the new video</label>
+            <input id="new-name" placeholder="Name (optional)" value={newName} maxLength={120} onChange={(event) => setNewName(event.target.value)} />
+            <button type="submit" className="primary" disabled={busy}>New video</button>
+          </form>
+        </div>
+        {!projectsLoaded && <p className="muted">Loading your videos…</p>}
+        {projectsLoaded && sorted.length === 0 && <div className="card empty"><h2>No videos yet</h2><p className="muted">Start with New video: upload a talk, interview or vlog and describe what you want.</p></div>}
+        <div className="project-grid">{sorted.map((project) => <button key={project.id} type="button" className="card project-card" onClick={() => void openProject(project)} disabled={busy}>
+          <span className="thumb" aria-hidden="true" />
+          <span className="project-meta"><strong>{project.name}</strong><span className={"tag " + (project.revision > 0 ? "ok" : "")}>{project.revision > 0 ? "Edited" : "Not edited yet"}</span><span className="muted small">Edited {new Date(project.updatedAt).toLocaleDateString(undefined, { day: "numeric", month: "short" })}</span></span>
+        </button>)}</div>
+      </main>
+    </div>;
+  }
+
+  const projectHeader = <header className="topbar">
+    <button className="btn icon" aria-label="Back to your videos" onClick={() => setScreen("projects")} disabled={busy}>‹</button>
+    <div className="title-block"><span className="project-title">{currentProject?.name ?? projectName}</span><span className="muted small">{revision > 0 ? "Saved · revision " + revision : "Not edited yet"}</span></div>
+    {stepBar}
+    {statusPill}
+    <details className="menu" onToggle={() => setDeleteConfirm("")}><summary className="btn" aria-label="Project menu">⋯</summary><div className="menu-body danger-zone">
+      <p className="small">Signed in as {userEmail}</p>
+      <button className="btn" onClick={signOut} disabled={busy}>Sign out</button>
+      <hr />
+      <p className="small muted">Delete “{currentProject?.name}”, its uploads, edits and exports for good. This cannot be undone.</p>
+      <label>Type the project name to confirm<input value={deleteConfirm} onChange={(event) => setDeleteConfirm(event.target.value)} placeholder={currentProject?.name} autoComplete="off" /></label>
+      <button className="danger" onClick={deleteProject} disabled={busy || !currentProject || deleteConfirm.trim().toLowerCase() !== currentProject.name.trim().toLowerCase()}>Delete project</button>
+    </div></details>
+  </header>;
+
+  const player = <div className="player">
+    <div className="preview-tabs" role="tablist"><button role="tab" aria-selected={previewMode === "source"} className={previewMode === "source" ? "on" : ""} onClick={() => setPreviewMode("source")}>Footage</button><button role="tab" aria-selected={previewMode === "render"} className={previewMode === "render" ? "on" : ""} onClick={() => setPreviewMode("render")}>Export</button></div>
+    <div className={"preview-screen " + ((PLATFORMS[platform]?.width ?? 9) < (PLATFORMS[platform]?.height ?? 16) ? "tall" : "wide")}>{previewMode === "render" ? (renderUrl ? <video controls src={renderUrl} /> : <span>{renderJobId ? "Exporting " + renderJobStatus : "Your exported video will play here"}</span>) : (sourceUrl ? <video ref={playerRef} controls src={sourceUrl} onTimeUpdate={stopAtClipEnd} /> : <span>{sourceNote || "Preparing the preview…"}</span>)}</div>
+    {previewMode === "source" && sourceNote && sourceUrl && <p className="muted small">{sourceNote}</p>}
+  </div>;
+
+  // ── Upload & describe ────────────────────────────────────────────────────────────────────
+  if (screen === "describe") {
+    const transcribed = Boolean(mainVideo && segmentsFor === mainVideo.id);
+    return <div className="app-shell">{projectHeader}
+      <main className="page two-col">
+        <section className="col narrow" aria-label="Your video">
+          {mainVideo ? <div className="card video-card">
+            <div className="thumb big" aria-hidden="true" />
+            <div className="card-body">
+              <div className="row-between"><strong>{String(mainVideo.metadata.filename ?? "Your video")}</strong>{mainVideo.durationUs ? <span className="mono muted small">{formatClock(mainVideo.durationUs)}</span> : null}</div>
+              <ul className="checklist">
+                <li className="ok">Uploaded and checked</li>
+                <li className={transcribed ? "ok" : "pending"}>{transcribed ? "Transcribed: " + words.length + " words" : transcribing ? "Listening to the video…" : "Waiting to transcribe"}</li>
+              </ul>
+            </div>
+          </div> : <label className="card dropzone">
+            <span className="drop-title">Upload your video</span>
+            <span className="muted small">A talk, interview or vlog works best. It starts transcribing straight away.</span>
+            <input type="file" accept="video/*" aria-label="Upload a video" onChange={(event) => void uploadAsset(event, "main")} disabled={busy} />
+          </label>}
+          {mainVideo && <label className="btn file-btn">Replace video<input type="file" accept="video/*" aria-label="Replace the video" onChange={(event) => void uploadAsset(event, "main")} disabled={busy} /></label>}
         </section>
-        <section className="panel music-panel" aria-label="Background music">
-          <h2>Background music</h2>
-          {musicClip ? <p>Playing <strong>{musicName}</strong>{(() => { const meta = assets.find((asset) => asset.id === musicClip.assetId)?.metadata; return meta?.generated ? " (" + String(meta.mood) + ", " + String(meta.key) + ", " + String(meta.bpm) + " BPM)" : ""; })()} at {String(musicClip.transform?.volumeDb)} dB{musicClip.transform?.duck === false ? "" : ", ducked under speech"}.</p> : <p className="muted">Upload an audio file, then lay it under the whole cut. It loops, fades and dips while people speak.</p>}
-          <label>Mood<select value={musicMood} onChange={(event) => setMusicMood(event.target.value)}><option value="auto">Match my brief</option><option value="upbeat">Upbeat</option><option value="calm">Calm</option><option value="inspiring">Inspiring</option><option value="serious">Serious</option><option value="playful">Playful</option></select></label>
-          <button onClick={generateMusicBed} disabled={busy || revision === 0}>{musicClip && assets.find((asset) => asset.id === musicClip.assetId)?.metadata.generated ? "Try different music" : "Generate matching music"}</button>
-          <p className="muted">Or use your own track:</p>
-          <label>Music track<select value={musicAssetId} onChange={(event) => setMusicAssetId(event.target.value)}><option value="">Choose an audio asset</option>{audioAssets.map((asset) => <option key={asset.id} value={asset.id}>{String(asset.metadata.filename ?? asset.id.slice(0, 8))}</option>)}</select></label>
-          <label>Music volume ({musicVolume} dB)<input type="range" min={-30} max={-4} step={1} value={musicVolume} onChange={(event) => setMusicVolume(Number(event.target.value))} /></label>
-          <label className="checkbox"><input type="checkbox" checked={musicDuck} onChange={(event) => setMusicDuck(event.target.checked)} /> Duck under speech</label>
-          <button className="secondary" onClick={() => void applyEdit([{ type: "set-music", assetId: musicAssetId, volumeDb: musicVolume, duck: musicDuck }], "Music set")} disabled={busy || revision === 0 || !musicAssetId}>{musicClip ? "Replace music" : "Add music"}</button>
-          {musicClip && <button className="secondary" onClick={() => void applyEdit([{ type: "clear-music" }], "Music removed")} disabled={busy}>Remove music</button>}
-        </section>
-        <section className="panel broll-panel" aria-label="B-roll">
-          <h2>B-roll</h2>
-          <p className="muted">Cut away to an image or clip at the playhead. It stays on that moment when you re-cut.</p>
-          <label>B-roll media<select value={brollAssetId} onChange={(event) => setBrollAssetId(event.target.value)}><option value="">Choose an image or video</option>{brollAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.kind} · {String(asset.metadata.filename ?? asset.id.slice(0, 8))}</option>)}</select></label>
-          <label>On screen for (seconds)<input type="number" min={0.5} max={60} step={0.5} value={brollSeconds} onChange={(event) => setBrollSeconds(Math.max(0.5, Number(event.target.value) || 3))} /></label>
-          <label>Style<select value={brollMode} onChange={(event) => setBrollMode(event.target.value as "full" | "pip")}><option value="full">Full frame</option><option value="pip">Corner inset</option></select></label>
-          <button className="secondary" onClick={addBroll} disabled={busy || revision === 0 || !brollAssetId}>Add B-roll at playhead</button>
-          {brolls.length > 0 && <ul className="broll-list">{brolls.map((clip) => <li key={clip.id}><span>{formatSeconds(clip.timelineStartUs)}–{formatSeconds(clip.timelineEndUs)} · {String(assets.find((asset) => asset.id === clip.assetId)?.metadata.filename ?? clip.assetId.slice(0, 8))} · {clip.transform?.mode === "pip" ? "inset" : "full"}</span><button className="secondary" onClick={() => void applyEdit([{ type: "remove-clip", clipId: clip.id, reason: "B-roll removed" }], "B-roll removed")} disabled={busy}>Remove</button></li>)}</ul>}
-        </section>
-        <section className="panel graphics-panel" aria-label="Motion graphics">
-          <h2>Motion graphics</h2>
-          <label>Graphic<select value={gfxKind} onChange={(event) => setGfxKind(event.target.value as "title" | "callout" | "lower-third")}><option value="title">Title card</option><option value="callout">Callout</option><option value="lower-third">Lower third (name + role)</option></select></label>
-          <label>{gfxKind === "lower-third" ? "Name" : "Text"}<input value={gfxText} maxLength={120} onChange={(event) => setGfxText(event.target.value)} /></label>
-          {gfxKind !== "callout" && <label>{gfxKind === "lower-third" ? "Role" : "Subtitle"} (optional)<input value={gfxSubtitle} maxLength={120} onChange={(event) => setGfxSubtitle(event.target.value)} /></label>}
-          {gfxKind !== "lower-third" && <label>Position<select value={gfxPosition} onChange={(event) => setGfxPosition(event.target.value as "top" | "center" | "bottom")}><option value="top">Top</option><option value="center">Centre</option><option value="bottom">Bottom</option></select></label>}
-          <label>On screen for (seconds)<input type="number" min={0.5} max={60} step={0.5} value={gfxSeconds} onChange={(event) => setGfxSeconds(Math.max(0.5, Number(event.target.value) || 3))} /></label>
-          <label>Accent colour<input type="color" value={gfxColor} onChange={(event) => setGfxColor(event.target.value)} /></label>
-          <button className="secondary" onClick={addGraphic} disabled={busy || revision === 0 || !gfxText.trim()}>Add graphic at playhead</button>
-          {graphicsClips.length > 0 && <ul className="broll-list graphics-list">{graphicsClips.map((clip) => { const original = String(clip.transform?.text ?? ""); const draft = gfxDrafts[clip.id] ?? original; return <li key={clip.id}><span>{formatSeconds(clip.timelineStartUs)} · {String(clip.transform?.kind)}</span><input aria-label={"Graphic text at " + formatSeconds(clip.timelineStartUs)} value={draft} maxLength={120} onChange={(event) => setGfxDrafts((current) => ({ ...current, [clip.id]: event.target.value }))} /><button className="secondary" onClick={() => void applyEdit([{ type: "update-graphic", clipId: clip.id, text: draft.trim() }], "Graphic updated").then((ok) => { if (ok) setGfxDrafts((current) => { const { [clip.id]: _done, ...rest } = current; return rest; }); })} disabled={busy || !draft.trim() || draft.trim() === original}>Save</button><button className="secondary" onClick={() => void applyEdit([{ type: "remove-clip", clipId: clip.id, reason: "Graphic removed" }], "Graphic removed")} disabled={busy}>Remove</button></li>; })}</ul>}
-          <label className="checkbox"><input type="checkbox" checked={Boolean(progressClip)} disabled={busy || revision === 0} onChange={(event) => void applyEdit([{ type: "set-progress-bar", enabled: event.target.checked, color: gfxColor }], event.target.checked ? "Progress bar on" : "Progress bar off")} /> Progress bar across the top</label>
-        </section>
-        <section className="panel effects-panel" aria-label="Look and effects">
-          <h2>Look &amp; effects</h2>
-          <label>Look for the whole video<select value={wholeLook} disabled={busy || revision === 0} onChange={(event) => { if (event.target.value !== "mixed") void applyEdit([{ type: "set-look", look: event.target.value }], "Look: " + (LOOK_LABEL[event.target.value] ?? event.target.value)); }}>{wholeLook === "mixed" && <option value="mixed">Mixed (set per clip)</option>}{Object.entries(LOOK_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
-          <p className="muted">Zooms and transitions are set per clip: select a clip on the timeline.</p>
-          <label>Sound effect<select value={sfxKind} onChange={(event) => setSfxKind(event.target.value)}>{Object.entries(SFX_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
-          <button className="secondary" onClick={addSoundEffect} disabled={busy || revision === 0}>Add sound at playhead</button>
-          {sfxClips.length > 0 && <ul className="broll-list">{sfxClips.map((clip) => <li key={clip.id}><span>{formatSeconds(clip.timelineStartUs)} · {SFX_LABEL[String(clip.transform?.kind)] ?? "Sound"}</span><button className="secondary" onClick={() => void applyEdit([{ type: "remove-clip", clipId: clip.id, reason: "Sound removed" }], "Sound removed")} disabled={busy}>Remove</button></li>)}</ul>}
-        </section>
-        {learned && <section className="panel learned-panel" aria-label="Learned preferences">
-          <h2>Learned from your edits</h2>
-          <p>{learned.summary}</p>
-          <p className="muted">{learned.samples} signals: {learned.counts.removed ?? 0} removed, {learned.counts.exported ?? 0} exported, {learned.counts.rejected ?? 0} from rejected proposals.</p>
-          <button className="secondary" onClick={resetLearned} disabled={busy || learned.samples === 0}>Reset what was learned</button>
-        </section>}
-        <section className="panel">
-          <h2>Asset reference</h2>
-          <p className="muted">Upload media, choose it from the project library, then place a non-destructive clip on the timeline.</p>
-          <label>Upload media<select value={uploadKind} onChange={(event) => setUploadKind(event.target.value)}><option value="video">Video</option><option value="audio">Audio</option><option value="image">Image</option><option value="caption">Caption</option></select><input type="file" accept="video/*,audio/*,image/*" onChange={uploadAsset} disabled={busy || !projectId} /></label>
-          <label>Project library<select value={assetId} onChange={(event) => setAssetId(event.target.value)}><option value="">Choose an asset</option>{assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.kind} · {String(asset.metadata.filename ?? asset.id.slice(0, 8))}</option>)}</select></label>
-          <details className="advanced"><summary>Advanced</summary><label>Registered asset ID<input value={assetId} onChange={(event) => setAssetId(event.target.value)} placeholder="asset ID" /></label></details>
-          <button className="secondary" onClick={addClip} disabled={!assetId}>Add video clip</button>
-          <button className="secondary" onClick={transcribeAsset} disabled={busy || !projectId || !assetId}>Transcribe</button>
-        </section>
-      </aside>
-      <section className="editor">
-        <section className="next-step" aria-label="Next step">
-          <div><span className="eyebrow">NEXT STEP</span><h2>{next.title}</h2><p>{next.detail}</p></div>
-          {next.action && <button className="primary-action" onClick={next.action.run} disabled={busy || next.action.disabled}>{busy ? "Working…" : next.action.label}</button>}
-          {renderUrl && <a className="primary-action" href={renderUrl} download="videocraft-export.mp4">Download video</a>}
-        </section>
-        {projectId && hasVideo && <section className="panel director-panel" aria-label="AI director">
-          <div className="panel-heading"><h2>Describe your video</h2>{plan && <span className="badge" title={plan.note ?? ""}>{plan.source === "ai" ? "AI director" + (plan.model ? " · " + plan.model : "") : "Built-in director"}</span>}</div>
-          <label>What is it about, who is it for, where will it go?<textarea value={brief} maxLength={2000} rows={3} placeholder="e.g. A 30 second inspiring Reel for new graduates about our mentoring programme. Open on the strongest result, warm and hopeful." onChange={(event) => setBrief(event.target.value)} /></label>
-          <div className="decision-actions"><button onClick={planVideo} disabled={busy || !brief.trim()}>{plan ? "Plan again" : "Plan my video"}</button></div>
-          {plan?.note && <p className="muted">{plan.note}</p>}
-          {plan && <>
-            <p>{plan.summary}</p>
-            <ul className="suggestion-list">{plan.suggestions.map((item) => <li key={item.id} className={picked[item.id] ? "" : "off"}>
-              <label className="checkbox">{item.kind !== "advice" && <input type="checkbox" checked={Boolean(picked[item.id])} onChange={(event) => setPicked((current) => ({ ...current, [item.id]: event.target.checked }))} />}<span className="badge">{KIND_LABEL[item.kind] ?? item.kind}</span><strong>{item.title}</strong></label>
-              <p className="muted">{item.reason}{item.kind === "cut" && item.segments ? " · " + item.segments.length + " part" + (item.segments.length === 1 ? "" : "s") + ", " + Math.round(item.segments.reduce((sum, seg) => sum + seg.endS - seg.startS, 0)) + " s" : ""}{typeof item.atS === "number" && item.kind !== "cut" && item.kind !== "music" ? " · at " + item.atS.toFixed(1) + " s of the original" : ""}</p>
-              {planText[item.id] !== undefined && <input aria-label={"Text for " + item.title} value={planText[item.id]} maxLength={120} onChange={(event) => setPlanText((current) => ({ ...current, [item.id]: event.target.value }))} />}
-            </li>)}</ul>
-            <div className="decision-actions"><button onClick={applyPlan} disabled={busy || planApplied || !plan.suggestions.some((item) => picked[item.id])}>{planApplied ? "Applied" : "Apply selected"}</button></div>
-          </>}
-        </section>}
-        {revision > 0 && hasVideo && <section className="panel check-panel" aria-label="Edit check" data-checked-revision={check?.revision ?? 0}>
-          <div className="panel-heading"><h2>Check your edit</h2>{check && <span className="badge">{check.ai ? "Built-in checks + AI look" : "Built-in checks"}{check.revision !== revision ? " · edited since" : ""}</span>}</div>
-          {!check && <p className="muted">Looks over the edit like an editor before export and proposes a fix for each problem. Nothing changes until you apply.</p>}
-          {check?.note && <p className="muted">{check.note}</p>}
-          {check && check.issues.length === 0 && <p>Nothing to fix. Ready to export.</p>}
-          {check && check.issues.length > 0 && <ul className="suggestion-list issue-list">{check.issues.map((issue) => <li key={issue.id} className={"issue-" + issue.severity + (issue.fix && !fixPicked[issue.id] ? " off" : "")}>
-            <label className="checkbox">{issue.fix && <input type="checkbox" checked={Boolean(fixPicked[issue.id])} onChange={(event) => setFixPicked((current) => ({ ...current, [issue.id]: event.target.checked }))} />}<span className="badge">{issue.severity === "fix" ? "Fix" : issue.severity === "warn" ? "Look" : "Note"}{issue.source === "ai" ? " · AI" : ""}</span><strong>{issue.title}</strong></label>
-            <p className="muted">{issue.detail}{typeof issue.atS === "number" ? " · at " + issue.atS.toFixed(1) + " s" : ""}</p>
-            {issue.fix && <p className="fix-label">→ {issue.fix.label}</p>}
-          </li>)}</ul>}
-          <div className="decision-actions">
-            <button className="secondary" onClick={() => void runCheck()} disabled={busy}>{check ? "Check again" : "Check my edit"}</button>
-            {check && check.issues.some((issue) => issue.fix) && <button onClick={applyFixes} disabled={busy || check.revision !== revision || !check.issues.some((issue) => issue.fix && fixPicked[issue.id])}>Apply selected fixes</button>}
+        <section className="col wide" aria-label="Describe your video">
+          <h1>What is this video for?</h1>
+          <p className="muted">Say it in your own words. The first cut is built from this, and you approve every part of it.</p>
+          <label htmlFor="brief" className="field-label">Description</label>
+          <textarea id="brief" rows={4} value={brief} maxLength={2000} placeholder="e.g. A 30 second Reel for new graduates about our mentoring programme. Open on the strongest result, hopeful in tone." onChange={(event) => setBrief(event.target.value)} />
+          <fieldset className="chips"><legend className="field-label">Format</legend>{["tiktok", "youtube", "square"].map((key) => <button key={key} type="button" className={"chip" + (platform === key ? " on" : "")} aria-pressed={platform === key} onClick={() => setPlatform(key)}>{PLATFORMS[key]!.short}</button>)}</fieldset>
+          <div className="actions">
+            <button className="primary" onClick={planVideo} disabled={busy || !mainVideo || !brief.trim()}>Make the first cut</button>
+            <button className="btn" onClick={createHighlights} disabled={busy || !mainVideo}>Just find the highlights</button>
+            <button className="btn" onClick={editMyself} disabled={busy || !mainVideo}>Edit it myself</button>
+            {((plan && !planApplied) || proposal?.status === "proposed") && <button className="link" onClick={() => setScreen("plan")}>Back to the suggestions</button>}
           </div>
-        </section>}
-        <div className="editor-toolbar"><div><span className="eyebrow">TIMELINE</span><h2>{projectId ? "Revision " + revision : "No project selected"}</h2></div><div className="toolbar-actions"><button className="secondary" onClick={saveRevision} disabled={busy || !projectId}>Save revision</button><select aria-label="Platform" value={platform} onChange={(event) => setPlatform(event.target.value)}>{Object.entries(PLATFORMS).map(([key, preset]) => <option key={key} value={key}>{preset.label}</option>)}</select><button className="secondary" onClick={submitRender} disabled={busy || !revision}>Export</button></div></div>
-        <div className="timeline-card">
+        </section>
+      </main>
+    </div>;
+  }
+
+  // ── Review the plan or the highlights ────────────────────────────────────────────────────
+  if (screen === "plan") {
+    const proposalHighlights = proposal ? groupHighlights(proposal.operations) : [];
+    const count = plan ? plan.suggestions.filter((item) => picked[item.id]).length : 0;
+    return <div className="app-shell">{projectHeader}
+      <main className="page two-col">
+        {plan ? <section className="col wide director-panel" aria-label="The first cut">
+          <div className="row-between"><h1>The first cut</h1><span className="tag" title={plan.note ?? ""}>{plan.source === "ai" ? "AI director" + (plan.model ? " · " + plan.model : "") : "Built-in director"}</span></div>
+          <p className="muted">{plan.summary} Untick what you don't want. Nothing changes until you apply.</p>
+          {plan.note && <p className="note">{plan.note}</p>}
+          {PLAN_GROUPS.map((group) => { const items = plan.suggestions.filter((item) => group.kinds.includes(item.kind)); return items.length ? <div key={group.name} className="plan-group"><h2 className="group-title">{group.name}</h2>
+            <ul className="suggestion-list">{items.map((item) => <li key={item.id} className={"card suggestion" + (picked[item.id] || item.kind === "advice" ? "" : " off")}>
+              {item.kind !== "advice" && <input type="checkbox" id={"s-" + item.id} checked={Boolean(picked[item.id])} onChange={(event) => setPicked((current) => ({ ...current, [item.id]: event.target.checked }))} />}
+              <div className="suggestion-body">
+                <label htmlFor={"s-" + item.id}><strong>{item.title}</strong></label>
+                <span className="small what">{describeSuggestion(item)}</span>
+                {planText[item.id] !== undefined && <input aria-label={"Text for " + item.title} value={planText[item.id]} maxLength={120} onChange={(event) => setPlanText((current) => ({ ...current, [item.id]: event.target.value }))} />}
+                {item.reason && <details><summary>Why</summary><p className="small muted">{item.reason}</p></details>}
+              </div>
+            </li>)}</ul></div> : null; })}
+        </section> : proposal ? <section className="col wide proposal-panel" aria-label="Suggested highlights">
+          <div className="row-between"><h1>Suggested highlights</h1><span className="tag" title="How well the chosen clips match your description">Fit: {proposal.confidence >= 0.7 ? "strong" : proposal.confidence >= 0.45 ? "fair" : "weak"} ({Math.round(proposal.confidence * 100)}%)</span></div>
+          <p className="muted">{proposal.rationale}</p>
+          <ol className="highlight-list">{proposalHighlights.map((highlight, index) => <li key={index} className="card"><strong className="mono">{formatSeconds(highlight.startUs)}–{formatSeconds(highlight.endUs)}</strong>{typeof highlight.score === "number" && <span className="tag">score {Math.round(highlight.score * 100)}</span>}{highlight.parts > 1 && <span className="tag">{highlight.parts} parts, pauses cut</span>}<p>{highlight.reason}</p></li>)}</ol>
+          <details><summary>Evidence</summary><div className="evidence">{proposal.evidence.map((item) => <div key={item.reference}><span>{evidenceLabel(item).source}</span><code>{evidenceLabel(item).reference}{typeof item.startUs === "number" && typeof item.endUs === "number" ? " · " + formatSeconds(item.startUs) + "–" + formatSeconds(item.endUs) : ""}</code>{item.excerpt && <p>{item.excerpt}</p>}</div>)}</div></details>
+        </section> : <section className="col wide"><h1>Nothing to review yet</h1><p className="muted">Go back to Describe and make the first cut.</p></section>}
+        <aside className="col narrow card summary" aria-label="Result">
+          {plan ? <>
+            <dl className="facts"><dt>Format</dt><dd>{PLATFORMS[plan.suggestions.find((item) => item.kind === "platform" && picked[item.id])?.platform ?? platform]?.short}</dd><dt>Selected</dt><dd>{count} of {plan.suggestions.filter((item) => item.kind !== "advice").length}</dd></dl>
+            <button className="primary" onClick={applyPlan} disabled={busy || planApplied || count === 0}>{planApplied ? "Applied" : "Apply the selected"}</button>
+            <p className="small muted">Saved as a new revision. You can still change everything in the editor.</p>
+            <button className="btn" onClick={planVideo} disabled={busy}>Plan again</button>
+          </> : proposal && proposal.status === "proposed" ? <>
+            <button className="primary" onClick={() => void decideProposal("accepted")} disabled={busy}>Accept highlights</button>
+            <button className="btn" onClick={() => void decideProposal("rejected")} disabled={busy}>Reject</button>
+          </> : <button className="btn" onClick={() => setScreen("describe")}>Back to Describe</button>}
+        </aside>
+      </main>
+    </div>;
+  }
+
+  // ── Check ───────────────────────────────────────────────────────────────────────────────
+  if (screen === "check") {
+    const toFix = check?.issues.filter((issue) => issue.severity === "fix").length ?? 0;
+    return <div className="app-shell">{projectHeader}
+      <main className="page two-col">
+        <section className="col wide check-panel" aria-label="Edit check" data-checked-revision={check?.revision ?? 0}>
+          <div className="row-between"><h1>Check your edit</h1>{check && <span className="tag">{check.ai ? "Built-in checks + AI look" : "Built-in checks"}{check.revision !== revision ? " · edited since" : ""}</span>}</div>
+          {!check && <p className="muted">A last look before export: clipped words, long pauses, black or frozen picture, text that goes by too fast and music balance. Each finding comes with a fix you can accept.</p>}
+          {check?.note && <p className="note">{check.note}</p>}
+          {check && <p className="muted">{check.issues.length === 0 ? "Nothing to fix. Ready to export." : toFix + " to fix · " + (check.issues.length - toFix) + " to look at. Warnings never block export."}</p>}
+          {check && check.issues.length > 0 && <ul className="suggestion-list issue-list">{check.issues.map((issue) => <li key={issue.id} className={"card suggestion issue-" + issue.severity + (issue.fix && !fixPicked[issue.id] ? " off" : "")}>
+            {issue.fix && <input type="checkbox" id={"i-" + issue.id} checked={Boolean(fixPicked[issue.id])} onChange={(event) => setFixPicked((current) => ({ ...current, [issue.id]: event.target.checked }))} />}
+            <div className="suggestion-body">
+              <label htmlFor={"i-" + issue.id}><span className={"tag sev-" + issue.severity}>{issue.severity === "fix" ? "Fix" : issue.severity === "warn" ? "Look" : "Note"}{issue.source === "ai" ? " · AI" : ""}</span> <strong>{issue.title}</strong></label>
+              <span className="small what">{issue.detail}</span>
+              {issue.fix && <span className="small fix-label">→ {issue.fix.label}</span>}
+              {typeof issue.atS === "number" && <button type="button" className="link small" onClick={() => showIssue(issue)}>Show at {issue.atS.toFixed(1)} s</button>}
+            </div>
+          </li>)}</ul>}
+          <div className="actions">
+            <button className={check ? "btn" : "primary"} onClick={() => void runCheck()} disabled={busy}>{check ? "Check again" : "Check my edit"}</button>
+            {check && check.issues.some((issue) => issue.fix) && <button className="primary" onClick={applyFixes} disabled={busy || check.revision !== revision || !check.issues.some((issue) => issue.fix && fixPicked[issue.id])}>Apply selected fixes</button>}
+            <button className="btn" onClick={() => setScreen("export")} disabled={busy}>Go to export</button>
+          </div>
+        </section>
+        <aside className="col narrow">{player}</aside>
+      </main>
+    </div>;
+  }
+
+  // ── Export ──────────────────────────────────────────────────────────────────────────────
+  if (screen === "export") {
+    return <div className="app-shell">{projectHeader}
+      <main className="page two-col">
+        <section className="col wide" aria-label="Export">
+          <h1>Export</h1>
+          <p className="muted">Pick the format. Captions, titles, music and effects are burned into the file.</p>
+          <fieldset className="format-list"><legend className="sr-only">Format</legend>{Object.entries(PLATFORMS).map(([key, preset]) => <label key={key} className={"card format" + (platform === key ? " on" : "")}><input type="radio" name="format" checked={platform === key} onChange={() => setPlatform(key)} /><span className={"frame " + (preset.width < preset.height ? "tall" : preset.width === preset.height ? "square" : "wide")} aria-hidden="true" /><span><strong>{preset.label}</strong><span className="mono small muted">{preset.width} × {preset.height}</span></span></label>)}</fieldset>
+          <div className="actions">
+            <button className="primary" onClick={submitRender} disabled={busy || !revision || Boolean(renderJobId && !renderUrl && !/^(failed|cancelled)/.test(renderJobStatus))}>Export video</button>
+            {renderUrl && <a className="btn" href={renderUrl} download="videocraft-export.mp4">Download video</a>}
+          </div>
+          {renderJobId && !renderUrl && <p className="muted">Exporting… {renderJobStatus}. This takes roughly as long as the video itself.</p>}
+          {learned && <details className="card learned-panel"><summary>Learned from your edits</summary>
+            <p className="small">{learned.summary}</p>
+            <p className="small muted">{learned.samples} signals: {learned.counts.removed ?? 0} removed, {learned.counts.exported ?? 0} exported, {learned.counts.rejected ?? 0} from rejected proposals.</p>
+            <button className="btn" onClick={resetLearned} disabled={busy || learned.samples === 0}>Reset what was learned</button>
+          </details>}
+        </section>
+        <aside className="col narrow">{player}</aside>
+      </main>
+    </div>;
+  }
+
+  // ── Edit ────────────────────────────────────────────────────────────────────────────────
+  const modePane = mode === "story" ? <section className="pane transcript" aria-label="Transcript">
+      <div className="pane-head"><h2>Story</h2><span className="muted small">{formatClock(keptUs)} kept{mainVideo?.durationUs ? " of " + formatClock(mainVideo.durationUs) : ""}</span></div>
+      {words.length === 0 ? <p className="muted pad">{transcribing ? "Listening to the video… the transcript appears here." : "No transcript yet."}</p> : <>
+        <p className="muted small pad">Click a word, shift-click another to select the words between. Cut words are struck through.</p>
+        <div className="words" onMouseDown={(event) => { if (event.shiftKey) event.preventDefault(); }}>{segments.map((segment) => <p key={segment.id} className="para"><span className="mono time">{formatClock(segment.startUs)}</span>{segment.words.map((word) => { const index = words.indexOf(word); const isSel = selection ? index >= Math.min(selection.from, selection.to) && index <= Math.max(selection.from, selection.to) : false; return <span key={word.startUs + ":" + index} className={"word" + (kept[index] ? "" : " cut") + (isSel ? " sel" : "")} onClick={(event) => pickWord(index, event.shiftKey)}>{word.text} </span>; })}</p>)}</div>
+        {selection && <div className="selection-bar" role="toolbar" aria-label="Selected words">
+          <span className="small">“{selectionText.slice(0, 60)}{selectionText.length > 60 ? "…" : ""}”</span>
+          {selectionKept.some(Boolean) && <button className="btn" onClick={cutSelection} disabled={busy}>Cut</button>}
+          {selectionKept.some((k) => !k) && <button className="btn" onClick={restoreSelection} disabled={busy}>Bring back</button>}
+          <button className="btn" onClick={() => addGraphic(selectionText.split(" ").slice(0, 6).join(" ").replace(/[.,;:!?]+$/, ""), "title")} disabled={busy || !selectionKept.some(Boolean)}>Title here</button>
+          <button className="btn" onClick={() => { setMode("visuals"); }} disabled={busy}>Cutaway here</button>
+          <button className="btn" onClick={() => { setMode("audio"); }} disabled={busy}>Sound here</button>
+          <button className="btn" onClick={() => setSelection(null)}>Clear</button>
+        </div>}
+      </>}
+    </section>
+    : mode === "captions" ? <section className="pane" aria-label="Captions and text">
+      <div className="pane-head"><h2>Captions &amp; text</h2></div>
+      <div className="pad stack graphics-panel">
+        <h3>Add text on screen</h3>
+        <label>Type<select value={gfxKind} onChange={(event) => setGfxKind(event.target.value as "title" | "callout" | "lower-third")}><option value="title">Title</option><option value="callout">Callout</option><option value="lower-third">Name caption (name + role)</option></select></label>
+        <label>{gfxKind === "lower-third" ? "Name" : "Text"}<input value={gfxText} maxLength={120} onChange={(event) => setGfxText(event.target.value)} /></label>
+        {gfxKind !== "callout" && <label>{gfxKind === "lower-third" ? "Role" : "Second line"} (optional)<input value={gfxSubtitle} maxLength={120} onChange={(event) => setGfxSubtitle(event.target.value)} /></label>}
+        {gfxKind !== "lower-third" && <label>Position<select value={gfxPosition} onChange={(event) => setGfxPosition(event.target.value as "top" | "center" | "bottom")}><option value="top">Top</option><option value="center">Centre</option><option value="bottom">Bottom</option></select></label>}
+        <label>On screen for (seconds)<input type="number" min={0.5} max={60} step={0.5} value={gfxSeconds} onChange={(event) => setGfxSeconds(Math.max(0.5, Number(event.target.value) || 3))} /></label>
+        <button className="btn" onClick={() => addGraphic()} disabled={busy || revision === 0 || !gfxText.trim()}>{selection ? "Add at the selected words" : "Add at the playhead"}</button>
+        {graphicsClips.length > 0 && <ul className="item-list graphics-list">{graphicsClips.map((clip) => { const original = String(clip.transform?.text ?? ""); const draft = gfxDrafts[clip.id] ?? original; return <li key={clip.id}><span className="mono small">{formatSeconds(clip.timelineStartUs)}</span><input aria-label={"Text at " + formatSeconds(clip.timelineStartUs)} value={draft} maxLength={120} onChange={(event) => setGfxDrafts((current) => ({ ...current, [clip.id]: event.target.value }))} /><button className="btn" onClick={() => void applyEdit([{ type: "update-graphic", clipId: clip.id, text: draft.trim() }], "Text updated").then((ok) => { if (ok) setGfxDrafts((current) => { const { [clip.id]: _done, ...rest } = current; return rest; }); })} disabled={busy || !draft.trim() || draft.trim() === original}>Save</button><button className="btn" onClick={() => void applyEdit([{ type: "remove-clip", clipId: clip.id, reason: "Text removed" }], "Text removed")} disabled={busy}>Remove</button></li>; })}</ul>}
+        <label className="checkbox"><input type="checkbox" checked={Boolean(progressClip)} disabled={busy || revision === 0} onChange={(event) => void applyEdit([{ type: "set-progress-bar", enabled: event.target.checked, color: gfxColor }], event.target.checked ? "Progress bar on" : "Progress bar off")} /> Progress bar across the top</label>
+        <h3>Captions</h3>
+        {captionCues.length === 0 ? <p className="muted small">No captions yet. Cutting with the director or bringing words back adds them; the check offers them for short videos.</p> : <ul className="item-list cue-list captions-panel">{captionCues.map((cue) => { const original = String(cue.transform?.text ?? ""); const draft = captionDrafts[cue.id] ?? original; return <li key={cue.id}><span className="mono small">{formatSeconds(cue.timelineStartUs)}</span><input aria-label={"Caption at " + formatSeconds(cue.timelineStartUs)} value={draft} onChange={(event) => setCaptionDrafts((current) => ({ ...current, [cue.id]: event.target.value }))} /><button className="btn" onClick={() => saveCaption(cue)} disabled={busy || revision === 0 || draft.trim() === original}>Save</button></li>; })}</ul>}
+        {captionCues.length === 0 && words.length > 0 && segmentsFor && <button className="btn" onClick={() => void applyEdit(cueOps(words.filter((_, i) => kept[i]), segmentsFor), "Captions added")} disabled={busy || revision === 0}>Add captions for the cut</button>}
+      </div>
+    </section>
+    : mode === "visuals" ? <section className="pane" aria-label="Visuals">
+      <div className="pane-head"><h2>Visuals</h2></div>
+      <div className="pad stack broll-panel effects-panel">
+        <h3>Look</h3>
+        <label>Look for the whole video<select value={wholeLook} disabled={busy || revision === 0} onChange={(event) => { if (event.target.value !== "mixed") void applyEdit([{ type: "set-look", look: event.target.value }], "Look: " + (LOOK_LABEL[event.target.value] ?? event.target.value)); }}>{wholeLook === "mixed" && <option value="mixed">Mixed (set per clip)</option>}{Object.entries(LOOK_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+        <p className="muted small">Zooms and transitions are set per clip: select a clip on the timeline.</p>
+        <h3>Cutaways</h3>
+        <label className="btn file-btn">Upload a photo or clip<input type="file" accept="image/*,video/*" aria-label="Upload a photo or clip" onChange={(event) => void uploadAsset(event, "media")} disabled={busy} /></label>
+        <label>Cutaway media<select value={brollAssetId} onChange={(event) => setBrollAssetId(event.target.value)}><option value="">Choose a photo or clip</option>{brollAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.kind === "image" ? "Photo" : "Clip"} · {String(asset.metadata.filename ?? asset.id.slice(0, 8))}</option>)}</select></label>
+        <label>On screen for (seconds)<input type="number" min={0.5} max={60} step={0.5} value={brollSeconds} onChange={(event) => setBrollSeconds(Math.max(0.5, Number(event.target.value) || 3))} /></label>
+        <label>Style<select value={brollMode} onChange={(event) => setBrollMode(event.target.value as "full" | "pip")}><option value="full">Full frame</option><option value="pip">Corner inset</option></select></label>
+        <button className="btn" onClick={addBroll} disabled={busy || revision === 0 || !brollAssetId}>{selection ? "Add at the selected words" : "Add at the playhead"}</button>
+        {brolls.length > 0 && <ul className="item-list broll-list">{brolls.map((clip) => <li key={clip.id}><span>{formatSeconds(clip.timelineStartUs)}–{formatSeconds(clip.timelineEndUs)} · {assetName(clip.assetId)} · {clip.transform?.mode === "pip" ? "inset" : "full"}</span><button className="btn" onClick={() => void applyEdit([{ type: "remove-clip", clipId: clip.id, reason: "Cutaway removed" }], "Cutaway removed")} disabled={busy}>Remove</button></li>)}</ul>}
+      </div>
+    </section>
+    : mode === "audio" ? <section className="pane" aria-label="Audio">
+      <div className="pane-head"><h2>Audio</h2></div>
+      <div className="pad stack music-panel">
+        <h3>Music</h3>
+        {musicClip ? <p className="small">Playing <strong>{musicName}</strong>{(() => { const meta = assets.find((asset) => asset.id === musicClip.assetId)?.metadata; return meta?.generated ? " (" + String(meta.mood) + ", " + String(meta.key) + ", " + String(meta.bpm) + " BPM)" : ""; })()} at {String(musicClip.transform?.volumeDb)} dB{musicClip.transform?.duck === false ? "" : ", lowered while people speak"}.</p> : <p className="muted small">Music fades in and out and dips while people speak.</p>}
+        <label>Mood<select value={musicMood} onChange={(event) => setMusicMood(event.target.value)}><option value="auto">Match my description</option><option value="upbeat">Upbeat</option><option value="calm">Calm</option><option value="inspiring">Inspiring</option><option value="serious">Serious</option><option value="playful">Playful</option></select></label>
+        <button className="btn" onClick={generateMusicBed} disabled={busy || revision === 0}>{musicClip && assets.find((asset) => asset.id === musicClip.assetId)?.metadata.generated ? "Try different music" : "Generate matching music"}</button>
+        <label className="btn file-btn">Upload your own track<input type="file" accept="audio/*" aria-label="Upload a music track" onChange={(event) => void uploadAsset(event, "media")} disabled={busy} /></label>
+        {audioAssets.length > 0 && <label>Music track<select value={musicAssetId} onChange={(event) => setMusicAssetId(event.target.value)}><option value="">Choose a track</option>{audioAssets.map((asset) => <option key={asset.id} value={asset.id}>{String(asset.metadata.filename ?? asset.id.slice(0, 8))}</option>)}</select></label>}
+        <label>Music volume ({musicVolume} dB)<input type="range" min={-30} max={-4} step={1} value={musicVolume} onChange={(event) => setMusicVolume(Number(event.target.value))} /></label>
+        <label className="checkbox"><input type="checkbox" checked={musicDuck} onChange={(event) => setMusicDuck(event.target.checked)} /> Lower it while people speak</label>
+        {audioAssets.length > 0 && <button className="btn" onClick={() => void applyEdit([{ type: "set-music", assetId: musicAssetId, volumeDb: musicVolume, duck: musicDuck }], "Music set")} disabled={busy || revision === 0 || !musicAssetId}>{musicClip ? "Use this track instead" : "Use this track"}</button>}
+        {musicClip && <button className="btn" onClick={() => void applyEdit([{ type: "clear-music" }], "Music removed")} disabled={busy}>Remove music</button>}
+        <h3>Sound effects</h3>
+        <label>Sound effect<select value={sfxKind} onChange={(event) => setSfxKind(event.target.value)}>{Object.entries(SFX_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+        <button className="btn" onClick={addSoundEffect} disabled={busy || revision === 0}>{selection ? "Add at the selected words" : "Add sound at the playhead"}</button>
+        {sfxClips.length > 0 && <ul className="item-list">{sfxClips.map((clip) => <li key={clip.id}><span>{formatSeconds(clip.timelineStartUs)} · {SFX_LABEL[String(clip.transform?.kind)] ?? "Sound"}</span><button className="btn" onClick={() => void applyEdit([{ type: "remove-clip", clipId: clip.id, reason: "Sound removed" }], "Sound removed")} disabled={busy}>Remove</button></li>)}</ul>}
+      </div>
+    </section>
+    : <section className="pane" aria-label="Brand">
+      <div className="pane-head"><h2>Brand</h2></div>
+      <div className="pad stack">
+        <label>Accent colour for titles and the progress bar<input type="color" value={gfxColor} onChange={(event) => setGfxColor(event.target.value)} /></label>
+        <p className="muted small">New titles, callouts and name captions use this colour. Saved brand kits (logo, colours, fonts) are coming next.</p>
+      </div>
+    </section>;
+
+  const inspector = selected ? <aside className="inspector" aria-label="Selected">
+    <div className="row-between"><h2>{selected.kind === "video" ? "Selected clip" : selected.kind === "caption" ? "Caption" : selected.clip.transform?.role === "graphic" ? "Text on screen" : selected.clip.transform?.role === "broll" ? "Cutaway" : selected.clip.transform?.role === "sfx" ? "Sound effect" : selected.clip.transform?.role === "music" ? "Music" : "Selected"}</h2><button className="btn icon" aria-label="Close" onClick={() => setSelectedClipId("")}>×</button></div>
+    <p className="small"><strong>{clipLabel(selected.kind, selected.clip)}</strong></p>
+    <p className="mono small muted">{formatSeconds(selected.clip.timelineStartUs)}–{formatSeconds(selected.clip.timelineEndUs)} in the edit</p>
+    {selectedClip ? <div className="clip-panel stack" aria-label="Selected clip">
+      {selectedClip.reason && <p className="small muted">{selectedClip.reason}</p>}
+      <div className="clip-actions">
+        <button className="btn" onClick={() => nudgeSelectedClip(-1)} disabled={busy}>Move earlier</button>
+        <button className="btn" onClick={() => nudgeSelectedClip(1)} disabled={busy}>Move later</button>
+        <button className="btn" onClick={() => trimSelectedClip(500_000, 0)} disabled={busy}>Trim start +0.5s</button>
+        <button className="btn" onClick={() => trimSelectedClip(-500_000, 0)} disabled={busy}>Start −0.5s</button>
+        <button className="btn" onClick={() => trimSelectedClip(0, -500_000)} disabled={busy}>Trim end −0.5s</button>
+        <button className="btn" onClick={() => trimSelectedClip(0, 500_000)} disabled={busy}>End +0.5s</button>
+        {sourceUrl && <><button className="btn" onClick={() => trimToPlayhead("start")} disabled={busy}>Start at playhead</button><button className="btn" onClick={() => trimToPlayhead("end")} disabled={busy}>End at playhead</button><button className="btn" onClick={playSelectedClip}>Play clip</button></>}
+      </div>
+      <div className="clip-effects stack">
+        <label>Zoom<select value={String(selectedClip.transform?.zoom ?? "none")} disabled={busy} onChange={(event) => void applyEdit([{ type: "set-clip-effects", clipId: selectedClip.id, zoom: event.target.value }], "Zoom: " + (ZOOM_LABEL[event.target.value] ?? event.target.value))}>{Object.entries(ZOOM_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+        <label>Into this clip<select value={String(selectedClip.transform?.transitionIn ?? "cut")} disabled={busy} onChange={(event) => void applyEdit([{ type: "set-clip-effects", clipId: selectedClip.id, transitionIn: event.target.value }], "Transition: " + (TRANSITION_LABEL[event.target.value] ?? event.target.value))}>{Object.entries(TRANSITION_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+        {selectedClip.id === videoClips.at(-1)?.id && <label>Ending<select value={String(selectedClip.transform?.transitionOut ?? "cut")} disabled={busy} onChange={(event) => void applyEdit([{ type: "set-clip-effects", clipId: selectedClip.id, transitionOut: event.target.value }], "Ending: " + (TRANSITION_LABEL[event.target.value] ?? event.target.value))}><option value="cut">Hard end</option><option value="dip-black">Fade to black</option><option value="dip-white">Fade to white</option></select></label>}
+        <label>Look<select value={String(selectedClip.transform?.look ?? "none")} disabled={busy} onChange={(event) => void applyEdit([{ type: "set-clip-effects", clipId: selectedClip.id, look: event.target.value }], "Clip look: " + (LOOK_LABEL[event.target.value] ?? event.target.value))}>{Object.entries(LOOK_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+      </div>
+      <button className="btn danger-outline" onClick={() => removeSelectedClip()} disabled={busy}>Remove clip</button>
+    </div> : selected.kind !== "caption" && selected.clip.transform?.role !== "music" && selected.clip.transform?.role !== "progress" ? <button className="btn danger-outline" onClick={() => removeSelectedClip()} disabled={busy}>Remove</button> : null}
+  </aside> : null;
+
+  return <div className="app-shell">{projectHeader}
+    <main className="editor">
+      <nav aria-label="Editing modes" className="mode-rail">{MODES.map((item) => <button key={item.id} type="button" className={"mode" + (mode === item.id ? " on" : "")} aria-pressed={mode === item.id} onClick={() => { if (item.id === "review") { setScreen("check"); if (!check || check.revision !== revision) void runCheck(); } else setMode(item.id); }}><ModeIcon id={item.id} />{item.label}{item.id === "review" && check && check.revision === revision && check.issues.some((issue) => issue.severity === "fix") ? <span className="badge-dot" aria-label="has findings" /> : null}</button>)}</nav>
+      <div className="work">
+        <div className="work-top">
+          {modePane}
+          <section className="pane preview-pane" aria-label="Preview">{player}</section>
+          {inspector}
+        </div>
+        <section className="timeline" aria-label="Timeline">
+          <div className="row-between"><h2>Timeline</h2><span className="muted small">{formatClock(timeline.durationUs)} · select anything to edit it</span></div>
           <div className="ruler" aria-hidden="true"><span className="ruler-gutter" /><div className="ruler-lane">{rulerTicks(timeline.durationUs).map((t) => <span key={t} style={{ left: (t / Math.max(1, timeline.durationUs / 1e6)) * 100 + "%" }}>{String(Math.floor(t / 60)).padStart(2, "0") + ":" + String(Math.round(t % 60)).padStart(2, "0")}</span>)}</div></div>
           <div className="track-list">
-            {timeline.tracks.length === 0 && <div className="empty-state">Your non-destructive timeline is empty. Add a registered asset to begin.</div>}
-            {timeline.tracks.map((track) => <div className="track" key={track.id}><div className="track-label">{trackName[track.kind] ?? track.kind}</div><div className="track-lane">{track.clips.map((clip) => <button type="button" className={"clip" + (clip.transform?.role === "progress" ? " progress" : "") + (selectedClipId === clip.id ? " selected" : "")} key={clip.id} style={{ left: (clip.timelineStartUs / Math.max(1, timeline.durationUs)) * 100 + "%", width: ((clip.timelineEndUs - clip.timelineStartUs) / Math.max(1, timeline.durationUs)) * 100 + "%" }} title={clipLabel(track.kind, clip) + " · " + formatSeconds(clip.timelineEndUs - clip.timelineStartUs)} aria-label={clipLabel(track.kind, clip) + ", " + formatSeconds(clip.sourceEndUs - clip.sourceStartUs)} aria-pressed={selectedClipId === clip.id} onClick={() => setSelectedClipId(clip.id)} onKeyDown={(event) => handleClipKeyDown(event, clip)}><strong>{clipLabel(track.kind, clip)}</strong>{track.kind === "video" && <small>{formatSeconds(clip.sourceEndUs - clip.sourceStartUs)}</small>}</button>)}</div></div>)}
+            {videoClips.length === 0 && <div className="empty-state">Nothing on the timeline yet. Make the first cut, or choose Edit it myself.</div>}
+            {lanes.map((lane) => <div className="track" key={lane.name}><div className="track-label">{lane.name}</div><div className="track-lane">{lane.clips.map((clip) => <button type="button" className={"clip lane-" + lane.name.toLowerCase() + (clip.transform?.role === "progress" ? " progress" : "") + (selectedClipId === clip.id ? " selected" : "")} key={clip.id} style={{ left: (clip.timelineStartUs / Math.max(1, timeline.durationUs)) * 100 + "%", width: ((clip.timelineEndUs - clip.timelineStartUs) / Math.max(1, timeline.durationUs)) * 100 + "%" }} title={clipLabel(lane.kind, clip) + " · " + formatSeconds(clip.timelineEndUs - clip.timelineStartUs)} aria-label={clipLabel(lane.kind, clip) + ", " + formatSeconds(clip.sourceEndUs - clip.sourceStartUs)} aria-pressed={selectedClipId === clip.id} onClick={() => setSelectedClipId(clip.id)} onKeyDown={(event) => handleClipKeyDown(event, clip, lane.kind)}><strong>{clipLabel(lane.kind, clip)}</strong>{lane.kind === "video" && <small>{formatSeconds(clip.sourceEndUs - clip.sourceStartUs)}</small>}</button>)}</div></div>)}
           </div>
-        </div>
-        {selectedClip && <section className="panel clip-panel" aria-label="Selected clip">
-          <div className="panel-heading"><h2>Selected clip</h2><span className="badge">{formatSeconds(selectedClip.sourceStartUs)}–{formatSeconds(selectedClip.sourceEndUs)} of source</span></div>
-          {selectedClip.reason && <p>{selectedClip.reason}{typeof selectedClip.score === "number" && <> <span className="badge">score {Math.round(selectedClip.score * 100)}</span></>}</p>}
-          <div className="clip-actions">
-            <button className="secondary" onClick={() => nudgeSelectedClip(-1)} disabled={busy}>Move earlier</button>
-            <button className="secondary" onClick={() => nudgeSelectedClip(1)} disabled={busy}>Move later</button>
-            <button className="secondary" onClick={() => trimSelectedClip(500_000, 0)} disabled={busy || revision === 0}>Trim start +0.5s</button>
-            <button className="secondary" onClick={() => trimSelectedClip(-500_000, 0)} disabled={busy || revision === 0}>Start −0.5s</button>
-            <button className="secondary" onClick={() => trimSelectedClip(0, -500_000)} disabled={busy || revision === 0}>Trim end −0.5s</button>
-            <button className="secondary" onClick={() => trimSelectedClip(0, 500_000)} disabled={busy || revision === 0}>End +0.5s</button>
-            <button className="secondary" onClick={() => removeSelectedClip()} disabled={busy}>Remove</button>
-          </div>
-          <div className="clip-effects">
-            <label>Zoom<select value={String(selectedClip.transform?.zoom ?? "none")} disabled={busy || revision === 0} onChange={(event) => void applyEdit([{ type: "set-clip-effects", clipId: selectedClip.id, zoom: event.target.value }], "Zoom: " + (ZOOM_LABEL[event.target.value] ?? event.target.value))}>{Object.entries(ZOOM_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
-            <label>Into this clip<select value={String(selectedClip.transform?.transitionIn ?? "cut")} disabled={busy || revision === 0} onChange={(event) => void applyEdit([{ type: "set-clip-effects", clipId: selectedClip.id, transitionIn: event.target.value }], "Transition: " + (TRANSITION_LABEL[event.target.value] ?? event.target.value))}>{Object.entries(TRANSITION_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
-            {selectedClip.id === videoClips.at(-1)?.id && <label>Ending<select value={String(selectedClip.transform?.transitionOut ?? "cut")} disabled={busy || revision === 0} onChange={(event) => void applyEdit([{ type: "set-clip-effects", clipId: selectedClip.id, transitionOut: event.target.value }], "Ending: " + (TRANSITION_LABEL[event.target.value] ?? event.target.value))}><option value="cut">Hard end</option><option value="dip-black">Fade to black</option><option value="dip-white">Fade to white</option></select></label>}
-            <label>Look<select value={String(selectedClip.transform?.look ?? "none")} disabled={busy || revision === 0} onChange={(event) => void applyEdit([{ type: "set-clip-effects", clipId: selectedClip.id, look: event.target.value }], "Clip look: " + (LOOK_LABEL[event.target.value] ?? event.target.value))}>{Object.entries(LOOK_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
-          </div>
-        </section>}
-        {revision > 0 && <section className="panel segment-panel" aria-label="Add segment">
-          <h2>Add a segment</h2>
-          <div className="segment-row"><label>Start (s)<input type="number" min={0} step={0.1} value={segmentStart} onChange={(event) => setSegmentStart(event.target.value)} /></label><label>End (s)<input type="number" min={0} step={0.1} value={segmentEnd} onChange={(event) => setSegmentEnd(event.target.value)} /></label><button className="secondary" onClick={addSegment} disabled={busy}>Add segment</button></div>
-        </section>}
-        {captionCues.length > 0 && <section className="panel captions-panel" aria-label="Captions">
-          <div className="panel-heading"><h2>Captions</h2><span className="badge">{captionCues.length} cues</span></div>
-          <p className="muted">Captions follow their clips when you cut or reorder. Correct wording here; timing is kept.</p>
-          <ul className="cue-list">{captionCues.map((cue) => { const original = String(cue.transform?.text ?? ""); const draft = captionDrafts[cue.id] ?? original; return <li key={cue.id}><span className="cue-time">{formatSeconds(cue.timelineStartUs)}</span><input aria-label={"Caption at " + formatSeconds(cue.timelineStartUs)} value={draft} onChange={(event) => setCaptionDrafts((current) => ({ ...current, [cue.id]: event.target.value }))} /><button className="secondary" onClick={() => saveCaption(cue)} disabled={busy || revision === 0 || draft.trim() === original}>Save</button></li>; })}</ul>
-        </section>}
-        <div className="lower-grid">
-          <section className="panel preview-panel"><div className="panel-heading"><h2>Preview</h2><span className="badge">Non-destructive</span></div><div className="preview-tabs" role="tablist"><button role="tab" aria-selected={previewMode === "source"} className={previewMode === "source" ? "" : "secondary"} onClick={() => setPreviewMode("source")}>Source</button><button role="tab" aria-selected={previewMode === "render"} className={previewMode === "render" ? "" : "secondary"} onClick={() => setPreviewMode("render")}>Rendered export</button></div><div className="preview-screen">{previewMode === "render" ? (renderUrl ? <video controls src={renderUrl} /> : <span>{renderJobId ? "Render " + renderJobStatus : "Render a platform export to preview it here"}</span>) : (sourceUrl ? <video ref={playerRef} controls src={sourceUrl} onTimeUpdate={stopAtClipEnd} /> : <span>{sourceNote || "Sign in and add a video to scrub the source here"}</span>)}</div>{previewMode === "source" && sourceUrl && sourceNote && <p className="muted">{sourceNote}</p>}{previewMode === "source" && sourceUrl && <div className="player-actions"><button className="secondary" onClick={playSelectedClip} disabled={!selectedClip}>Play selected clip</button><button className="secondary" onClick={() => trimToPlayhead("start")} disabled={busy || !selectedClip || revision === 0}>Trim start to playhead</button><button className="secondary" onClick={() => trimToPlayhead("end")} disabled={busy || !selectedClip || revision === 0}>Trim end to playhead</button><button className="secondary" onClick={() => markSegmentFromPlayhead("start")}>Segment start = playhead</button><button className="secondary" onClick={() => markSegmentFromPlayhead("end")}>Segment end = playhead</button></div>}</section>
-          <section className="panel proposal-panel"><div className="panel-heading"><h2>AI proposal</h2>{proposal && <span className="badge" title="How well the chosen clips match your goal, audience and platform">Fit to your goal: {fit} ({Math.round(proposal.confidence * 100)}%)</span>}</div>{proposal ? <><p>{proposal.rationale}</p>{proposalHighlights.length > 0 && <ol className="highlight-list">{proposalHighlights.map((highlight, index) => <li key={index}><strong>{formatSeconds(highlight.startUs)}–{formatSeconds(highlight.endUs)}</strong>{typeof highlight.score === "number" && <span className="badge">score {Math.round(highlight.score * 100)}</span>}{highlight.parts > 1 && <span className="badge">{highlight.parts} parts, pauses cut</span>}<p>{highlight.reason}</p></li>)}</ol>}<div className="evidence">{proposal.evidence.map((item) => <div key={item.reference}><span>{evidenceLabel(item).source}</span><code>{evidenceLabel(item).reference}{typeof item.startUs === "number" && typeof item.endUs === "number" ? " · " + formatSeconds(item.startUs) + "–" + formatSeconds(item.endUs) : ""}</code>{item.excerpt && <p>{item.excerpt}</p>}</div>)}</div>{proposal.status === "proposed" && <div className="decision-actions"><button className="secondary" onClick={() => decideProposal("rejected")} disabled={busy}>Reject</button><button onClick={() => decideProposal("accepted")} disabled={busy}>Accept highlights</button></div>}</> : <p className="muted">Click Create highlights: suggested clips appear here with the reason and transcript evidence for each.</p>}</section>
-        </div>
-      </section>
+        </section>
+      </div>
     </main>
   </div>;
+}
+
+function ModeIcon({ id }: { id: Mode }) {
+  const p = { width: 20, height: 20, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round" as const, "aria-hidden": true };
+  if (id === "story") return <svg {...p}><path d="M4 6h16M4 12h10M4 18h13" /></svg>;
+  if (id === "captions") return <svg {...p}><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M7 15h4M13 15h4" /></svg>;
+  if (id === "visuals") return <svg {...p}><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="10" r="2" /><path d="M21 16l-5-5-9 9" /></svg>;
+  if (id === "audio") return <svg {...p}><path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" /></svg>;
+  if (id === "brand") return <svg {...p}><path d="M12 3l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.4 6.8 19.1l1-5.8L3.5 9.2l5.9-.9z" /></svg>;
+  return <svg {...p}><path d="M9 12l2 2 4-4" /><circle cx="12" cy="12" r="9" /></svg>;
+}
+
+/** What a plan suggestion changes, in plain words. */
+function describeSuggestion(item: Suggestion): string {
+  if (item.kind === "cut" && item.segments) return item.segments.length + " part" + (item.segments.length === 1 ? "" : "s") + ", " + Math.round(item.segments.reduce((sum, seg) => sum + seg.endS - seg.startS, 0)) + " seconds: " + item.segments.map((seg) => formatClock(seg.startS * 1e6) + "–" + formatClock(seg.endS * 1e6)).join(", ");
+  if (item.kind === "music") return "Mood: " + (item.mood ?? "") + ", lowered while people speak";
+  if (item.kind === "platform") return PLATFORMS[item.platform ?? ""]?.label ?? "";
+  if (item.kind === "look") return "Whole video";
+  if (typeof item.atS === "number" && item.kind !== "advice") return "At " + formatClock(item.atS * 1e6) + " of the original" + (item.durationS ? ", for " + item.durationS.toFixed(1) + " s" : "");
+  return item.kind === "advice" ? item.reason : "";
 }
 
 /** One entry per highlight: clips cut from one highlight (pauses removed) share its reason. */
@@ -928,3 +1036,4 @@ function evidenceLabel(item: Evidence): { source: string; reference: string } {
 
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : "Something went wrong"; }
 function formatSeconds(microseconds: number): string { return (microseconds / 1_000_000).toFixed(1) + "s"; }
+function formatClock(microseconds: number): string { const s = Math.max(0, Math.round(microseconds / 1e6)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
