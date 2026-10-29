@@ -1,6 +1,6 @@
 import { Pool, type PoolConfig } from "pg";
 import type { Asset, EditingProposal, Project, ProjectRevision, TranscriptSegment, UUID } from "@videocraft/domain";
-import type { AssetRepository, ProjectMember, ProjectMemberRepository, ProjectRepository, RevisionRepository, SceneRecord, SceneRepository } from "@videocraft/application";
+import { ProjectNameTakenError, type AssetRepository, type ProjectMember, type ProjectMemberRepository, type ProjectRepository, type RevisionRepository, type SceneRecord, type SceneRepository } from "@videocraft/application";
 
 export interface Database {
   query<T = Record<string, unknown>>(text: string, values?: readonly unknown[]): Promise<{ rows: T[] }>;
@@ -54,6 +54,15 @@ export class PostgresProjectRepository implements ProjectRepository {
     return result.rows.map(mapProject);
   }
   async save(project: Project): Promise<void> {
+    try {
+      await this.saveRow(project);
+    } catch (error) {
+      // The unique index is the backstop when two requests create the same name at once.
+      if ((error as { code?: string; constraint?: string }).code === "23505" && (error as { constraint?: string }).constraint === "projects_owner_name_unique") throw new ProjectNameTakenError(project.name);
+      throw error;
+    }
+  }
+  private async saveRow(project: Project): Promise<void> {
     await this.db.query(
       "INSERT INTO projects (id, owner_id, name, revision, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6) " +
       "ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, revision = EXCLUDED.revision, updated_at = EXCLUDED.updated_at",

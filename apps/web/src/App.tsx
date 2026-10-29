@@ -243,6 +243,10 @@ export function App() {
   }
 
   async function createProject() {
+    // Same rule as the server: names are unique per person, ignoring case and extra spaces.
+    const key = projectName.trim().replace(/\s+/g, " ").toLowerCase();
+    const clash = projects.find((project) => project.name.trim().replace(/\s+/g, " ").toLowerCase() === key);
+    if (clash) { setStatus("You already have a project called \"" + clash.name + "\". Choose a different name, or open it under Existing project."); return; }
     setBusy(true);
     try {
       const result = await request("/v1/projects", { method: "POST", body: JSON.stringify({ name: projectName }) });

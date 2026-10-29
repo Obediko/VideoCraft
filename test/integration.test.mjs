@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { CreateBucketCommand, S3Client } from "@aws-sdk/client-s3";
 import { Pool } from "pg";
 import Redis from "ioredis";
-import { migrateDatabase, PostgresAuditRepository, PostgresFeedbackRepository, PostgresRenderJobRepository } from "@videocraft/persistence";
+import { migrateDatabase, PostgresProjectRepository, PostgresAuditRepository, PostgresFeedbackRepository, PostgresRenderJobRepository } from "@videocraft/persistence";
 import { S3ObjectStorage } from "@videocraft/storage";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -17,13 +17,13 @@ test("PostgreSQL persistence and Redis connectivity are available", { skip }, as
   const pool = new Pool({ connectionString: databaseUrl });
   await migrateDatabase(pool);
   const projectId = "integration-project-" + Date.now();
-  await pool.query("INSERT INTO projects (id, owner_id, name, revision, created_at, updated_at) VALUES ($1,$2,$3,$4,now(),now())", [projectId, "integration-user", "Integration", 0]);
+  await pool.query("INSERT INTO projects (id, owner_id, name, revision, created_at, updated_at) VALUES ($1,$2,$3,$4,now(),now())", [projectId, "integration-user", "Integration " + projectId, 0]);
   const renderJobs = new PostgresRenderJobRepository(pool);
   const job = { id: "integration-render-" + Date.now(), projectId, revision: 1, settings: { format: "mp4", videoCodec: "libx264", audioCodec: "aac", width: 1280, height: 720, frameRate: 30 }, idempotencyKey: "integration-" + Date.now(), status: "queued", progress: 0 };
   await renderJobs.save(job);
   assert.equal((await renderJobs.get(job.id))?.projectId, projectId);
   const secondProjectId = projectId + "-second";
-  await pool.query("INSERT INTO projects (id, owner_id, name, revision, created_at, updated_at) VALUES ($1,$2,$3,$4,now(),now())", [secondProjectId, "integration-user", "Second", 0]);
+  await pool.query("INSERT INTO projects (id, owner_id, name, revision, created_at, updated_at) VALUES ($1,$2,$3,$4,now(),now())", [secondProjectId, "integration-user", "Second " + projectId, 0]);
   const secondJob = { ...job, id: job.id + "-second", projectId: secondProjectId };
   await renderJobs.save(secondJob);
   assert.equal((await renderJobs.get(secondJob.id))?.projectId, secondProjectId);
@@ -70,4 +70,41 @@ test("PostgreSQL persistence and Redis connectivity are available", { skip }, as
   await redis.quit();
   await pool.query("DELETE FROM projects WHERE id = ANY($1)", [[projectId, secondProjectId]]);
   await pool.end();
+});
+
+test("migration 006 renames existing duplicate project names, then enforces uniqueness per owner", { skip }, async () => {
+  const { readdir } = await import("node:fs/promises");
+  const admin = new Pool({ connectionString: databaseUrl });
+  const name = "vc_migration_" + Date.now();
+  await admin.query("CREATE DATABASE " + name);
+  const url = new URL(databaseUrl); url.pathname = "/" + name;
+  const pool = new Pool({ connectionString: url.toString() });
+  try {
+    // A database as staging had it before 006: migrations 001-005 applied, duplicate names present.
+    const dir = new URL("../packages/persistence/migrations/", import.meta.url);
+    await pool.query("CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())");
+    for (const file of (await readdir(dir)).filter((f) => f.endsWith(".sql")).sort()) {
+      if (file >= "006") break;
+      await pool.query(await readFile(new URL(file, dir), "utf8"));
+      await pool.query("INSERT INTO schema_migrations (version) VALUES ($1)", [file]);
+    }
+    const rows = [["p1", "obed", "My first cut", "2026-10-22T21:00:00Z"], ["p2", "obed", "My first cut", "2026-10-22T21:07:00Z"], ["p3", "obed", "my  first CUT ", "2026-10-23T10:00:00Z"], ["p4", "obed", "My first cut (2)", "2026-10-23T11:00:00Z"], ["p5", "obed", "My first cut", "2026-10-24T09:00:00Z"], ["q1", "someone-else", "My first cut", "2026-10-23T09:00:00Z"]];
+    for (const [id, owner, n, at] of rows) await pool.query("INSERT INTO projects (id, owner_id, name, revision, created_at, updated_at) VALUES ($1,$2,$3,0,$4,$4)", [id, owner, n, at]);
+
+    assert.deepEqual(await migrateDatabase(pool), ["006_unique_project_names.sql"]);
+    const names = Object.fromEntries((await pool.query("SELECT id, name FROM projects ORDER BY id")).rows.map((r) => [r.id, r.name]));
+    assert.equal(names.p1, "My first cut", "the oldest keeps its name");
+    assert.equal(names.p4, "My first cut (2)", "an existing numbered name is left alone");
+    assert.deepEqual([names.p2, names.p3, names.p5].sort(), ["My first cut (3)", "my first CUT (4)", "My first cut (5)"].sort(), "duplicates are numbered without colliding: " + JSON.stringify(names));
+    assert.equal(names.q1, "My first cut", "another person's project is untouched");
+
+    await assert.rejects(pool.query("INSERT INTO projects (id, owner_id, name, revision, created_at, updated_at) VALUES ('p9','obed',' MY FIRST   cut',0,now(),now())"), (e) => e.code === "23505");
+    const repo = new PostgresProjectRepository(pool);
+    await assert.rejects(repo.save({ id: "p10", ownerId: "obed", name: "My First Cut", revision: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }), (e) => e.code === "project_name_taken");
+    await repo.save({ id: "p11", ownerId: "obed", name: "Launch reel", revision: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+  } finally {
+    await pool.end();
+    await admin.query("DROP DATABASE IF EXISTS " + name);
+    await admin.end();
+  }
 });
