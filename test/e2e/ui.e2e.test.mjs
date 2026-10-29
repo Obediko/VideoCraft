@@ -241,7 +241,22 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
     const ticks = await page.locator(".ruler-lane span").allInnerTexts();
     assert.ok(ticks.length >= 3 && ticks[0] === "00:00", "ruler ticks: " + ticks.join(","));
 
+    // The live preview draws the edit over the footage: scrub to the title and it is on screen with a caption.
+    await page.getByRole("button", { name: "Captions", exact: true }).click();
+    const titleStart = Number((await page.locator(".graphics-list li .mono").first().innerText()).replace("s", ""));
+    await page.getByRole("tab", { name: "Edit" }).click();
+    const live = page.locator(".live");
+    await live.waitFor();
+    await page.evaluate((ms) => { const input = document.querySelector('.live-controls input[type="range"]'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set; set.call(input, String(ms)); input.dispatchEvent(new Event("input", { bubbles: true })); }, Math.round((titleStart + 0.3) * 1000));
+    await live.locator(".live-title", { hasText: "Why onboarding really fails" }).waitFor({ timeout: 5_000 });
+    await shot("live");
+    const seekLive = (ms) => page.evaluate((v) => { const input = document.querySelector('.live-controls input[type="range"]'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set; set.call(input, String(v)); input.dispatchEvent(new Event("input", { bubbles: true })); }, ms);
+    await seekLive(300);
+    await page.waitForFunction(() => /scale\(1\.12/.test(document.querySelector(".live-video")?.getAttribute("style") ?? ""), null, { timeout: 5_000 });
+    assert.match(await live.locator(".live-video").getAttribute("style") ?? "", /sepia/, "and the warm look");
+    assert.ok(await live.locator(".live-progress").count() === 1, "the progress bar is drawn");
     // The source player serves the uploaded video with seeking.
+    await page.getByRole("tab", { name: "Original" }).click();
     const player = page.locator(".preview-screen video");
     await player.waitFor({ timeout: 30_000 });
     const playbackUrl = await player.getAttribute("src");

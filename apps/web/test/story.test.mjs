@@ -60,3 +60,21 @@ test("cutting and then bringing words back heals the clip instead of leaving fra
   assert.equal(kept(t), "11111111111111111111");
   assert.equal(video(t).length, 1, "one clip again: " + JSON.stringify(video(t).map((c) => [c.sourceStartUs, c.sourceEndUs])));
 });
+
+test("live preview: transition veils and zooms match the export's rules", async () => {
+  const { veilAt, zoomAt } = await import("../test-dist/preview.js");
+  const clips = [
+    { id: "a", assetId: A, sourceStartUs: 0, sourceEndUs: 2_000_000, timelineStartUs: 0, timelineEndUs: 2_000_000, transform: { transitionIn: "dip-black" } },
+    { id: "b", assetId: A, sourceStartUs: 5_000_000, sourceEndUs: 7_000_000, timelineStartUs: 2_000_000, timelineEndUs: 4_000_000, transform: { transitionIn: "flash", zoom: "push" } },
+    { id: "c", assetId: A, sourceStartUs: 9_000_000, sourceEndUs: 11_000_000, timelineStartUs: 4_000_000, timelineEndUs: 6_000_000, transform: { transitionIn: "dip-white", transitionOut: "dip-black", zoom: "punch" } },
+  ];
+  assert.equal(veilAt(clips, 0, 6_000_000).opacity, 1, "fades in from black");
+  assert.equal(veilAt(clips, 1_000_000, 6_000_000).opacity, 0, "clear mid-clip");
+  assert.deepEqual(veilAt(clips, 2_000_000, 6_000_000), { opacity: 1, color: "#fff" }, "flash at the cut");
+  assert.equal(veilAt(clips, 2_150_000, 6_000_000).opacity, 0, "flash is short");
+  assert.ok(veilAt(clips, 3_900_000, 6_000_000).opacity > 0.5 && veilAt(clips, 3_900_000, 6_000_000).color === "#fff", "dip to white before the third clip");
+  assert.ok(veilAt(clips, 5_950_000, 6_000_000).opacity > 0.7 && veilAt(clips, 5_950_000, 6_000_000).color === "#000", "fades out at the end");
+  assert.equal(zoomAt(clips[2], 5_000_000), 1.12);
+  assert.ok(Math.abs(zoomAt(clips[1], 3_000_000) - 1.04) < 1e-6, "push-in is halfway at mid-clip");
+  assert.equal(zoomAt(clips[0], 1_000_000), 1);
+});
