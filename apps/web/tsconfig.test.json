@@ -1,4 +1,4 @@
 {
   "compilerOptions": { "target": "ES2022", "module": "NodeNext", "moduleResolution": "NodeNext", "strict": true, "exactOptionalPropertyTypes": true, "noUncheckedIndexedAccess": true, "outDir": "test-dist", "rootDir": "src", "skipLibCheck": true },
-  "files": ["src/story.ts"]
+  "files": ["src/story.ts", "src/preview.ts"]
 }

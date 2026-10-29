@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { LivePreview, type LivePreviewHandle } from "./LivePreview.js";
 import { cueOps, keptWords, rangeForWords, removeRangeOps, restoreRangeOps, secondsFromBrief, sourceToTimeline, timelineToSource, type Word } from "./story.js";
 
 type TimelineClip = {
@@ -95,7 +96,11 @@ export function App() {
   const [selectedClipId, setSelectedClipId] = useState("");
   const [platform, setPlatform] = useState("tiktok");
   const [captionDrafts, setCaptionDrafts] = useState<Record<string, string>>({});
-  const [previewMode, setPreviewMode] = useState<"source" | "render">("source");
+  const [previewMode, setPreviewMode] = useState<"edit" | "source" | "render">("edit");
+  const liveRef = useRef<LivePreviewHandle | null>(null);
+  const liveUsRef = useRef(0);
+  const lastLiveReport = useRef(0);
+  const [liveUs, setLiveUs] = useState(0);
   const [sourceUrls, setSourceUrls] = useState<Record<string, string>>({});
   const playerRef = useRef<HTMLVideoElement | null>(null);
   const [sourceRetry, setSourceRetry] = useState(0);
@@ -158,22 +163,26 @@ export function App() {
   const hasVideo = assets.some((asset) => asset.kind === "video");
   const edited = revision > 0 && videoClips.length > 0;
 
-  // Signed playback URLs for the original upload; fetched once per asset (they last an hour).
+  // Signed playback URLs for the footage, cutaways and music on the timeline; fetched once per asset (they last an hour).
+  const neededAssets = [...new Set([sourceAssetId, ...videoClips.map((clip) => clip.assetId), ...brolls.map((clip) => clip.assetId), ...(musicClip ? [musicClip.assetId] : [])].filter((id) => id && !id.startsWith("generated:")))];
   useEffect(() => {
-    if (!token || !projectId || !sourceAssetId || sourceUrls[sourceAssetId]) return;
+    const missing = neededAssets.filter((id) => !sourceUrls[id]);
+    if (!token || !projectId || missing.length === 0) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    request("/v1/projects/" + projectId + "/assets/" + sourceAssetId + "/playback-url")
-      .then((result) => {
-        if (cancelled) return;
-        // Formats browsers cannot play get a preview proxy; it is generated after upload.
-        if (result.pending) { setSourceNote("Preparing a browser preview of this video…"); timer = setTimeout(() => setSourceRetry((n) => n + 1), (result.retryAfterSeconds ?? 5) * 1000); return; }
-        setSourceNote(result.proxy ? "Previewing a 720p copy; exports use the original" : "");
-        setSourceUrls((current) => ({ ...current, [sourceAssetId]: /^https?:\/\//.test(result.url) ? result.url : API + result.url }));
-      })
-      .catch(() => undefined);
+    for (const id of missing) {
+      request("/v1/projects/" + projectId + "/assets/" + id + "/playback-url")
+        .then((result) => {
+          if (cancelled) return;
+          // Formats browsers cannot play get a preview proxy; it is generated after upload.
+          if (result.pending) { if (id === sourceAssetId) setSourceNote("Preparing a browser preview of this video…"); timer = setTimeout(() => setSourceRetry((n) => n + 1), (result.retryAfterSeconds ?? 5) * 1000); return; }
+          if (id === sourceAssetId) setSourceNote(result.proxy ? "Previewing a 720p copy; exports use the original" : "");
+          setSourceUrls((current) => ({ ...current, [id]: /^https?:\/\//.test(result.url) ? result.url : API + result.url }));
+        })
+        .catch(() => undefined);
+    }
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
-  }, [token, projectId, sourceAssetId, sourceUrls, sourceRetry]);
+  }, [token, projectId, neededAssets.join(","), sourceRetry]);
 
   // Selecting a clip cues the player to the start of that clip's source range.
   useEffect(() => {
@@ -202,10 +211,17 @@ export function App() {
   }
   useEffect(() => { void refreshLearned(); }, [token, proposal?.status, revision, renderJobId]);
 
-  function seekSource(sourceUs: number) {
-    const player = playerRef.current;
+  /** Show a source moment: in the live preview when it is in the cut, otherwise in the original footage. */
+  function seekSource(sourceUs: number, assetId = segmentsFor || sourceAssetId) {
+    const inCut = sourceToTimeline(videoClips, assetId, sourceUs);
+    if (inCut !== undefined && previewMode !== "source") { setPreviewMode("edit"); liveRef.current?.seek(inCut); return; }
     setPreviewMode("source");
-    if (player) player.currentTime = sourceUs / 1_000_000;
+    setTimeout(() => { const player = playerRef.current; if (player) player.currentTime = sourceUs / 1_000_000; }, 0);
+  }
+  function onLiveTime(us: number) {
+    liveUsRef.current = us;
+    const now = performance.now();
+    if (now - lastLiveReport.current > 120) { lastLiveReport.current = now; setLiveUs(us); }
   }
   function playSelectedClip() {
     const player = playerRef.current;
@@ -228,6 +244,10 @@ export function App() {
     if (selection && segmentsFor && words[selection.from]) {
       const at = words[Math.min(selection.from, selection.to)]!.startUs;
       if (sourceToTimeline(videoClips, segmentsFor, at) !== undefined) return { anchorAssetId: segmentsFor, anchorSourceUs: at, where: "at the selected words" };
+    }
+    if (previewMode === "edit" && !selectedClip) {
+      const at = timelineToSource(videoClips, liveUsRef.current);
+      if (at) return { anchorAssetId: at.assetId, anchorSourceUs: Math.round(at.sourceUs), where: "at the playhead" };
     }
     const anchorClip = selectedClip ?? videoClips[0];
     if (!anchorClip) return undefined;
@@ -590,8 +610,8 @@ export function App() {
   }
   function showIssue(issue: CheckIssue) {
     if (typeof issue.atS !== "number") return;
-    const at = timelineToSource(videoClips, Math.round(issue.atS * 1e6));
-    if (at) seekSource(at.sourceUs);
+    setPreviewMode("edit");
+    setTimeout(() => liveRef.current?.seek(Math.round(issue.atS! * 1e6)), 0);
   }
 
   async function createHighlights() {
@@ -729,8 +749,9 @@ export function App() {
   </header>;
 
   const player = <div className="player">
-    <div className="preview-tabs" role="tablist"><button role="tab" aria-selected={previewMode === "source"} className={previewMode === "source" ? "on" : ""} onClick={() => setPreviewMode("source")}>Footage</button><button role="tab" aria-selected={previewMode === "render"} className={previewMode === "render" ? "on" : ""} onClick={() => setPreviewMode("render")}>Export</button></div>
-    <div className={"preview-screen " + ((PLATFORMS[platform]?.width ?? 9) < (PLATFORMS[platform]?.height ?? 16) ? "tall" : "wide")}>{previewMode === "render" ? (renderUrl ? <video controls src={renderUrl} /> : <span>{renderJobId ? "Exporting " + renderJobStatus : "Your exported video will play here"}</span>) : (sourceUrl ? <video ref={playerRef} controls src={sourceUrl} onTimeUpdate={stopAtClipEnd} /> : <span>{sourceNote || "Preparing the preview…"}</span>)}</div>
+    <div className="preview-tabs" role="tablist"><button role="tab" aria-selected={previewMode === "edit"} className={previewMode === "edit" ? "on" : ""} onClick={() => setPreviewMode("edit")} disabled={videoClips.length === 0}>Edit</button><button role="tab" aria-selected={previewMode === "source"} className={previewMode === "source" ? "on" : ""} onClick={() => setPreviewMode("source")}>Original</button><button role="tab" aria-selected={previewMode === "render"} className={previewMode === "render" ? "on" : ""} onClick={() => setPreviewMode("render")}>Export</button></div>
+    {previewMode === "edit" && videoClips.length > 0 ? <LivePreview ref={liveRef} tracks={timeline.tracks} durationUs={timeline.durationUs} urls={sourceUrls} shape={(PLATFORMS[platform]?.width ?? 9) < (PLATFORMS[platform]?.height ?? 16) ? "tall" : PLATFORMS[platform]?.width === PLATFORMS[platform]?.height ? "square" : "wide"} fit={PLATFORMS[platform]?.fit ?? "cover"} onTime={onLiveTime} />
+    : <div className={"preview-screen " + ((PLATFORMS[platform]?.width ?? 9) < (PLATFORMS[platform]?.height ?? 16) ? "tall" : "wide")}>{previewMode === "render" ? (renderUrl ? <video controls src={renderUrl} /> : <span>{renderJobId ? "Exporting " + renderJobStatus : "Your exported video will play here"}</span>) : (sourceUrl ? <video ref={playerRef} controls src={sourceUrl} onTimeUpdate={stopAtClipEnd} /> : <span>{sourceNote || "Preparing the preview…"}</span>)}</div>}
     {previewMode === "source" && sourceNote && sourceUrl && <p className="muted small">{sourceNote}</p>}
   </div>;
 
@@ -981,9 +1002,10 @@ export function App() {
         <section className="timeline" aria-label="Timeline">
           <div className="row-between"><h2>Timeline</h2><span className="muted small">{formatClock(timeline.durationUs)} · select anything to edit it</span></div>
           <div className="ruler" aria-hidden="true"><span className="ruler-gutter" /><div className="ruler-lane">{rulerTicks(timeline.durationUs).map((t) => <span key={t} style={{ left: (t / Math.max(1, timeline.durationUs / 1e6)) * 100 + "%" }}>{String(Math.floor(t / 60)).padStart(2, "0") + ":" + String(Math.round(t % 60)).padStart(2, "0")}</span>)}</div></div>
-          <div className="track-list">
+          <div className="track-list" style={{ position: "relative" }}>
+            {videoClips.length > 0 && <span className="playhead" aria-hidden="true" style={{ left: "calc(76px + (100% - 76px) * " + (liveUs / Math.max(1, timeline.durationUs)).toFixed(5) + ")" }} />}
             {videoClips.length === 0 && <div className="empty-state">Nothing on the timeline yet. Make the first cut, or choose Edit it myself.</div>}
-            {lanes.map((lane) => <div className="track" key={lane.name}><div className="track-label">{lane.name}</div><div className="track-lane">{lane.clips.map((clip) => <button type="button" className={"clip lane-" + lane.name.toLowerCase() + (clip.transform?.role === "progress" ? " progress" : "") + (selectedClipId === clip.id ? " selected" : "")} key={clip.id} style={{ left: (clip.timelineStartUs / Math.max(1, timeline.durationUs)) * 100 + "%", width: ((clip.timelineEndUs - clip.timelineStartUs) / Math.max(1, timeline.durationUs)) * 100 + "%" }} title={clipLabel(lane.kind, clip) + " · " + formatSeconds(clip.timelineEndUs - clip.timelineStartUs)} aria-label={clipLabel(lane.kind, clip) + ", " + formatSeconds(clip.sourceEndUs - clip.sourceStartUs)} aria-pressed={selectedClipId === clip.id} onClick={() => setSelectedClipId(clip.id)} onKeyDown={(event) => handleClipKeyDown(event, clip, lane.kind)}><strong>{clipLabel(lane.kind, clip)}</strong>{lane.kind === "video" && <small>{formatSeconds(clip.sourceEndUs - clip.sourceStartUs)}</small>}</button>)}</div></div>)}
+            {lanes.map((lane) => <div className="track" key={lane.name}><div className="track-label">{lane.name}</div><div className="track-lane" onClick={(event) => { if (event.target !== event.currentTarget) return; const box = event.currentTarget.getBoundingClientRect(); setPreviewMode("edit"); liveRef.current?.seek(((event.clientX - box.left) / box.width) * timeline.durationUs); }}>{lane.clips.map((clip) => <button type="button" className={"clip lane-" + lane.name.toLowerCase() + (clip.transform?.role === "progress" ? " progress" : "") + (selectedClipId === clip.id ? " selected" : "")} key={clip.id} style={{ left: (clip.timelineStartUs / Math.max(1, timeline.durationUs)) * 100 + "%", width: ((clip.timelineEndUs - clip.timelineStartUs) / Math.max(1, timeline.durationUs)) * 100 + "%" }} title={clipLabel(lane.kind, clip) + " · " + formatSeconds(clip.timelineEndUs - clip.timelineStartUs)} aria-label={clipLabel(lane.kind, clip) + ", " + formatSeconds(clip.sourceEndUs - clip.sourceStartUs)} aria-pressed={selectedClipId === clip.id} onClick={() => setSelectedClipId(clip.id)} onKeyDown={(event) => handleClipKeyDown(event, clip, lane.kind)}><strong>{clipLabel(lane.kind, clip)}</strong>{lane.kind === "video" && <small>{formatSeconds(clip.sourceEndUs - clip.sourceStartUs)}</small>}</button>)}</div></div>)}
           </div>
         </section>
       </div>
