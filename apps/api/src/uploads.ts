@@ -63,8 +63,17 @@ export function registerUploadRoutes(server: FastifyInstance, dependencies: Uplo
       if (dependencies.inspector && (kind === "video" || kind === "audio")) {
         try { info = await dependencies.inspector(temporaryPath); }
         catch (caught) {
-          const unavailable = (caught as NodeJS.ErrnoException)?.code === "ENOENT";
-          return error(reply, unavailable ? 503 : 422, unavailable ? "media_inspector_unavailable" : "invalid_media", unavailable ? "Media inspection is not available on this server" : "The file could not be read as media: " + (caught instanceof Error ? caught.message.slice(0, 200) : "unknown error"));
+          const code = (caught as NodeJS.ErrnoException | null)?.code;
+          const unavailable = code === "ENOENT";
+          const brokenPipe = code === "EPIPE" || code === "ECONNRESET" || code === "ERR_STREAM_PREMATURE_CLOSE";
+          request.log.error({ err: caught, requestId: request.id, projectId, assetId, stage: "media_inspection", errorCode: code ?? "unknown" }, "media inspection failed");
+          return reply.code(unavailable || brokenPipe ? 503 : 422).send({
+            error: {
+              code: unavailable ? "media_inspector_unavailable" : brokenPipe ? "media_inspection_disconnected" : "invalid_media",
+              message: unavailable ? "Media inspection is not available on this server" : brokenPipe ? "Media inspection stopped unexpectedly. Please retry the upload." : "The file could not be read as valid media.",
+              requestId: request.id,
+            },
+          });
         }
         try {
           validateMedia(info);
