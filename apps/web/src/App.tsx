@@ -26,6 +26,14 @@ type Asset = { id: string; kind: string; storageKey: string; durationUs?: number
 
 const API = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
 const LAST_PROJECT_KEY = "videocraft.lastProject";
+// One refresh at a time per tab: the server rotates the session on every refresh, so parallel refreshes would race.
+let refreshInFlight: Promise<{ accessToken: string; user: { email: string } }> | null = null;
+function refreshSession(): Promise<{ accessToken: string; user: { email: string } }> {
+  refreshInFlight ??= fetch(API + "/auth/refresh", { method: "POST", credentials: "include" })
+    .then(async (response) => { if (!response.ok) throw new Error("No session"); return response.json(); })
+    .finally(() => { setTimeout(() => { refreshInFlight = null; }, 0); });
+  return refreshInFlight;
+}
 function rememberProject(id: string) { try { localStorage.setItem(LAST_PROJECT_KEY, id); } catch { /* storage unavailable */ } }
 
 export function App() {
@@ -199,8 +207,8 @@ export function App() {
     });
     if (response.status === 401 && accessToken && !retried && !path.startsWith("/auth/")) {
       // The 15-minute access token expired: rotate the refresh session once and retry.
-      const refreshed = await fetch(API + "/auth/refresh", { method: "POST", credentials: "include" });
-      if (refreshed.ok) { const session = await refreshed.json(); setToken(session.accessToken); return request(path, init, session.accessToken, true); }
+      const session = await refreshSession().catch(() => null);
+      if (session) { setToken(session.accessToken); return request(path, init, session.accessToken, true); }
     }
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.error?.message ?? "Request failed");
@@ -221,7 +229,7 @@ export function App() {
 
   async function restoreSession() {
     try {
-      const result = await request("/auth/refresh", { method: "POST" });
+      const result = await refreshSession();
       setToken(result.accessToken);
       setUserEmail(result.user.email);
     } catch { /* A first visit has no refresh session. */ }
@@ -564,13 +572,23 @@ export function App() {
           settings: { format: "mp4", videoCodec: "libx264", audioCodec: "aac", width: PLATFORMS[platform]!.width, height: PLATFORMS[platform]!.height, frameRate: 30, fit: PLATFORMS[platform]!.fit, captionStyle: PLATFORMS[platform]!.captionStyle },
         }),
       });
-      setRenderJobId(result.job.id); setRenderUrl(""); setRenderJobStatus("queued 0%"); setStatus("Render queued: " + result.job.id); void pollRender(result.job.id);
+      setRenderJobId(result.job.id); setRenderUrl(""); setRenderJobStatus("queued 0%"); setStatus("Export started (" + (PLATFORMS[platform]?.label ?? platform) + ")…"); void pollRender(result.job.id);
     } catch (error) { setStatus(errorMessage(error)); }
     finally { setBusy(false); }
   }
 
   const hasVideo = assets.some((asset) => asset.kind === "video");
   const proposalHighlights = proposal ? groupHighlights(proposal.operations) : [];
+  useEffect(() => {
+    if (!projectId || revision === 0) return;
+    setProjects((current) => current.map((project) => project.id === projectId && project.revision !== revision ? { ...project, revision, updatedAt: new Date().toISOString() } : project));
+  }, [revision, projectId]);
+  const assetName = (id: string) => { const asset = assets.find((item) => item.id === id); return asset ? String(asset.metadata.filename ?? asset.kind) : id.startsWith("generated:") ? "Generated" : "Media"; };
+  const clipLabel = (kind: string, clip: TimelineClip) => kind === "caption" ? String(clip.transform?.text ?? "Caption")
+    : kind === "overlay" ? (clip.transform?.role === "graphic" ? String(clip.transform?.text ?? "Graphic") : clip.transform?.role === "progress" ? "Progress bar" : "B-roll · " + assetName(clip.assetId))
+    : kind === "audio" ? "Music · " + assetName(clip.assetId) : assetName(clip.assetId);
+  const trackName: Record<string, string> = { video: "Video", caption: "Captions", overlay: "Overlays", audio: "Music" };
+  const fit = proposal ? (proposal.confidence >= 0.7 ? "strong" : proposal.confidence >= 0.45 ? "fair" : "weak") : "";
   const accepted = proposal?.status === "accepted";
   const next: { title: string; detail: string; action?: { label: string; run: () => void; disabled?: boolean } } =
     !userEmail ? { title: "Sign in", detail: "Create an account or sign in in the Project panel on the left." }
@@ -587,17 +605,20 @@ export function App() {
   return <div className="app-shell">
     <header className="topbar">
       <div><span className="eyebrow">AI VIDEO WORKSPACE</span><h1>VideoCraft</h1></div>
-      <div className="status-pill" role="status" aria-live="polite"><span className="status-dot" />{status}</div>
+      <div className="status-pill" role="status" aria-live="polite" title={status}><span className="status-dot" />{status}</div>
     </header>
     <main className="workspace">
       <aside className="sidebar">
         <section className="panel">
           <h2>Project</h2>
           {userEmail ? <div className="auth-session"><span>Signed in as {userEmail}</span><button className="secondary" onClick={signOut} disabled={busy}>Sign out</button></div> : <><div className="auth-tabs"><button className={authMode === "login" ? "" : "secondary"} onClick={() => setAuthMode("login")}>Sign in</button><button className={authMode === "register" ? "" : "secondary"} onClick={() => setAuthMode("register")}>Create account</button></div><label>Email<input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label><label>Password<input type="password" autoComplete={authMode === "login" ? "current-password" : "new-password"} value={password} onChange={(event) => setPassword(event.target.value)} minLength={10} /></label><button onClick={authenticate} disabled={busy || !email || password.length < 10}>{authMode === "login" ? "Sign in" : "Create account"}</button></>}
-          <label>Project name<input value={projectName} onChange={(event) => setProjectName(event.target.value)} /></label>
-          <button onClick={createProject} disabled={busy}>{projectId ? "Project " + projectId.slice(0, 8) : "Create project"}</button>
-          <button className="secondary" onClick={refreshProjects} disabled={busy || !token}>Refresh projects</button>
-          {projects.length > 0 && <label>Existing project<select value={projectId} onChange={(event) => { const project = projects.find((item) => item.id === event.target.value); if (project) void openProject(project); }}><option value="">Choose a project</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name} · rev {project.revision}</option>)}</select></label>}
+          {projectId && <p className="current-project">Working on <strong>{projects.find((project) => project.id === projectId)?.name ?? projectName}</strong></p>}
+          {projects.length > 0 && <label>Open a project<select value={projectId} onChange={(event) => { const project = projects.find((item) => item.id === event.target.value); if (project) void openProject(project); }}><option value="">Choose a project</option>{[...projects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map((project) => <option key={project.id} value={project.id}>{project.name} · {project.revision > 0 ? "revision " + project.revision : "not edited yet"} · {new Date(project.updatedAt).toLocaleDateString(undefined, { day: "numeric", month: "short" })}</option>)}</select></label>}
+          <button className="secondary" onClick={refreshProjects} disabled={busy || !token}>Refresh list</button>
+          <details className="new-project"><summary>New project</summary>
+            <label>Name<input value={projectName} maxLength={120} onChange={(event) => setProjectName(event.target.value)} /></label>
+            <button onClick={createProject} disabled={busy || !projectName.trim()}>Create project</button>
+          </details>
         </section>
         <section className="panel">
           <h2>Tailoring brief</h2>
@@ -664,12 +685,12 @@ export function App() {
           {next.action && <button className="primary-action" onClick={next.action.run} disabled={busy || next.action.disabled}>{busy ? "Working…" : next.action.label}</button>}
           {renderUrl && <a className="primary-action" href={renderUrl} download="videocraft-export.mp4">Download video</a>}
         </section>
-        <div className="editor-toolbar"><div><span className="eyebrow">TIMELINE</span><h2>{projectId ? "Revision " + revision : "No project selected"}</h2></div><div className="toolbar-actions"><button className="secondary" onClick={saveRevision} disabled={busy || !projectId}>Save revision</button><select aria-label="Platform" value={platform} onChange={(event) => setPlatform(event.target.value)}>{Object.entries(PLATFORMS).map(([key, preset]) => <option key={key} value={key}>{preset.label}</option>)}</select><button onClick={submitRender} disabled={busy || !revision}>Export video</button></div></div>
+        <div className="editor-toolbar"><div><span className="eyebrow">TIMELINE</span><h2>{projectId ? "Revision " + revision : "No project selected"}</h2></div><div className="toolbar-actions"><button className="secondary" onClick={saveRevision} disabled={busy || !projectId}>Save revision</button><select aria-label="Platform" value={platform} onChange={(event) => setPlatform(event.target.value)}>{Object.entries(PLATFORMS).map(([key, preset]) => <option key={key} value={key}>{preset.label}</option>)}</select><button className="secondary" onClick={submitRender} disabled={busy || !revision}>Export</button></div></div>
         <div className="timeline-card">
           <div className="ruler"><span>00:00</span><span>00:10</span><span>00:20</span><span>00:30</span></div>
           <div className="track-list">
             {timeline.tracks.length === 0 && <div className="empty-state">Your non-destructive timeline is empty. Add a registered asset to begin.</div>}
-            {timeline.tracks.map((track) => <div className="track" key={track.id}><div className="track-label">{track.kind}</div><div className="track-lane">{track.clips.map((clip) => <button type="button" className={"clip" + (selectedClipId === clip.id ? " selected" : "")} key={clip.id} style={{ width: Math.max(1.5, ((clip.timelineEndUs - clip.timelineStartUs) / Math.max(1, timeline.durationUs)) * 100) + "%" }} aria-label={"Clip " + clip.assetId.slice(0, 12) + ", " + formatSeconds(clip.sourceEndUs - clip.sourceStartUs)} aria-pressed={selectedClipId === clip.id} onClick={() => setSelectedClipId(clip.id)} onKeyDown={(event) => handleClipKeyDown(event, clip)}><strong>{clip.assetId.slice(0, 12)}</strong><small>{formatSeconds(clip.sourceEndUs - clip.sourceStartUs)}</small></button>)}</div></div>)}
+            {timeline.tracks.map((track) => <div className="track" key={track.id}><div className="track-label">{trackName[track.kind] ?? track.kind}</div><div className="track-lane">{track.clips.map((clip) => <button type="button" className={"clip" + (selectedClipId === clip.id ? " selected" : "")} key={clip.id} style={{ width: Math.max(1.5, ((clip.timelineEndUs - clip.timelineStartUs) / Math.max(1, timeline.durationUs)) * 100) + "%" }} title={clipLabel(track.kind, clip) + " · " + formatSeconds(clip.timelineEndUs - clip.timelineStartUs)} aria-label={clipLabel(track.kind, clip) + ", " + formatSeconds(clip.sourceEndUs - clip.sourceStartUs)} aria-pressed={selectedClipId === clip.id} onClick={() => setSelectedClipId(clip.id)} onKeyDown={(event) => handleClipKeyDown(event, clip)}><strong>{clipLabel(track.kind, clip)}</strong>{track.kind === "video" && <small>{formatSeconds(clip.sourceEndUs - clip.sourceStartUs)}</small>}</button>)}</div></div>)}
           </div>
         </div>
         {selectedClip && <section className="panel clip-panel" aria-label="Selected clip">
@@ -696,7 +717,7 @@ export function App() {
         </section>}
         <div className="lower-grid">
           <section className="panel preview-panel"><div className="panel-heading"><h2>Preview</h2><span className="badge">Non-destructive</span></div><div className="preview-tabs" role="tablist"><button role="tab" aria-selected={previewMode === "source"} className={previewMode === "source" ? "" : "secondary"} onClick={() => setPreviewMode("source")}>Source</button><button role="tab" aria-selected={previewMode === "render"} className={previewMode === "render" ? "" : "secondary"} onClick={() => setPreviewMode("render")}>Rendered export</button></div><div className="preview-screen">{previewMode === "render" ? (renderUrl ? <video controls src={renderUrl} /> : <span>{renderJobId ? "Render " + renderJobStatus : "Render a platform export to preview it here"}</span>) : (sourceUrl ? <video ref={playerRef} controls src={sourceUrl} onTimeUpdate={stopAtClipEnd} /> : <span>{sourceNote || "Sign in and add a video to scrub the source here"}</span>)}</div>{previewMode === "source" && sourceUrl && sourceNote && <p className="muted">{sourceNote}</p>}{previewMode === "source" && sourceUrl && <div className="player-actions"><button className="secondary" onClick={playSelectedClip} disabled={!selectedClip}>Play selected clip</button><button className="secondary" onClick={() => trimToPlayhead("start")} disabled={busy || !selectedClip || revision === 0}>Trim start to playhead</button><button className="secondary" onClick={() => trimToPlayhead("end")} disabled={busy || !selectedClip || revision === 0}>Trim end to playhead</button><button className="secondary" onClick={() => markSegmentFromPlayhead("start")}>Segment start = playhead</button><button className="secondary" onClick={() => markSegmentFromPlayhead("end")}>Segment end = playhead</button></div>}</section>
-          <section className="panel proposal-panel"><div className="panel-heading"><h2>AI proposal</h2>{proposal && <span className="badge">{Math.round(proposal.confidence * 100)}% confidence</span>}</div>{proposal ? <><p>{proposal.rationale}</p>{proposalHighlights.length > 0 && <ol className="highlight-list">{proposalHighlights.map((highlight, index) => <li key={index}><strong>{formatSeconds(highlight.startUs)}–{formatSeconds(highlight.endUs)}</strong>{typeof highlight.score === "number" && <span className="badge">score {Math.round(highlight.score * 100)}</span>}{highlight.parts > 1 && <span className="badge">{highlight.parts} parts, pauses cut</span>}<p>{highlight.reason}</p></li>)}</ol>}<div className="evidence">{proposal.evidence.map((item) => <div key={item.reference}><span>{item.source}</span><code>{item.reference}{typeof item.startUs === "number" && typeof item.endUs === "number" ? " · " + formatSeconds(item.startUs) + "–" + formatSeconds(item.endUs) : ""}</code>{item.excerpt && <p>{item.excerpt}</p>}</div>)}</div>{proposal.status === "proposed" && <div className="decision-actions"><button className="secondary" onClick={() => decideProposal("rejected")} disabled={busy}>Reject</button><button onClick={() => decideProposal("accepted")} disabled={busy}>Accept highlights</button></div>}</> : <p className="muted">Click Create highlights: suggested clips appear here with the reason and transcript evidence for each.</p>}</section>
+          <section className="panel proposal-panel"><div className="panel-heading"><h2>AI proposal</h2>{proposal && <span className="badge" title="How well the chosen clips match your goal, audience and platform">Fit to your goal: {fit} ({Math.round(proposal.confidence * 100)}%)</span>}</div>{proposal ? <><p>{proposal.rationale}</p>{proposalHighlights.length > 0 && <ol className="highlight-list">{proposalHighlights.map((highlight, index) => <li key={index}><strong>{formatSeconds(highlight.startUs)}–{formatSeconds(highlight.endUs)}</strong>{typeof highlight.score === "number" && <span className="badge">score {Math.round(highlight.score * 100)}</span>}{highlight.parts > 1 && <span className="badge">{highlight.parts} parts, pauses cut</span>}<p>{highlight.reason}</p></li>)}</ol>}<div className="evidence">{proposal.evidence.map((item) => <div key={item.reference}><span>{evidenceLabel(item).source}</span><code>{evidenceLabel(item).reference}{typeof item.startUs === "number" && typeof item.endUs === "number" ? " · " + formatSeconds(item.startUs) + "–" + formatSeconds(item.endUs) : ""}</code>{item.excerpt && <p>{item.excerpt}</p>}</div>)}</div>{proposal.status === "proposed" && <div className="decision-actions"><button className="secondary" onClick={() => decideProposal("rejected")} disabled={busy}>Reject</button><button onClick={() => decideProposal("accepted")} disabled={busy}>Accept highlights</button></div>}</> : <p className="muted">Click Create highlights: suggested clips appear here with the reason and transcript evidence for each.</p>}</section>
         </div>
       </section>
     </main>
@@ -714,6 +735,16 @@ function groupHighlights(operations: Operation[]): Array<{ startUs: number; endU
     groups.push({ startUs: operation.sourceStartUs ?? 0, endUs: operation.sourceEndUs ?? 0, ...(typeof operation.score === "number" ? { score: operation.score } : {}), reason, parts: 1 });
   }
   return groups;
+}
+
+/** Plain-language labels for evidence references (raw keys are kept for the API, not shown). */
+function evidenceLabel(item: Evidence): { source: string; reference: string } {
+  const source = item.source === "user" ? "From you" : item.source === "transcript" ? "What was said" : "VideoCraft";
+  const ref = item.reference;
+  const reference = ref === "tailoring-profile.intent" ? "Your goal" : ref === "tailoring-profile.audience" ? "Your audience" : ref === "tailoring-profile.channel" ? "Platform"
+    : ref.startsWith("highlight-score:") ? "Score for highlight " + ref.split(":")[1] : ref === "learned-preferences" ? "Learned from your edits"
+    : ref.startsWith("llm-rerank") ? "AI judge" : item.source === "transcript" ? "Transcript" : ref;
+  return { source, reference };
 }
 
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : "Something went wrong"; }

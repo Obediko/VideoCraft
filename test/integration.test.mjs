@@ -108,3 +108,35 @@ test("migration 006 renames existing duplicate project names, then enforces uniq
     await admin.end();
   }
 });
+
+test("session refresh: concurrent refreshes from two tabs both succeed; logged-out and stale rotated sessions are refused", { skip }, async () => {
+  const Fastify = (await import("fastify")).default;
+  const rateLimit = (await import("@fastify/rate-limit")).default;
+  const { registerAuthRoutes } = await import("../apps/api/dist/auth-routes.js");
+  const pool = new Pool({ connectionString: databaseUrl });
+  await migrateDatabase(pool);
+  const server = Fastify();
+  await server.register(rateLimit, { global: true, max: 1000, timeWindow: "1 minute" });
+  registerAuthRoutes(server, { database: pool, secret: "integration-secret-0123456789abcdef0123", allowedEmails: "*" });
+  await server.ready();
+  const cookieOf = (response) => String(response.headers["set-cookie"]).split(";")[0];
+  try {
+    const email = "tabs-" + Date.now() + "@example.org";
+    const registered = await server.inject({ method: "POST", url: "/auth/register", payload: { email, password: "correct horse battery staple" } });
+    assert.equal(registered.statusCode, 201, registered.body);
+    const cookie = cookieOf(registered);
+    const refresh = (c) => server.inject({ method: "POST", url: "/auth/refresh", headers: { cookie: c } });
+    // Two tabs reload at once with the same cookie.
+    const [a, b] = await Promise.all([refresh(cookie), refresh(cookie)]);
+    assert.deepEqual([a.statusCode, b.statusCode], [200, 200], "neither tab is signed out");
+    // The same old cookie again, still inside the grace minute: accepted.
+    assert.equal((await refresh(cookie)).statusCode, 200);
+    // Outside the grace window the replaced cookie no longer works.
+    await pool.query("UPDATE auth_sessions SET rotated_at = NOW() - INTERVAL '2 minutes' WHERE rotated_at IS NOT NULL");
+    assert.equal((await refresh(cookie)).statusCode, 401, "a long-replaced session is refused");
+    // Logging out ends the current session for good.
+    const current = cookieOf(a);
+    await server.inject({ method: "POST", url: "/auth/logout", headers: { cookie: current } });
+    assert.equal((await refresh(current)).statusCode, 401, "a logged-out session is refused even within a minute");
+  } finally { await server.close(); await pool.end(); }
+});
