@@ -29,3 +29,14 @@ test("ask (OpenAI) falls back to the rules, which say plainly what they cannot d
   assert.match(plan.note, /unavailable/);
   assert.equal(plan.suggestions[0].kind, "advice");
 });
+
+test("ask (rules): blur or replace the background, applied to every clip", async () => {
+  const { RuleDirector, effectOperations } = await import("../dist/index.js");
+  const blur = await new RuleDirector().ask({ ...input, instruction: "blur my background" });
+  assert.equal(blur.suggestions[0].kind, "background");
+  assert.equal(blur.suggestions[0].background, "blur");
+  const plain = await new RuleDirector().ask({ ...input, instruction: "remove the background behind me" });
+  assert.equal(plain.suggestions[0].background, "color");
+  const timeline = { durationUs: 1_000_000, tracks: [{ id: "v", kind: "video", clips: [{ id: "c", assetId: "a", sourceStartUs: 0, sourceEndUs: 1_000_000, timelineStartUs: 0, timelineEndUs: 1_000_000 }] }] };
+  assert.deepEqual(effectOperations(blur, new Set(["background"]), timeline, "a"), [{ type: "set-background", background: "blur" }]);
+});

@@ -29,7 +29,7 @@ export type TimelineOperation =
   | { type: "update-graphic"; clipId: string; text?: string; subtitle?: string }
   /** A bar filling across the top of the frame over the whole cut. */
   | { type: "set-progress-bar"; enabled: boolean; color?: string }
-  | { type: "add-broll"; assetId: UUID; anchorAssetId: UUID; anchorSourceUs: Microseconds; durationUs: Microseconds; sourceStartUs?: Microseconds; mode?: "full" | "pip" }
+  | { type: "add-broll"; assetId: UUID; anchorAssetId: UUID; anchorSourceUs: Microseconds; durationUs: Microseconds; sourceStartUs?: Microseconds; mode?: "full" | "pip" | "behind" }
   /** Append (or insert at `index`) a segment of a source asset on the video track. */
   | { type: "insert-clip"; assetId: UUID; sourceStartUs: Microseconds; sourceEndUs: Microseconds; reason: string; score?: number; features?: Record<string, number>; index?: number }
   /** Reorder the video track; `clipIds` must list every video clip exactly once. */
@@ -47,7 +47,24 @@ export type TimelineOperation =
   /** One colour look on every video clip ("none" clears). */
   | { type: "set-look"; look: ColourLook }
   /** A short generated sound effect anchored to a moment of a source video, like graphics. */
-  | { type: "add-sfx"; kind: SoundEffect; anchorAssetId: UUID; anchorSourceUs: Microseconds; volumeDb?: number };
+  | { type: "add-sfx"; kind: SoundEffect; anchorAssetId: UUID; anchorSourceUs: Microseconds; volumeDb?: number }
+  /**
+   * What is behind the person in a video clip (all video clips when clipId is left out): the original ("none"),
+   * the original blurred, a solid colour, or a photo / video asset. The person is cut out by a matte;
+   * edge (-8..8 px) grows or shrinks the cut-out and feather (0..12 px) softens it.
+   */
+  | { type: "set-background"; clipId?: UUID; background: Background; color?: string; assetId?: UUID; edge?: number; feather?: number };
+export const BACKGROUNDS = ["none", "blur", "color", "media"] as const;
+export type Background = (typeof BACKGROUNDS)[number];
+/** Every asset a timeline needs to render: clips plus the backgrounds set on them. */
+export function assetsUsedBy(timeline: Timeline): Set<UUID> {
+  const used = new Set<UUID>();
+  for (const track of timeline.tracks) for (const clip of track.clips) {
+    used.add(clip.assetId);
+    if (typeof clip.transform?.backgroundAssetId === "string") used.add(clip.transform.backgroundAssetId);
+  }
+  return used;
+}
 export const CLIP_ZOOMS = ["none", "punch", "push"] as const;
 export type ClipZoom = (typeof CLIP_ZOOMS)[number];
 export const COLOUR_LOOKS = ["none", "warm", "clean", "cinematic", "vivid", "soft", "mono"] as const;

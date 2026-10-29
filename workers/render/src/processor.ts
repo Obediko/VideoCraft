@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import { safeMediaPath } from "@videocraft/transcription";
@@ -12,6 +13,18 @@ function required(name: string): string {
   const value = process.env[name];
   if (!value?.trim()) throw new Error(name + " is required");
   return value;
+}
+
+/** Runs the matte worker (it writes the matte video itself; output is a small JSON summary). */
+function runMatte(executable: string, args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(executable, args, { shell: false, stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => { stderr = (stderr + chunk).slice(-2000); });
+    const timer = setTimeout(() => child.kill("SIGKILL"), 20 * 60_000);
+    child.once("error", (error) => { clearTimeout(timer); reject(error); });
+    child.once("close", (code) => { clearTimeout(timer); if (code === 0) resolve(); else reject(new Error("matte failed: " + stderr)); });
+  });
 }
 
 function outputExtension(format: RenderTask["settings"]["format"]): string {
@@ -119,6 +132,16 @@ export class RenderTaskProcessor {
           try {
             return await loadOrDetectFaceTrack(this.storage, { projectId: task.project.id, assetId, storageKey }, { script, executable: process.env.REFRAME_PYTHON ?? "python3", ...(process.env.RENDER_WORK_ROOT ? { workRoot: process.env.RENDER_WORK_ROOT } : {}) }, path);
           } catch { return null; }
+        },
+        // Person matte for background changes and cutaways behind the speaker (optional: without MATTE_SCRIPT they are skipped).
+        matte: async (assetId: string, startUs: number, endUs: number, options: { edge: number; feather: number }) => {
+          const script = process.env.MATTE_SCRIPT;
+          const path = stagedAssets[assetId];
+          if (!script || !path) return null;
+          const out = safeRunPath(this.outputRoot, jobId, "mattes/" + createHash("sha256").update([assetId, startUs, endUs, options.edge, options.feather].join(":")).digest("hex") + ".mp4");
+          await mkdir(out.slice(0, out.lastIndexOf("/")), { recursive: true });
+          try { await runMatte(process.env.REFRAME_PYTHON ?? "python3", [script, path, (startUs / 1e6).toFixed(3), (endUs / 1e6).toFixed(3), out, String(options.edge), String(options.feather)]); return out; }
+          catch { return null; }
         },
         dimensions: async (assetId: string) => {
           const path = stagedAssets[assetId];

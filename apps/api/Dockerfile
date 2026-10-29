@@ -16,6 +16,7 @@ ENV WHISPER_PYTHON=/opt/venv/bin/python \
     SCENE_PYTHON=/opt/venv/bin/python \
     SCENE_WORKER_PATH=/app/workers/scenes/worker.py \
     FACES_SCRIPT=/app/workers/reframe/faces.py \
+    MATTE_SCRIPT=/app/workers/reframe/matte.py \
     HF_HOME=/opt/hf-cache
 
 WORKDIR /app

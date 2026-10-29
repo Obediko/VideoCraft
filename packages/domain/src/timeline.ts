@@ -1,4 +1,4 @@
-import { CLIP_ZOOMS, COLOUR_LOOKS, SOUND_EFFECTS, TRANSITIONS, type Timeline, type TimelineClip, type TimelineOperation, type TimelineTrack } from "./index.js";
+import { BACKGROUNDS, CLIP_ZOOMS, COLOUR_LOOKS, SOUND_EFFECTS, TRANSITIONS, type Timeline, type TimelineClip, type TimelineOperation, type TimelineTrack } from "./index.js";
 import { sanitizeFeatures } from "./learning.js";
 
 const GENERATED_PREFIX = "generated:";
@@ -129,6 +129,25 @@ export function applyTimelineOperations(timeline: Timeline, operations: Timeline
         put("zoom", operation.zoom, "none"); put("look", operation.look, "none"); put("transitionIn", operation.transitionIn, "cut"); put("transitionOut", operation.transitionOut, "cut");
         const { transform: _old, ...rest } = found.clip;
         found.track.clips[found.index] = Object.keys(transform).length ? { ...rest, transform } : rest;
+        break;
+      }
+      case "set-background": {
+        const targets = tracks.filter((track) => track.kind === "video").flatMap((track) => track.clips.map((clip, index) => ({ track, clip, index })))
+          .filter(({ clip }) => operation.clipId === undefined || clip.id === operation.clipId);
+        if (operation.clipId !== undefined && targets.length === 0) throw new Error("set-background references an unknown video clip");
+        for (const { track, clip, index } of targets) {
+          const transform: Record<string, string | number | boolean> = { ...(clip.transform ?? {}) };
+          for (const key of ["background", "backgroundColor", "backgroundAssetId", "matteEdge", "matteFeather"]) delete transform[key];
+          if (operation.background !== "none") {
+            transform.background = operation.background;
+            if (operation.background === "color") transform.backgroundColor = operation.color ?? "#1F2A24";
+            if (operation.background === "media" && operation.assetId) transform.backgroundAssetId = operation.assetId;
+            if (operation.edge) transform.matteEdge = operation.edge;
+            if (operation.feather !== undefined) transform.matteFeather = operation.feather;
+          }
+          const { transform: _old, ...rest } = clip;
+          track.clips[index] = Object.keys(transform).length ? { ...rest, transform } : rest;
+        }
         break;
       }
       case "set-look": {
@@ -363,14 +382,23 @@ export function parseTimelineOperations(value: unknown): TimelineOperation[] {
       case "add-broll":
         if (!isId(op.assetId) || !isId(op.anchorAssetId) || !isUs(op.anchorSourceUs) || !isUs(op.durationUs) || (op.durationUs as number) < 200_000 || (op.durationUs as number) > 600_000_000) return fail("add-broll needs assetId, anchorAssetId, anchorSourceUs and a duration of 0.2s-10min");
         if (op.sourceStartUs !== undefined && !isUs(op.sourceStartUs)) return fail("add-broll sourceStartUs must be a non-negative integer");
-        if (op.mode !== undefined && op.mode !== "full" && op.mode !== "pip") return fail("add-broll mode must be full or pip");
-        return { type: "add-broll", assetId: op.assetId, anchorAssetId: op.anchorAssetId, anchorSourceUs: op.anchorSourceUs as number, durationUs: op.durationUs as number, ...(op.sourceStartUs === undefined ? {} : { sourceStartUs: op.sourceStartUs as number }), ...(op.mode === undefined ? {} : { mode: op.mode as "full" | "pip" }) };
+        if (op.mode !== undefined && op.mode !== "full" && op.mode !== "pip" && op.mode !== "behind") return fail("add-broll mode must be full, pip or behind");
+        return { type: "add-broll", assetId: op.assetId, anchorAssetId: op.anchorAssetId, anchorSourceUs: op.anchorSourceUs as number, durationUs: op.durationUs as number, ...(op.sourceStartUs === undefined ? {} : { sourceStartUs: op.sourceStartUs as number }), ...(op.mode === undefined ? {} : { mode: op.mode as "full" | "pip" | "behind" }) };
       case "set-clip-effects": {
         if (!isId(op.clipId)) return fail("set-clip-effects needs clipId");
         const pick = <T extends string>(key: string, allowed: readonly T[]): T | undefined => { const v = op[key]; if (v === undefined) return undefined; if (typeof v !== "string" || !allowed.includes(v as T)) return fail(key + " must be one of " + allowed.join(", ")); return v as T; };
         const zoom = pick("zoom", CLIP_ZOOMS); const look = pick("look", COLOUR_LOOKS); const transitionIn = pick("transitionIn", TRANSITIONS); const transitionOut = pick("transitionOut", TRANSITIONS);
         if (zoom === undefined && look === undefined && transitionIn === undefined && transitionOut === undefined) return fail("set-clip-effects needs at least one effect");
         return { type: "set-clip-effects", clipId: op.clipId, ...(zoom ? { zoom } : {}), ...(look ? { look } : {}), ...(transitionIn ? { transitionIn } : {}), ...(transitionOut ? { transitionOut } : {}) };
+      }
+      case "set-background": {
+        if (op.clipId !== undefined && !isId(op.clipId)) return fail("set-background clipId must be an id");
+        if (typeof op.background !== "string" || !(BACKGROUNDS as readonly string[]).includes(op.background)) return fail("set-background background must be one of " + BACKGROUNDS.join(", "));
+        if (op.background === "color" && op.color !== undefined && !(typeof op.color === "string" && /^#[0-9a-fA-F]{6}$/.test(op.color))) return fail("set-background color must be #RRGGBB");
+        if (op.background === "media" && !isId(op.assetId)) return fail("set-background media needs assetId");
+        if (op.edge !== undefined && !(Number.isInteger(op.edge) && (op.edge as number) >= -8 && (op.edge as number) <= 8)) return fail("set-background edge must be a whole number from -8 to 8");
+        if (op.feather !== undefined && !(Number.isInteger(op.feather) && (op.feather as number) >= 0 && (op.feather as number) <= 12)) return fail("set-background feather must be a whole number from 0 to 12");
+        return { type: "set-background", ...(op.clipId === undefined ? {} : { clipId: op.clipId }), background: op.background as (typeof BACKGROUNDS)[number], ...(op.background === "color" && typeof op.color === "string" ? { color: op.color } : {}), ...(op.background === "media" ? { assetId: op.assetId as string } : {}), ...(op.edge === undefined ? {} : { edge: op.edge as number }), ...(op.feather === undefined ? {} : { feather: op.feather as number }) };
       }
       case "set-look":
         if (typeof op.look !== "string" || !(COLOUR_LOOKS as readonly string[]).includes(op.look)) return fail("set-look look must be one of " + COLOUR_LOOKS.join(", "));

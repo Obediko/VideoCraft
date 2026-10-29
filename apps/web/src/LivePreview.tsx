@@ -1,4 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { BackgroundLayer, type BackgroundSpec } from "./BackgroundLayer.js";
 import { LOOK_CSS, captionBottomFor, faceDuring, faceInFrame, focusDuring, titleTopFor, veilAt, zoomAt, type FaceTrack, type FrameBox, type PreviewClip as Clip } from "./preview.js";
 
 /**
@@ -21,11 +22,15 @@ type Props = {
   /** The speaker's face per video asset, and each asset's picture size: captions and text stay off the face. */
   faces?: Record<string, FaceTrack>;
   sizes?: Record<string, { width: number; height: number }>;
+  /** Preview mattes (person cut-outs) per video asset, and which assets are photos: for backgrounds and cutaways behind the person. */
+  mattes?: Record<string, string>;
+  stills?: Record<string, boolean>;
   onTime?(timelineUs: number): void;
 };
 
-export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePreview({ tracks, durationUs, urls, shape, fit, output, captionStyle = "bold-pop", faces, sizes, onTime }, ref) {
+export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePreview({ tracks, durationUs, urls, shape, fit, output, captionStyle = "bold-pop", faces, sizes, mattes, stills, onTime }, ref) {
   const video = useRef<HTMLVideoElement | null>(null);
+  const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
   const music = useRef<HTMLAudioElement | null>(null);
   const [tUs, setT] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -132,13 +137,23 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
   const captionBottom = cue ? captionBottomFor(faceOver(cue.timelineStartUs, cue.timelineEndUs), captionStyle) : 0;
   const captionTop = cue ? 1 - captionBottom - 0.13 : undefined;
   const currentFocus = current && fit === "cover" ? focusOf(current) : null;
+  // A changed background on this clip, or a cutaway placed behind the person, is drawn on a canvas with the matte.
+  const behindNow = broll.find((c) => c.transform?.mode === "behind");
+  const bgKind = String(current?.transform?.background ?? "none");
+  const background: BackgroundSpec | undefined = behindNow ? { kind: "media", ...(urls[behindNow.assetId] ? { url: urls[behindNow.assetId]! } : {}), still: stills?.[behindNow.assetId] ?? true }
+    : bgKind === "blur" ? { kind: "blur" } : bgKind === "color" ? { kind: "color", color: String(current?.transform?.backgroundColor ?? "#1F2A24") }
+    : bgKind === "media" && typeof current?.transform?.backgroundAssetId === "string" ? { kind: "media", ...(urls[current.transform.backgroundAssetId] ? { url: urls[current.transform.backgroundAssetId]! } : {}), still: stills?.[current.transform.backgroundAssetId] ?? true } : undefined;
+  const matteUrl = current ? mattes?.[current.assetId] : undefined;
+  const compositing = Boolean(background && matteUrl && videoEl);
   const fmt = (us: number) => { const s = us / 1e6; return Math.floor(s / 60) + ":" + (s % 60).toFixed(1).padStart(4, "0"); };
 
   return <div className="live">
     <div className={"live-frame " + shape} aria-label="Live preview of the edit">
-      <video ref={video} className="live-video" muted={false} playsInline preload="auto" style={{ objectFit: fit, ...(currentFocus ? { objectPosition: (currentFocus.x * 100).toFixed(1) + "% " + (currentFocus.y * 100).toFixed(1) + "%" } : {}), transform: zoom !== 1 ? "scale(" + zoom.toFixed(4) + ")" : undefined, transformOrigin: "50% 40%", filter: look }} />
+      <video ref={(el) => { video.current = el; if (el !== videoEl) setVideoEl(el); }} className="live-video" muted={false} playsInline preload="auto" style={{ objectFit: fit, ...(currentFocus ? { objectPosition: (currentFocus.x * 100).toFixed(1) + "% " + (currentFocus.y * 100).toFixed(1) + "%" } : {}), transform: zoom !== 1 ? "scale(" + zoom.toFixed(4) + ")" : undefined, transformOrigin: "50% 40%", filter: look, ...(compositing ? { opacity: 0 } : {}) }} />
+      {compositing && <BackgroundLayer video={videoEl} matteUrl={matteUrl!} spec={background!} fit={fit} focus={currentFocus} zoom={zoom} filter={look} />}
+      {background && !matteUrl && <span className="live-note">Cutting you out for the preview…</span>}
       {!urls[current?.assetId ?? ""] && <span className="live-empty">Preparing the footage…</span>}
-      {broll.map((c) => { const url = urls[c.assetId]; const pip = c.transform?.mode === "pip"; return url ? <img key={c.id} className={"live-broll" + (pip ? " pip" : "")} src={url} alt="" /> : <span key={c.id} className={"live-broll placeholder" + (pip ? " pip" : "")}>Cutaway</span>; })}
+      {broll.filter((c) => !(c.transform?.mode === "behind" && compositing)).map((c) => { const url = urls[c.assetId]; const pip = c.transform?.mode === "pip"; return url ? <img key={c.id} className={"live-broll" + (pip ? " pip" : "")} src={url} alt="" /> : <span key={c.id} className={"live-broll placeholder" + (pip ? " pip" : "")}>Cutaway</span>; })}
       {progress && <span className="live-progress" style={{ width: (100 * tUs) / Math.max(1, durationUs) + "%", background: String(progress.transform?.color ?? "#A8C49A") }} />}
       {graphics.map((g) => { const kind = String(g.transform?.kind ?? "title"); const pos = String(g.transform?.position ?? (kind === "lower-third" ? "bottom" : "center")); const color = String(g.transform?.color ?? "#A8C49A");
         const face = faceOver(g.timelineStartUs, g.timelineEndUs);

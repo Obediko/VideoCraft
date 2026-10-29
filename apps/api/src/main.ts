@@ -180,7 +180,8 @@ const director = secretEnvironment.OPENAI_API_KEY && secretEnvironment.DIRECTOR_
 registerDirectorRoutes(server, { projects, assets, revisions, storage, transcripts, director, saveRevision: (input) => timelineService.saveRevision(input), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, clock: () => new Date().toISOString(), ...(secretEnvironment.FFMPEG_BIN ? { ffmpeg: secretEnvironment.FFMPEG_BIN } : {}) });
 registerMusicRoutes(server, { assets, revisions, storage, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, clock: () => new Date().toISOString() });
 registerMediaRoutes(server, { assets, storage, signingSecret: requiredSecret("DOWNLOAD_SIGNING_SECRET"), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer,
-  ...(secretEnvironment.FACES_SCRIPT ? { faces: { script: secretEnvironment.FACES_SCRIPT, ...(secretEnvironment.SCENE_PYTHON ? { executable: secretEnvironment.SCENE_PYTHON } : {}) } } : {}) });
+  ...(secretEnvironment.FACES_SCRIPT ? { faces: { script: secretEnvironment.FACES_SCRIPT, ...(secretEnvironment.SCENE_PYTHON ? { executable: secretEnvironment.SCENE_PYTHON } : {}) } } : {}),
+  ...(secretEnvironment.MATTE_SCRIPT ? { matte: { script: secretEnvironment.MATTE_SCRIPT, ...(secretEnvironment.SCENE_PYTHON ? { executable: secretEnvironment.SCENE_PYTHON } : {}) } } : {}) });
 // Free stock videos, photos and GIFs for cutaways (each library is skipped when its key is not set).
 registerStockRoutes(server, {
   keys: { ...(secretEnvironment.PEXELS_API_KEY ? { pexels: secretEnvironment.PEXELS_API_KEY } : {}), ...(secretEnvironment.PIXABAY_API_KEY ? { pixabay: secretEnvironment.PIXABAY_API_KEY } : {}), ...(secretEnvironment.GIPHY_API_KEY ? { giphy: secretEnvironment.GIPHY_API_KEY } : {}) },
