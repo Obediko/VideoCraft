@@ -110,6 +110,24 @@ Each run creates a throwaway project with a 15-minute test token and prints no s
 | 19 | hub still 200 | Shared Caddy or server load |
 | 20 | n8n still 200 | Shared Caddy or server load |
 
+## Turn on the AI director (OpenAI)
+
+Without a key, "Plan my video" uses the built-in rules director (strongest moments, a hook title, matching
+music, format). With a key, an OpenAI vision model reads the transcript, looks at eight frames from the video
+and plans the whole edit; every suggestion is still reviewed and ticked by you before anything changes.
+
+1. Create a key at platform.openai.com (Project → API keys). Set a monthly budget there.
+2. On the server, add it to the env file (never paste it into chat or commit it):
+
+   ```
+   sudo nano /opt/videocraft/.env
+   OPENAI_API_KEY=sk-...
+   DIRECTOR_MODEL=gpt-6.1-sol      # or a cheaper model such as gpt-6-luna
+   ```
+3. Restart the API: `cd /opt/videocraft && sudo docker compose up -d api`.
+4. In the editor, the badge on "Describe your video" shows **AI director · model** when it is in use. If the
+   call fails it falls back to the built-in director and says why under the button.
+
 ## Troubleshooting
 
 Most failures so far came from old images, a full disk or memory limits, not from the code. Read logs filtered so secrets never print:

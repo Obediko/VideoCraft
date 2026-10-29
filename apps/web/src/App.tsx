@@ -21,6 +21,9 @@ const PLATFORMS: Record<string, { label: string; width: number; height: number; 
   square: { label: "Feed 1:1", width: 1080, height: 1080, fit: "cover", captionStyle: "clean" },
   preview: { label: "Quick preview 720p", width: 1280, height: 720, fit: "contain", captionStyle: "clean" },
 };
+type Suggestion = { id: string; kind: string; title: string; reason: string; text?: string; subtitle?: string; atS?: number; durationS?: number; segments?: Array<{ startS: number; endS: number }>; mood?: string; platform?: string; assetId?: string; mode?: string };
+type DirectorPlan = { summary: string; profile: { intent: string; audience: string; channel: string; tone: string; targetSeconds: number }; suggestions: Suggestion[]; source: "ai" | "rules"; model?: string; note?: string };
+const KIND_LABEL: Record<string, string> = { cut: "The cut", title: "Title", callout: "Callout", "lower-third": "Name caption", music: "Music", broll: "Cutaway", progress: "Progress bar", platform: "Format", advice: "Tip" };
 type Project = { id: string; name: string; revision: number; createdAt: string; updatedAt: string };
 type Asset = { id: string; kind: string; storageKey: string; durationUs?: number; metadata: Record<string, string | number | boolean> };
 
@@ -74,6 +77,11 @@ export function App() {
   const [musicDuck, setMusicDuck] = useState(true);
   const [learned, setLearned] = useState<{ samples: number; summary: string; counts: Record<string, number> } | null>(null);
   const [sourceNote, setSourceNote] = useState("");
+  const [brief, setBrief] = useState("");
+  const [plan, setPlan] = useState<DirectorPlan | null>(null);
+  const [planApplied, setPlanApplied] = useState(false);
+  const [picked, setPicked] = useState<Record<string, boolean>>({});
+  const [planText, setPlanText] = useState<Record<string, string>>({});
 
   const videoTrack = useMemo(() => timeline.tracks.find((track) => track.kind === "video"), [timeline]);
   const videoClips = useMemo(() => [...(videoTrack?.clips ?? [])].sort((a, b) => a.timelineStartUs - b.timelineStartUs), [videoTrack]);
@@ -304,6 +312,7 @@ export function App() {
       setProjectName(project.name);
       setRevision(project.revision);
       setProposal(null);
+      setPlan(null); setPlanApplied(false);
       setRenderJobId("");
       setRenderJobStatus("");
       setRenderUrl("");
@@ -511,30 +520,77 @@ export function App() {
    * The main path in one click: transcribe the video (unless already done), lay the whole video on the
    * timeline, save it, and ask for highlights matching the brief. Each step reports progress.
    */
+  /** Make sure the video is transcribed and on the timeline; returns the revision to work from. */
+  async function prepareSource(video: Asset, steps: number): Promise<number> {
+    const base = "/v1/projects/" + projectId + "/assets/" + video.id + "/transcript";
+    const existing = await request(base).catch(() => ({ segments: [] }));
+    if (!existing.segments?.length) {
+      setStatus("Step 1 of " + steps + ": listening to the video (the first run downloads the speech model and can take a few minutes)…");
+      const result = await request(base, { method: "POST" });
+      if (!result.segments?.length) throw new Error("No speech was found in this video, so there is nothing to cut from");
+    }
+    setStatus("Step 2 of " + steps + ": preparing the timeline…");
+    const lengthUs = video.durationUs && video.durationUs > 0 ? video.durationUs : 10_000_000;
+    const usesVideo = videoClips.some((clip) => clip.assetId === video.id);
+    let workingRevision = revision;
+    if (!usesVideo || revision === 0) {
+      const fresh: Timeline = { durationUs: lengthUs, tracks: [{ id: "video", kind: "video", clips: [{ id: "source-" + video.id.slice(0, 8), assetId: video.id, sourceStartUs: 0, sourceEndUs: lengthUs, timelineStartUs: 0, timelineEndUs: lengthUs }] }] };
+      const saved = await request("/v1/projects/" + projectId + "/revisions", { method: "POST", body: JSON.stringify({ timeline: fresh }) });
+      workingRevision = saved.revision.revision;
+      setRevision(workingRevision);
+      setTimeline(saved.revision.timeline);
+    }
+    return workingRevision;
+  }
+
+  const currentVideo = () => assets.find((asset) => asset.id === assetId && asset.kind === "video") ?? videoClips.map((clip) => assets.find((asset) => asset.id === clip.assetId)).find((asset) => asset?.kind === "video") ?? [...assets].reverse().find((asset) => asset.kind === "video");
+
+  async function planVideo() {
+    const video = currentVideo();
+    if (!projectId || !video) { setStatus("Upload a video first"); return; }
+    if (!brief.trim()) { setStatus("Describe the video first: what it is about, who it is for, and where it will go"); document.querySelector<HTMLTextAreaElement>(".director-panel textarea")?.focus(); return; }
+    setBusy(true); setPlan(null); setPlanApplied(false);
+    try {
+      const workingRevision = await prepareSource(video, 3);
+      setStatus("Step 3 of 3: the director is watching and reading your video…");
+      const result = await request("/v1/projects/" + projectId + "/director/plan", { method: "POST", body: JSON.stringify({ revision: workingRevision, brief }) });
+      const next: DirectorPlan = result.plan;
+      setPlan(next);
+      setPicked(Object.fromEntries(next.suggestions.map((item) => [item.id, item.kind !== "advice"])));
+      setPlanText(Object.fromEntries(next.suggestions.filter((item) => typeof item.text === "string" && item.text).map((item) => [item.id, item.text!])));
+      setStatus("Plan ready: " + next.suggestions.length + " suggestions. Untick anything you don't want, then apply");
+      setTimeout(() => document.querySelector(".director-panel")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+    } catch (error) { setStatus(errorMessage(error)); }
+    finally { setBusy(false); }
+  }
+
+  async function applyPlan() {
+    if (!projectId || !plan) return;
+    setBusy(true);
+    setStatus("Building your edit from the plan…");
+    try {
+      const edited = { ...plan, suggestions: plan.suggestions.map((item) => planText[item.id] !== undefined ? { ...item, text: planText[item.id]!.trim() || item.text } : item) };
+      const accepted = edited.suggestions.filter((item) => picked[item.id]).map((item) => item.id);
+      const result = await request("/v1/projects/" + projectId + "/director/apply", { method: "POST", body: JSON.stringify({ revision, plan: edited, accepted }) });
+      setRevision(result.revision.revision); setTimeline(result.revision.timeline);
+      setRenderUrl(""); setRenderJobId(""); setRenderJobStatus("");
+      if (result.platform && PLATFORMS[result.platform]) setPlatform(result.platform);
+      if (result.music) { const listed = await request("/v1/projects/" + projectId + "/assets").catch(() => null); if (listed) setAssets(listed.assets); }
+      const tailoring = result.revision.tailoring;
+      if (tailoring) { setIntent(tailoring.intent ?? intent); setAudience(tailoring.audience ?? audience); setChannel(tailoring.channel ?? channel); if (tailoring.targetDurationUs) setTargetSeconds(Math.round(tailoring.targetDurationUs / 1e6)); }
+      setPlanApplied(true);
+      setStatus("Plan applied (revision " + result.revision.revision + ")" + (result.music ? ". Music: " + result.music.description : ""));
+    } catch (error) { setStatus(errorMessage(error)); }
+    finally { setBusy(false); }
+  }
+
   async function createHighlights() {
-    const video = assets.find((asset) => asset.id === assetId && asset.kind === "video") ?? [...assets].reverse().find((asset) => asset.kind === "video");
+    const video = currentVideo();
     if (!projectId || !video) { setStatus("Upload a video first"); return; }
     setBusy(true);
     setProposal(null);
     try {
-      const base = "/v1/projects/" + projectId + "/assets/" + video.id + "/transcript";
-      const existing = await request(base).catch(() => ({ segments: [] }));
-      if (!existing.segments?.length) {
-        setStatus("Step 1 of 3: listening to the video (the first run downloads the speech model and can take a few minutes)…");
-        const result = await request(base, { method: "POST" });
-        if (!result.segments?.length) throw new Error("No speech was found in this video, so there is nothing to choose highlights from");
-      }
-      setStatus("Step 2 of 3: preparing the timeline…");
-      const lengthUs = video.durationUs && video.durationUs > 0 ? video.durationUs : 10_000_000;
-      const usesVideo = videoClips.some((clip) => clip.assetId === video.id);
-      let workingRevision = revision;
-      if (!usesVideo || revision === 0) {
-        const fresh: Timeline = { durationUs: lengthUs, tracks: [{ id: "video", kind: "video", clips: [{ id: "source-" + video.id.slice(0, 8), assetId: video.id, sourceStartUs: 0, sourceEndUs: lengthUs, timelineStartUs: 0, timelineEndUs: lengthUs }] }] };
-        const saved = await request("/v1/projects/" + projectId + "/revisions", { method: "POST", body: JSON.stringify({ timeline: fresh }) });
-        workingRevision = saved.revision.revision;
-        setRevision(workingRevision);
-        setTimeline(saved.revision.timeline);
-      }
+      const workingRevision = await prepareSource(video, 3);
       setStatus("Step 3 of 3: choosing the best moments for your goal…");
       const found = await request("/v1/projects/" + projectId + "/proposals", {
         method: "POST",
@@ -596,11 +652,12 @@ export function App() {
     : !projectId && projects.length > 0 ? { title: "Open your project", detail: "You have " + projects.length + " project" + (projects.length === 1 ? "" : "s") + ". Open the latest, pick another under Open a project, or create a new one.", action: { label: "Open latest project", run: () => { const latest = [...projects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]; if (latest) void openProject(latest); } } }
     : !projectId ? { title: "Create a project", detail: "Name it, then click Create project.", action: { label: "Create project", run: () => void createProject() } }
     : !hasVideo ? { title: "Upload a video", detail: "Use Upload media in the Asset reference panel. A talk, interview or vlog works best." }
+    : plan && !planApplied ? { title: "Review the director's plan", detail: "Each suggestion says why. Untick what you don't want, edit any on-screen text, then apply.", action: { label: "Apply plan", run: () => void applyPlan() } }
     : proposal?.status === "proposed" ? { title: "Review the suggested highlights", detail: "Each clip says why it was chosen, with the transcript as evidence. Accept to build your cut, or adjust the goal and try again.", action: { label: "Accept highlights", run: () => void decideProposal("accepted") } }
     : renderJobId && !renderUrl && !/^(failed|cancelled)/.test(renderJobStatus) ? { title: "Exporting…", detail: "Rendering " + (renderJobStatus || "queued") + ". This takes roughly as long as the video itself." }
     : renderUrl ? { title: "Your video is ready", detail: "Play it in the Preview panel or download it. Edit further and export again any time." }
-    : accepted ? { title: "Export your video", detail: "Fine-tune below if you like (trim, captions, music, B-roll, graphics), pick a platform next to Export video, then export.", action: { label: "Export video", run: () => void submitRender() } }
-    : { title: "Create highlights", detail: "Tell VideoCraft your goal and audience in the Tailoring brief panel, then let it transcribe the video and pick the strongest moments.", action: { label: "Create highlights", run: () => void createHighlights() } };
+    : accepted || planApplied ? { title: "Export your video", detail: "Fine-tune below if you like (trim, captions, music, B-roll, graphics), pick a platform next to Export video, then export.", action: { label: "Export video", run: () => void submitRender() } }
+    : { title: "Describe your video", detail: "Say in your own words what it is about, who it is for and where it will go. The director plans the whole edit; you approve each part.", action: { label: "Plan my video", run: () => void planVideo() } };
 
   return <div className="app-shell">
     <header className="topbar">
@@ -685,6 +742,21 @@ export function App() {
           {next.action && <button className="primary-action" onClick={next.action.run} disabled={busy || next.action.disabled}>{busy ? "Working…" : next.action.label}</button>}
           {renderUrl && <a className="primary-action" href={renderUrl} download="videocraft-export.mp4">Download video</a>}
         </section>
+        {projectId && hasVideo && <section className="panel director-panel" aria-label="AI director">
+          <div className="panel-heading"><h2>Describe your video</h2>{plan && <span className="badge" title={plan.note ?? ""}>{plan.source === "ai" ? "AI director" + (plan.model ? " · " + plan.model : "") : "Built-in director"}</span>}</div>
+          <label>What is it about, who is it for, where will it go?<textarea value={brief} maxLength={2000} rows={3} placeholder="e.g. A 30 second inspiring Reel for new graduates about our mentoring programme. Open on the strongest result, warm and hopeful." onChange={(event) => setBrief(event.target.value)} /></label>
+          <div className="decision-actions"><button onClick={planVideo} disabled={busy || !brief.trim()}>{plan ? "Plan again" : "Plan my video"}</button></div>
+          {plan?.note && <p className="muted">{plan.note}</p>}
+          {plan && <>
+            <p>{plan.summary}</p>
+            <ul className="suggestion-list">{plan.suggestions.map((item) => <li key={item.id} className={picked[item.id] ? "" : "off"}>
+              <label className="checkbox">{item.kind !== "advice" && <input type="checkbox" checked={Boolean(picked[item.id])} onChange={(event) => setPicked((current) => ({ ...current, [item.id]: event.target.checked }))} />}<span className="badge">{KIND_LABEL[item.kind] ?? item.kind}</span><strong>{item.title}</strong></label>
+              <p className="muted">{item.reason}{item.kind === "cut" && item.segments ? " · " + item.segments.length + " part" + (item.segments.length === 1 ? "" : "s") + ", " + Math.round(item.segments.reduce((sum, seg) => sum + seg.endS - seg.startS, 0)) + " s" : ""}{typeof item.atS === "number" && item.kind !== "cut" && item.kind !== "music" ? " · at " + item.atS.toFixed(1) + " s of the original" : ""}</p>
+              {planText[item.id] !== undefined && <input aria-label={"Text for " + item.title} value={planText[item.id]} maxLength={120} onChange={(event) => setPlanText((current) => ({ ...current, [item.id]: event.target.value }))} />}
+            </li>)}</ul>
+            <div className="decision-actions"><button onClick={applyPlan} disabled={busy || planApplied || !plan.suggestions.some((item) => picked[item.id])}>{planApplied ? "Applied" : "Apply selected"}</button></div>
+          </>}
+        </section>}
         <div className="editor-toolbar"><div><span className="eyebrow">TIMELINE</span><h2>{projectId ? "Revision " + revision : "No project selected"}</h2></div><div className="toolbar-actions"><button className="secondary" onClick={saveRevision} disabled={busy || !projectId}>Save revision</button><select aria-label="Platform" value={platform} onChange={(event) => setPlatform(event.target.value)}>{Object.entries(PLATFORMS).map(([key, preset]) => <option key={key} value={key}>{preset.label}</option>)}</select><button className="secondary" onClick={submitRender} disabled={busy || !revision}>Export</button></div></div>
         <div className="timeline-card">
           <div className="ruler"><span>00:00</span><span>00:10</span><span>00:20</span><span>00:30</span></div>

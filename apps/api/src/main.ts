@@ -21,6 +21,8 @@ import { registerRenderRoutes } from "./render-routes.js";
 import { registerMediaRoutes } from "./media-routes.js";
 import { registerPreferenceRoutes } from "./learning.js";
 import { registerMusicRoutes } from "./music-routes.js";
+import { registerDirectorRoutes } from "./director-routes.js";
+import { OpenAiDirector, RuleDirector } from "@videocraft/director";
 import { registerIntentRoutes } from "./intent-routes.js";
 import { registerFeedbackRoutes } from "./feedback-routes.js";
 import { registerTimelineRoutes } from "./timeline-routes.js";
@@ -170,6 +172,11 @@ registerFeedbackRoutes(server, { feedback, revisions, proposals: new PostgresPro
 registerIntentRoutes(server, { analyzer: intentAnalyzer, assets, transcripts, quota: providerQuota, providerRateLimitMax: boundedInteger("INTENT_PROVIDER_MAX_PER_MINUTE", 20, 1, 1_000), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
 registerRenderRoutes(server, { jobs: renderJobs, storage, signingSecret: requiredSecret("DOWNLOAD_SIGNING_SECRET"), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
 registerPreferenceRoutes(server, { preferences, authenticate: (request) => authenticator.authenticate(request) });
+// The AI director uses OpenAI (vision + structured output) when a key is set; built-in rules otherwise.
+const director = secretEnvironment.OPENAI_API_KEY && secretEnvironment.DIRECTOR_MODE !== "rules"
+  ? new OpenAiDirector({ apiKey: secretEnvironment.OPENAI_API_KEY, model: secretEnvironment.DIRECTOR_MODEL ?? "gpt-6.1-sol", ...(secretEnvironment.OPENAI_BASE_URL ? { endpoint: secretEnvironment.OPENAI_BASE_URL } : {}) })
+  : new RuleDirector();
+registerDirectorRoutes(server, { projects, assets, revisions, storage, transcripts, director, saveRevision: (input) => timelineService.saveRevision(input), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, clock: () => new Date().toISOString(), ...(secretEnvironment.FFMPEG_BIN ? { ffmpeg: secretEnvironment.FFMPEG_BIN } : {}) });
 registerMusicRoutes(server, { assets, revisions, storage, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, clock: () => new Date().toISOString() });
 registerMediaRoutes(server, { assets, storage, signingSecret: requiredSecret("DOWNLOAD_SIGNING_SECRET"), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
 registerUploadRoutes(server, {

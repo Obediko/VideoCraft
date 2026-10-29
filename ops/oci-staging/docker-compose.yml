@@ -97,6 +97,9 @@ services:
       MEDIA_ROOT: /tmp/videocraft-media
       WHISPER_WORKER_PATH: /app/workers/transcription/worker.py
       WHISPER_MODEL: small
+      # AI director (OpenAI). Without a key the built-in rules director is used.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      DIRECTOR_MODEL: ${DIRECTOR_MODEL:-gpt-6.1-sol}
     tmpfs: ["/tmp:size=1g"]
     # Downloaded once and kept across restarts; keeping it off the RAM-backed /tmp avoids out-of-memory kills.
     volumes: [hfcache:/opt/hf-cache]

@@ -15,6 +15,28 @@ export interface MusicRouteDependencies {
   clock(): string;
 }
 
+/** Composes an instrumental for a cut and stores it as an audio asset of the project. */
+export async function composeMusicAsset(input: { projectId: UUID; mood: Mood; lengthUs: number; accentsS: number[]; seed: number }, dependencies: { storage: ObjectStorage; assets: AssetRepository; clock(): string }): Promise<{ asset: Asset; music: { mood: Mood; bpm: number; key: string; description: string; seed: number } }> {
+  const music = generateMusic({ mood: input.mood, durationS: input.lengthUs / 1_000_000 + 1, accentsS: input.accentsS, seed: input.seed });
+  const assetId = randomUUID();
+  const directory = join(tmpdir(), "videocraft-music", assetId);
+  const path = join(directory, "music.wav");
+  try {
+    await mkdir(directory, { recursive: true });
+    await writeFile(path, encodeWav(music.left, music.right, music.sampleRate));
+    const stored = await dependencies.storage.putFile(path, "projects/" + input.projectId + "/assets/" + assetId + ".media");
+    const asset: Asset = {
+      id: assetId, projectId: input.projectId, kind: "audio", storageKey: stored.key, checksumSha256: stored.checksumSha256, durationUs: Math.round((music.left.length / music.sampleRate) * 1_000_000),
+      metadata: { filename: "Generated " + input.mood + " " + music.bpm + " BPM.wav", mimeType: "audio/wav", generated: true, mood: input.mood, bpm: music.bpm, key: music.key, chords: music.chords.join("-"), seed: input.seed, hasAudio: true, hasVideo: false, container: "wav" },
+      createdAt: dependencies.clock(),
+    };
+    await dependencies.assets.save(asset);
+    return { asset, music: { mood: input.mood, bpm: music.bpm, key: music.key, description: music.description, seed: input.seed } };
+  } finally {
+    await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
 /**
  * Composes an instrumental bed for a saved cut: exactly its length, lifting at its cut points, in a mood taken
  * from the brief (or chosen). Stored as an ordinary audio asset, so it is used like any uploaded music.
@@ -44,24 +66,8 @@ export function registerMusicRoutes(server: FastifyInstance, dependencies: Music
     const seed = typeof body.seed === "number" ? body.seed : createHash("sha256").update(projectId + ":" + revision.revision + ":" + mood).digest().readUInt32LE(0);
     const accentsS = clips.slice(1).map((clip) => clip.timelineStartUs / 1_000_000);
 
-    const music = generateMusic({ mood, durationS: lengthUs / 1_000_000 + 1, accentsS, seed });
-    const assetId = randomUUID();
-    const directory = join(tmpdir(), "videocraft-music", assetId);
-    const path = join(directory, "music.wav");
-    try {
-      await mkdir(directory, { recursive: true });
-      await writeFile(path, encodeWav(music.left, music.right, music.sampleRate));
-      const stored = await dependencies.storage.putFile(path, "projects/" + projectId + "/assets/" + assetId + ".media");
-      const asset: Asset = {
-        id: assetId, projectId, kind: "audio", storageKey: stored.key, checksumSha256: stored.checksumSha256, durationUs: Math.round((music.left.length / music.sampleRate) * 1_000_000),
-        metadata: { filename: "Generated " + mood + " " + music.bpm + " BPM.wav", mimeType: "audio/wav", generated: true, mood, bpm: music.bpm, key: music.key, chords: music.chords.join("-"), seed, hasAudio: true, hasVideo: false, container: "wav" },
-        createdAt: dependencies.clock(),
-      };
-      await dependencies.assets.save(asset);
-      return reply.code(201).send({ asset, music: { mood, bpm: music.bpm, key: music.key, description: music.description, seed } });
-    } finally {
-      await rm(directory, { recursive: true, force: true }).catch(() => undefined);
-    }
+    const { asset, music } = await composeMusicAsset({ projectId, mood, lengthUs, accentsS, seed }, dependencies);
+    return reply.code(201).send({ asset, music });
   });
 }
 function error(reply: FastifyReply, status: number, code: string, message: string) { return reply.code(status).send({ error: { code, message } }); }
