@@ -53,8 +53,16 @@ export interface DirectorPlan {
 
 export interface Director {
   plan(input: DirectorInput): Promise<DirectorPlan>;
+  /** A change to the current edit, asked for in the person's own words. */
+  ask?(input: AskInput): Promise<DirectorPlan>;
   /** A second look at a finished edit (AI only); the rules check runs separately. */
   review?(input: ReviewInput): Promise<CheckIssue[]>;
+}
+
+export interface AskInput extends DirectorInput {
+  instruction: string;
+  /** The current edit in words: its pieces (source times), on-screen text, look, music. */
+  current: { pieces: Array<{ startS: number; endS: number; text: string }>; graphics: string[]; look: string; music: string; seconds: number };
 }
 
 export interface ReviewInput {
@@ -157,6 +165,28 @@ function lookFor(hints: { mood?: string; platform: string }): (typeof LOOKS)[num
 
 /** A director without a model: the strongest windows, a hook title, matching music and the right format. */
 export class RuleDirector implements Director {
+  /** Understands length, look, music mood, zooms, transitions and format changes; everything else needs the AI. */
+  async ask(input: AskInput): Promise<DirectorPlan> {
+    const t = input.instruction.toLowerCase();
+    const hints = briefHints(input.instruction);
+    const raw: Array<Record<string, unknown>> = [];
+    const shorter = /short|tight|trim|cut down|quicker|faster/.test(t); const longer = /longer|more of|extend/.test(t);
+    const target = hints.targetSeconds ?? (shorter ? Math.max(5, Math.round(input.current.seconds * 0.7)) : longer ? Math.round(input.current.seconds * 1.4) : undefined);
+    let summary = "";
+    if (target) {
+      const base = await this.plan({ ...input, brief: target + " seconds. " + input.brief.replace(/\d{1,3}\s*-?\s*(s|sec|secs|second|seconds|min|mins|minute|minutes)\b/gi, "") });
+      const cut = base.suggestions.find((x) => x.kind === "cut");
+      if (cut) { raw.push({ ...cut, title: "Make it about " + target + " seconds", reason: "You asked for a " + (shorter ? "shorter" : longer ? "longer" : target + "-second") + " cut; these are the strongest moments that fit." }); summary = "A new cut of about " + target + " seconds."; }
+    }
+    const look = LOOKS.find((l) => t.includes(l)) ?? (/black and white|b&w|monochrome|grey/.test(t) ? "mono" : /warm/.test(t) ? "warm" : /colou?rful|punchy|bright/.test(t) ? "vivid" : /film|moody/.test(t) ? "cinematic" : undefined);
+    if (look) raw.push({ id: "look", kind: "look", title: (look === "mono" ? "Black and white" : look[0]!.toUpperCase() + look.slice(1)) + " look", reason: "As you asked.", look });
+    if (hints.mood && /music|song|sound|track|mood|vibe/.test(t)) raw.push({ id: "music", kind: "music", title: hints.mood[0]!.toUpperCase() + hints.mood.slice(1) + " music", reason: "As you asked.", mood: hints.mood });
+    if (/zoom|punch/.test(t)) raw.push({ id: "zooms", kind: "zooms", title: /slow|push|gentle/.test(t) ? "Slow push-ins" : "Punch in on alternate parts", reason: "As you asked.", style: /slow|push|gentle/.test(t) ? "push" : "punch" });
+    if (/transition|fade|dip|flash/.test(t)) raw.push({ id: "transitions", kind: "transitions", title: /flash/.test(t) ? "Flash between topics" : /white/.test(t) ? "Dip to white between topics" : "Fade in and out, dip to black between topics", reason: "As you asked.", transition: /flash/.test(t) ? "flash" : /white/.test(t) ? "dip-white" : "dip-black" });
+    if (/youtube|16:9|landscape|square|1:1|vertical|9:16|reel|tiktok|short/.test(t) && !shorter) raw.push({ id: "platform", kind: "platform", title: "Export for " + hints.platform, reason: "As you asked.", platform: hints.platform });
+    const plan = sanitizePlan({ summary: summary || "Changes for your request.", profile: { intent: input.brief, targetSeconds: target ?? input.current.seconds }, suggestions: raw }, input, "rules");
+    return raw.length ? plan : { ...plan, suggestions: [{ id: "advice", kind: "advice", title: "I can't do that without the AI director", reason: "The built-in rules understand length (shorter, 30 seconds), look (warm, black and white), music mood, zooms, transitions and format. Add an OpenAI key for anything else." }] };
+  }
   async plan(input: DirectorInput): Promise<DirectorPlan> {
     const hints = briefHints(input.brief);
     const target = hints.targetSeconds ?? (hints.platform === "youtube" ? 90 : 30);
@@ -166,6 +196,17 @@ export class RuleDirector implements Director {
       const length = candidate.endS - candidate.startS;
       if (chosen.some((c) => candidate.startS < c.endS && candidate.endS > c.startS)) continue;
       if (chosen.length > 0 && total + length > target * 1.1) continue;
+      if (chosen.length === 0 && length > target * 1.2) {
+        // The best moment is longer than asked: keep its opening sentences up to the length.
+        const lines = input.transcript.filter((line) => line.startS >= candidate.startS - 0.05 && line.endS <= candidate.endS + 0.05);
+        let end = candidate.startS;
+        for (const line of lines) { if (end > candidate.startS && line.endS - candidate.startS > target * 1.1) break; end = line.endS; }
+        // One long transcript line: cut at the length asked (the cut is snapped to whole words when applied).
+        if (!(end - candidate.startS >= 1 && end < candidate.endS && end - candidate.startS <= target * 1.2)) end = candidate.startS + target;
+        chosen.push({ ...candidate, endS: end }); total += end - candidate.startS;
+        if (total >= target * 0.9) break;
+        continue;
+      }
       chosen.push(candidate); total += length;
       if (total >= target * 0.9) break;
     }
@@ -234,6 +275,12 @@ const SCHEMA = {
   },
 };
 
+const ASK = SYSTEM + `
+You are now changing an existing edit, not making a new one. Suggest ONLY what the creator's request needs; everything else stays as it is.
+- To change what is kept (shorter, longer, remove a part, add a part, reorder), give ONE "cut" with the complete new list of segments in source seconds, starting from the current pieces.
+- For text, music, look, zooms, transitions, cutaways or format, use those kinds as before.
+- If the request cannot be done by editing, return one "advice" saying so kindly.`;
+
 const REVIEW = `You are a senior video editor giving a final review of an edit before it is published. You get the creator's description, the edit piece by piece with what is said, the on-screen text, cutaways, and frames from the edit.
 Find at most 6 real problems a viewer would notice, most important first: a weak or slow opening, a piece that repeats or wanders off the point, a story order that confuses, on-screen text that is wrong, unclear, misspelt or covers something important in the frame, a cutaway that does not match the words, a look problem in the frames (dark, blurry, cluttered or distracting background, poor framing).
 For each, choose one action that fixes it if possible:
@@ -267,6 +314,18 @@ export class OpenAiDirector implements Director {
       return { ...fallback, note: "The AI director was unavailable (" + (error instanceof Error ? error.message : "error").slice(0, 200) + "); built-in rules made this plan." };
     }
   }
+  async ask(input: AskInput): Promise<DirectorPlan> {
+    try {
+      const extra = "\n\nThe current edit (" + input.current.seconds.toFixed(0) + " s), piece by piece in source seconds:\n" + input.current.pieces.map((p) => "[" + p.startS.toFixed(1) + "-" + p.endS.toFixed(1) + "] " + p.text.slice(0, 300)).join("\n") + "\nOn-screen text: " + (input.current.graphics.join(" | ") || "none") + "\nLook: " + input.current.look + "\nMusic: " + input.current.music + "\n\nThe creator asks for this change: " + input.instruction.slice(0, 500);
+      const raw = await this.call(input, ASK, extra);
+      const plan = sanitizePlan(raw, input, "ai", { model: this.options.model });
+      if (plan.suggestions.length === 0) throw new Error("the AI found nothing to change");
+      return plan;
+    } catch (error) {
+      const fallback = await new RuleDirector().ask(input);
+      return { ...fallback, note: "The AI director was unavailable (" + (error instanceof Error ? error.message : "error").slice(0, 200) + "); built-in rules handled the request." + (fallback.note ? " " + fallback.note : "") };
+    }
+  }
   async review(input: ReviewInput): Promise<CheckIssue[]> {
     const pieces = input.pieces.map((p, i) => "#" + i + " [" + p.startS.toFixed(1) + "-" + p.endS.toFixed(1) + " s] " + p.text.slice(0, 500)).join("\n");
     const graphics = input.graphics.map((g, i) => "#" + i + " " + g.kind + " at " + g.atS.toFixed(1) + " s for " + g.durationS.toFixed(1) + " s: " + g.text).join("\n") || "(none)";
@@ -295,18 +354,18 @@ export class OpenAiDirector implements Director {
     }
     return out;
   }
-  private async call(input: DirectorInput): Promise<unknown> {
+  private async call(input: DirectorInput, instructions = SYSTEM, extra = ""): Promise<unknown> {
     const lines = input.transcript.map((s) => "[" + s.startS.toFixed(1) + "-" + s.endS.toFixed(1) + "] " + s.text).join("\n").slice(0, 60_000);
     const candidates = input.candidates.slice(0, 16).map((c) => c.id + " [" + c.startS.toFixed(1) + "-" + c.endS.toFixed(1) + "] score " + c.score.toFixed(2) + ": " + c.text.slice(0, 300)).join("\n");
     const media = input.assets.length ? input.assets.map((a) => a.id + " (" + a.kind + "): " + a.name).join("\n") : "(none)";
     const content: Array<Record<string, unknown>> = [
-      { type: "input_text", text: "Creator's description:\n" + input.brief.slice(0, 2000) + "\n\nVideo: " + input.durationS.toFixed(1) + " s, " + input.frame.width + "x" + input.frame.height + "\n\nTranscript:\n" + lines + "\n\nCandidate moments:\n" + candidates + "\n\nProject media:\n" + media + "\n\nFrames follow, each labelled with its time." },
+      { type: "input_text", text: "Creator's description:\n" + input.brief.slice(0, 2000) + "\n\nVideo: " + input.durationS.toFixed(1) + " s, " + input.frame.width + "x" + input.frame.height + "\n\nTranscript:\n" + lines + "\n\nCandidate moments:\n" + candidates + "\n\nProject media:\n" + media + extra + "\n\nFrames follow, each labelled with its time." },
     ];
     for (const frame of input.frames.slice(0, 10)) {
       content.push({ type: "input_text", text: "Frame at " + frame.atS.toFixed(1) + " s:" });
       content.push({ type: "input_image", image_url: "data:image/jpeg;base64," + frame.jpegBase64, detail: "low" });
     }
-    return this.request(SYSTEM, content, "edit_plan", SCHEMA);
+    return this.request(instructions, content, "edit_plan", SCHEMA);
   }
   private async request(instructions: string, content: Array<Record<string, unknown>>, name: string, schema: unknown): Promise<unknown> {
     const controller = new AbortController();

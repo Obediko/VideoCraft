@@ -122,6 +122,9 @@ export function App() {
   const [transcribing, setTranscribing] = useState<{ assetId: string; promise: Promise<void> } | null>(null);
   const [selection, setSelection] = useState<{ from: number; to: number } | null>(null);
   const [newName, setNewName] = useState("");
+  const [askText, setAskText] = useState("");
+  const [askPlan, setAskPlan] = useState<DirectorPlan | null>(null);
+  const [askPicked, setAskPicked] = useState<Record<string, boolean>>({});
   const setScreen = (next: Screen) => { setScreenState(next); remember(LAST_SCREEN_KEY, next); };
 
   const videoTrack = useMemo(() => timeline.tracks.find((track) => track.kind === "video"), [timeline]);
@@ -581,6 +584,37 @@ export function App() {
     finally { setBusy(false); }
   }
 
+  /** A change in the person's own words; the director answers with suggestions to tick, as for the first cut. */
+  async function askDirector() {
+    if (!projectId || !revision || askText.trim().length < 3) return;
+    setBusy(true); setAskPlan(null);
+    setStatus("Working out how to “" + askText.trim().slice(0, 60) + "”…");
+    try {
+      const result = await request("/v1/projects/" + projectId + "/director/ask", { method: "POST", body: JSON.stringify({ revision, instruction: askText.trim() }) });
+      const next: DirectorPlan = result.plan;
+      setAskPlan(next);
+      setAskPicked(Object.fromEntries(next.suggestions.map((item) => [item.id, item.kind !== "advice"])));
+      const actionable = next.suggestions.filter((item) => item.kind !== "advice").length;
+      setStatus(actionable ? "Suggested " + actionable + " change" + (actionable === 1 ? "" : "s") + ": review and apply" : "No change suggested");
+    } catch (error) { setStatus(errorMessage(error)); }
+    finally { setBusy(false); }
+  }
+  async function applyAsk() {
+    if (!projectId || !askPlan) return;
+    setBusy(true);
+    try {
+      const accepted = askPlan.suggestions.filter((item) => askPicked[item.id] && item.kind !== "advice").map((item) => item.id);
+      const result = await request("/v1/projects/" + projectId + "/director/apply", { method: "POST", body: JSON.stringify({ revision, plan: askPlan, accepted, keepTailoring: true }) });
+      setRevision(result.revision.revision); setTimeline(result.revision.timeline);
+      setRenderUrl(""); setRenderJobId(""); setRenderJobStatus("");
+      if (result.platform && PLATFORMS[result.platform]) setPlatform(result.platform);
+      if (result.music) { const listed = await request("/v1/projects/" + projectId + "/assets").catch(() => null); if (listed) setAssets(listed.assets); }
+      setAskPlan(null); setAskText(""); setCheck(null);
+      setStatus("Changed (revision " + result.revision.revision + ")" + (result.music ? ". Music: " + result.music.description : ""));
+    } catch (error) { setStatus(errorMessage(error)); }
+    finally { setBusy(false); }
+  }
+
   async function runCheck(atRevision = revision) {
     if (!projectId || !atRevision) return;
     setBusy(true);
@@ -996,7 +1030,25 @@ export function App() {
       <div className="work">
         <div className="work-top">
           {modePane}
-          <section className="pane preview-pane" aria-label="Preview">{player}</section>
+          <section className="pane preview-pane" aria-label="Preview">{player}
+            <form className="ask" onSubmit={(event) => { event.preventDefault(); void askDirector(); }}>
+              <label htmlFor="ask" className="ask-label">Ask</label>
+              <input id="ask" value={askText} maxLength={500} placeholder="Change anything… “make it shorter”, “warmer look”, “remove the part about pricing”" onChange={(event) => setAskText(event.target.value)} disabled={busy || revision === 0} />
+              <button type="submit" className="primary" disabled={busy || revision === 0 || askText.trim().length < 3}>Go</button>
+            </form>
+            {askPlan && <div className="card ask-result" aria-label="Suggested changes">
+              <div className="row-between"><strong>{askPlan.summary}</strong><span className="tag">{askPlan.source === "ai" ? "AI director" : "Built-in director"}</span></div>
+              {askPlan.note && <p className="note">{askPlan.note}</p>}
+              <ul className="suggestion-list">{askPlan.suggestions.map((item) => <li key={item.id} className={"suggestion" + (askPicked[item.id] || item.kind === "advice" ? "" : " off")}>
+                {item.kind !== "advice" && <input type="checkbox" id={"a-" + item.id} checked={Boolean(askPicked[item.id])} onChange={(event) => setAskPicked((current) => ({ ...current, [item.id]: event.target.checked }))} />}
+                <div className="suggestion-body"><label htmlFor={"a-" + item.id}><strong>{item.title}</strong></label><span className="small what">{describeSuggestion(item)}</span></div>
+              </li>)}</ul>
+              <div className="actions">
+                {askPlan.suggestions.some((item) => item.kind !== "advice") && <button className="primary" onClick={applyAsk} disabled={busy || !askPlan.suggestions.some((item) => askPicked[item.id] && item.kind !== "advice")}>Apply</button>}
+                <button className="btn" onClick={() => setAskPlan(null)} disabled={busy}>Dismiss</button>
+              </div>
+            </div>}
+          </section>
           {inspector}
         </div>
         <section className="timeline" aria-label="Timeline">

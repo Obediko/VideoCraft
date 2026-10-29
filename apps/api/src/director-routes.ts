@@ -6,7 +6,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { applyTimelineOperations, parseTimelineOperations, type ProjectRevision, type TranscriptSegment, type UUID } from "@videocraft/domain";
 import type { AssetRepository, ProjectRepository, RevisionRepository } from "@videocraft/application";
 import type { ObjectStorage } from "@videocraft/storage";
-import { briefHints, checkEdit, effectOperations, parseMediaSignals, planOperations, sanitizePlan, type CheckIssue, type Director, type DirectorInput, type DirectorPlan, type MediaSignals } from "@videocraft/director";
+import { RuleDirector, briefHints, checkEdit, effectOperations, parseMediaSignals, planOperations, sanitizePlan, type CheckIssue, type Director, type DirectorInput, type DirectorPlan, type MediaSignals } from "@videocraft/director";
 import { findCandidates } from "@videocraft/strategies";
 import { composeMusicAsset } from "./music-routes.js";
 
@@ -24,6 +24,7 @@ export interface DirectorRouteDependencies {
 /** Plans a whole edit from the person's own description (AI director, or rules without a key), then applies the accepted parts. */
 export function registerDirectorRoutes(server: FastifyInstance, dependencies: DirectorRouteDependencies): void {
   const context = contextOf(dependencies);
+  const directorInput = (ctx: NonNullable<Awaited<ReturnType<typeof context>>>, brief: string, request: FastifyRequest) => directorInputFor(dependencies, ctx, brief, request);
   registerCheckRoutes(server, dependencies, context);
 
   server.post("/v1/projects/:projectId/director/plan", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } } as never, async (request: FastifyRequest, reply: FastifyReply) => {
@@ -31,20 +32,31 @@ export function registerDirectorRoutes(server: FastifyInstance, dependencies: Di
     if (!ctx) return reply;
     const brief = typeof ctx.body.brief === "string" ? ctx.body.brief.trim().slice(0, 2000) : "";
     if (brief.length < 3) return error(reply, 400, "invalid_request", "Describe what the video is about and what you want");
-    const hints = briefHints(brief);
-    const profile = { intent: brief, audience: "", channel: hints.channel, ...(hints.targetSeconds ? { targetDurationUs: hints.targetSeconds * 1_000_000 } : {}), constraints: [] };
-    // Distinct strong windows, so the director chooses among real, complete moments.
-    const candidates: DirectorInput["candidates"] = [];
-    for (const candidate of findCandidates(ctx.transcript, profile)) {
-      if (candidates.length >= 16) break;
-      const overlaps = candidates.some((c) => Math.min(c.endS, candidate.endUs / 1e6) - Math.max(c.startS, candidate.startUs / 1e6) > 0.5 * Math.min(c.endS - c.startS, (candidate.endUs - candidate.startUs) / 1e6));
-      if (!overlaps) candidates.push({ id: "m" + (candidates.length + 1), startS: candidate.startUs / 1e6, endS: candidate.endUs / 1e6, text: candidate.text, score: candidate.score });
-    }
-    const frames = await sampleFrames(dependencies, ctx.main.storageKey, ctx.durationS, 8).catch((caught) => { request.log.warn({ err: caught }, "Frame sampling failed; planning from words only"); return []; });
-    const plan = await dependencies.director.plan({
-      brief, durationS: ctx.durationS, frame: { width: Number(ctx.main.metadata.width) || 1080, height: Number(ctx.main.metadata.height) || 1920 },
-      transcript: ctx.transcript.map((s) => ({ startS: s.startUs / 1e6, endS: s.endUs / 1e6, text: s.text })), candidates, frames, assets: ctx.others,
-    });
+    const plan = await dependencies.director.plan(await directorInput(ctx, brief, request));
+    return { plan };
+  });
+
+  // A change to the current edit in the person's own words ("make it shorter", "warmer look").
+  server.post("/v1/projects/:projectId/director/ask", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } } as never, async (request: FastifyRequest, reply: FastifyReply) => {
+    const ctx = await context(request, reply);
+    if (!ctx) return reply;
+    const instruction = typeof ctx.body.instruction === "string" ? ctx.body.instruction.trim().slice(0, 500) : "";
+    if (instruction.length < 3) return error(reply, 400, "invalid_request", "Say what you would like to change");
+    const brief = ctx.revision.tailoring?.intent ?? "";
+    const timeline = ctx.revision.timeline;
+    const words = ctx.transcript.flatMap((segment) => segment.words);
+    const pieces = timeline.tracks.filter((t) => t.kind === "video").flatMap((t) => t.clips).sort((a, b) => a.timelineStartUs - b.timelineStartUs).filter((c) => c.assetId === ctx.main.id);
+    const overlays = timeline.tracks.filter((t) => t.kind === "overlay").flatMap((t) => t.clips);
+    const music = timeline.tracks.find((t) => t.kind === "audio")?.clips.find((c) => c.transform?.role === "music");
+    const current = {
+      pieces: pieces.map((c) => ({ startS: c.sourceStartUs / 1e6, endS: c.sourceEndUs / 1e6, text: words.filter((w) => w.startUs >= c.sourceStartUs - 50_000 && w.endUs <= c.sourceEndUs + 50_000).map((w) => w.text).join(" ") })),
+      graphics: overlays.filter((c) => c.transform?.role === "graphic").map((c) => String(c.transform?.kind) + ": " + String(c.transform?.text)),
+      look: String(pieces[0]?.transform?.look ?? "none"),
+      music: music ? "yes" : "none",
+      seconds: pieces.reduce((sum, c) => sum + c.sourceEndUs - c.sourceStartUs, 0) / 1e6,
+    };
+    const input = { ...(await directorInput(ctx, brief || instruction, request)), instruction, current };
+    const plan = dependencies.director.ask ? await dependencies.director.ask(input) : await new RuleDirector().ask(input);
     return { plan };
   });
 
@@ -77,7 +89,7 @@ export function registerDirectorRoutes(server: FastifyInstance, dependencies: Di
     }
     const revision = await dependencies.saveRevision({
       projectId: ctx.projectId, createdBy: ctx.principal.userId, timeline, acceptedProposalIds: ctx.revision.acceptedProposalIds,
-      tailoring: { intent: plan.profile.intent, audience: plan.profile.audience, channel: plan.profile.channel, ...(plan.profile.tone ? { tone: plan.profile.tone } : {}), targetDurationUs: plan.profile.targetSeconds * 1_000_000, constraints: [] },
+      tailoring: ctx.body.keepTailoring === true && ctx.revision.tailoring ? ctx.revision.tailoring : { intent: plan.profile.intent, audience: plan.profile.audience, channel: plan.profile.channel, ...(plan.profile.tone ? { tone: plan.profile.tone } : {}), targetDurationUs: plan.profile.targetSeconds * 1_000_000, constraints: [] },
     });
     const platform = plan.suggestions.find((s) => s.kind === "platform" && accepted.has(s.id));
     return reply.code(201).send({ revision, ...(platform && platform.kind === "platform" ? { platform: platform.platform } : {}), ...(music ? { music } : {}) });
@@ -193,6 +205,24 @@ export function registerCheckRoutes(server: FastifyInstance, dependencies: Direc
     const revision = await dependencies.saveRevision({ projectId: ctx.projectId, createdBy: ctx.principal.userId, timeline, acceptedProposalIds: ctx.revision.acceptedProposalIds, ...(ctx.revision.tailoring ? { tailoring: ctx.revision.tailoring } : {}) });
     return reply.code(201).send({ revision, applied, skipped });
   });
+}
+
+/** What the director sees: the description, the timed transcript, strong candidate moments, frames and other media. */
+async function directorInputFor(dependencies: DirectorRouteDependencies, ctx: NonNullable<Awaited<ReturnType<ReturnType<typeof contextOf>>>>, brief: string, request: FastifyRequest): Promise<DirectorInput> {
+  const hints = briefHints(brief);
+  const profile = { intent: brief, audience: "", channel: hints.channel, ...(hints.targetSeconds ? { targetDurationUs: hints.targetSeconds * 1_000_000 } : {}), constraints: [] };
+  // Distinct strong windows, so the director chooses among real, complete moments.
+  const candidates: DirectorInput["candidates"] = [];
+  for (const candidate of findCandidates(ctx.transcript, profile)) {
+    if (candidates.length >= 16) break;
+    const overlaps = candidates.some((c) => Math.min(c.endS, candidate.endUs / 1e6) - Math.max(c.startS, candidate.startUs / 1e6) > 0.5 * Math.min(c.endS - c.startS, (candidate.endUs - candidate.startUs) / 1e6));
+    if (!overlaps) candidates.push({ id: "m" + (candidates.length + 1), startS: candidate.startUs / 1e6, endS: candidate.endUs / 1e6, text: candidate.text, score: candidate.score });
+  }
+  const frames = await sampleFrames(dependencies, ctx.main.storageKey, ctx.durationS, 8).catch((caught) => { request.log.warn({ err: caught }, "Frame sampling failed; planning from words only"); return []; });
+  return {
+    brief, durationS: ctx.durationS, frame: { width: Number(ctx.main.metadata.width) || 1080, height: Number(ctx.main.metadata.height) || 1920 },
+    transcript: ctx.transcript.map((s) => ({ startS: s.startUs / 1e6, endS: s.endUs / 1e6, text: s.text })), candidates, frames, assets: ctx.others,
+  };
 }
 
 /** Runs `work` with a local path to the stored source (downloaded to a temp folder on object storage). */

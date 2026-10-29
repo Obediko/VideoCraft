@@ -326,6 +326,16 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
     const overlayChips = (await page.locator(".track", { has: page.locator(".track-label", { hasText: /^Text$/ }) }).locator("button.clip strong").allInnerTexts()).join(" | ");
     assert.match(overlayChips, /Fix onboarding in a week/, "the edited title text is used: " + overlayChips);
 
+    // Ask for a change in plain words; the suggestions are ticked and applied like the plan.
+    await page.getByRole("textbox", { name: "Ask" }).fill("make it 10 seconds and black and white");
+    await page.getByRole("button", { name: "Go" }).click();
+    await waitStatus(/Suggested 2 changes/, 60_000);
+    await page.locator(".ask-result").getByRole("button", { name: "Apply" }).click();
+    await waitStatus(/^Changed \(revision \d+\)/, 60_000);
+    const storySeconds = await page.locator(".track", { has: page.locator(".track-label", { hasText: /^Story$/ }) }).locator("button.clip small").allInnerTexts();
+    const keptSeconds = storySeconds.reduce((sum, t) => sum + Number(t.replace("s", "")), 0);
+    assert.ok(keptSeconds <= 12.5, "about 10 s after asking: " + keptSeconds);
+
     // Everything fits the window at laptop, large-screen and phone sizes.
     for (const [w, h] of [[1366, 768], [1920, 1080], [390, 844]]) {
       await page.setViewportSize({ width: w, height: h });
@@ -342,7 +352,9 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
     await page.setViewportSize({ width: 1500, height: 1100 });
 
     // Delete the project from the project menu: the name must be typed back.
-    await page.locator('summary[aria-label="Project menu"]').click();
+    const menu = page.locator("details.menu", { has: page.locator('summary[aria-label="Project menu"]') });
+    if (!(await menu.evaluate((d) => d.open))) await page.locator('summary[aria-label="Project menu"]').click();
+    if (!(await menu.evaluate((d) => d.open))) await page.locator('summary[aria-label="Project menu"]').click();
     const deleteButton = page.locator(".danger-zone").getByRole("button", { name: "Delete project" });
     await deleteButton.waitFor();
     assert.equal(await deleteButton.isDisabled(), true, "disabled until the name is typed");

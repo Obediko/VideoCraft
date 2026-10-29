@@ -172,3 +172,26 @@ test("edit check with the AI second look: frames of the edit are sent, its fixes
     assert.equal(fixed.revision.timeline.tracks.find((t) => t.kind === "overlay").clips[0].transform.text, "For new graduates");
   } finally { close(); mock.close(); }
 });
+
+test("ask for a change (built-in rules): shorter + black and white, applied without changing the description", async () => {
+  const { server, projectId, close } = await setup(new RuleDirector());
+  try {
+    const url = (p) => "/v1/projects/" + projectId + "/director/" + p;
+    const first = (await server.inject({ method: "POST", url: url("plan"), payload: { revision: 1, brief: "A 30 second inspiring Reel for graduates" } })).json().plan;
+    const applied = (await server.inject({ method: "POST", url: url("apply"), payload: { revision: 1, plan: first, accepted: first.suggestions.map((s) => s.id) } })).json();
+    const rev = applied.revision.revision;
+    assert.equal((await server.inject({ method: "POST", url: url("ask"), payload: { revision: rev, instruction: "" } })).statusCode, 400);
+    const asked = await server.inject({ method: "POST", url: url("ask"), payload: { revision: rev, instruction: "make it 10 seconds and black and white" } });
+    assert.equal(asked.statusCode, 200, asked.body);
+    const { plan } = asked.json();
+    assert.deepEqual(plan.suggestions.map((s) => s.kind).sort(), ["cut", "look"]);
+    const changed = (await server.inject({ method: "POST", url: url("apply"), payload: { revision: rev, plan, accepted: plan.suggestions.map((s) => s.id), keepTailoring: true } })).json().revision;
+    const pieces = changed.timeline.tracks.find((t) => t.kind === "video").clips;
+    const kept = pieces.reduce((s, c) => s + c.sourceEndUs - c.sourceStartUs, 0) / 1e6;
+    assert.ok(kept <= 10 * 1.2, "about 10 s: " + kept);
+    assert.ok(pieces.every((c) => c.transform?.look === "mono"));
+    assert.equal(changed.tailoring.intent, applied.revision.tailoring.intent, "the description is kept");
+    const nothing = (await server.inject({ method: "POST", url: url("ask"), payload: { revision: changed.revision, instruction: "add my logo in the corner" } })).json().plan;
+    assert.equal(nothing.suggestions[0].kind, "advice", "what the rules cannot do is said plainly");
+  } finally { close(); }
+});
