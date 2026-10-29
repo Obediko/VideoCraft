@@ -99,7 +99,18 @@ export function registerUploadRoutes(server: FastifyInstance, dependencies: Uplo
       if (needsProxy) void buildProxy(dependencies, asset);
       return reply.code(201).send({ asset });
     } catch (caught) {
-      return error(reply, 400, "upload_failed", caught instanceof Error ? caught.message : "Upload failed");
+      const code = (caught as NodeJS.ErrnoException | null)?.code;
+      const disconnected = code === "EPIPE" || code === "ECONNRESET" || code === "ERR_STREAM_PREMATURE_CLOSE";
+      request.log.error({ err: caught, requestId: request.id, projectId, assetId, stage: "upload", errorCode: code ?? "unknown" }, "media upload failed");
+      return reply.code(disconnected ? 503 : 500).send({
+        error: {
+          code: disconnected ? "upload_connection_lost" : "upload_failed",
+          message: disconnected
+            ? "The media connection closed during upload or processing. Please retry and provide the reference ID if it persists."
+            : "The video could not be uploaded. Please retry and provide the reference ID if it persists.",
+          requestId: request.id,
+        },
+      });
     } finally {
       await rm(temporaryPath, { force: true }).catch(() => undefined);
     }
@@ -110,10 +121,11 @@ export function registerUploadRoutes(server: FastifyInstance, dependencies: Uplo
 async function buildProxy(dependencies: UploadDependencies, asset: Asset): Promise<void> {
   if (dependencies.proxyQueue) {
     try { await dependencies.proxyQueue.enqueueProxy(asset); return; }
-    catch (caught) { dependencies.onBackgroundDone?.(asset.id, "failed", caught); }
+    catch (caught) { dependencies.onBackgroundDone?.(asset.id, "failed", caught); if (!dependencies.proxy) return; }
   }
+  if (!dependencies.proxy) return;
   try {
-    await processProxyTask(proxyTask(asset), { storage: dependencies.storage, assets: dependencies.assets, makeProxy: dependencies.proxy! });
+    await processProxyTask(proxyTask(asset), { storage: dependencies.storage, assets: dependencies.assets, makeProxy: dependencies.proxy });
     dependencies.onBackgroundDone?.(asset.id, "ready");
   } catch (caught) {
     dependencies.onBackgroundDone?.(asset.id, "failed", caught);
