@@ -19,6 +19,7 @@ import { createProxy, isStillImage, probeMedia } from "@videocraft/analysis";
 import { StorageSilenceDetector } from "./media-analysis.js";
 import { registerRenderRoutes } from "./render-routes.js";
 import { registerMediaRoutes } from "./media-routes.js";
+import { registerStockRoutes } from "./stock.js";
 import { registerPreferenceRoutes } from "./learning.js";
 import { registerMusicRoutes } from "./music-routes.js";
 import { registerDirectorRoutes } from "./director-routes.js";
@@ -180,6 +181,13 @@ registerDirectorRoutes(server, { projects, assets, revisions, storage, transcrip
 registerMusicRoutes(server, { assets, revisions, storage, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, clock: () => new Date().toISOString() });
 registerMediaRoutes(server, { assets, storage, signingSecret: requiredSecret("DOWNLOAD_SIGNING_SECRET"), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer,
   ...(secretEnvironment.FACES_SCRIPT ? { faces: { script: secretEnvironment.FACES_SCRIPT, ...(secretEnvironment.SCENE_PYTHON ? { executable: secretEnvironment.SCENE_PYTHON } : {}) } } : {}) });
+// Free stock videos, photos and GIFs for cutaways (each library is skipped when its key is not set).
+registerStockRoutes(server, {
+  keys: { ...(secretEnvironment.PEXELS_API_KEY ? { pexels: secretEnvironment.PEXELS_API_KEY } : {}), ...(secretEnvironment.PIXABAY_API_KEY ? { pixabay: secretEnvironment.PIXABAY_API_KEY } : {}), ...(secretEnvironment.GIPHY_API_KEY ? { giphy: secretEnvironment.GIPHY_API_KEY } : {}) },
+  assets, storage, authorize: authorizer, authenticate: (request) => authenticator.authenticate(request), clock: () => new Date().toISOString(),
+  inspector: (path) => probeMedia(path, secretEnvironment.FFPROBE_BIN ? { executable: secretEnvironment.FFPROBE_BIN } : {}),
+  imageInspector: (path) => isStillImage(path, secretEnvironment.FFPROBE_BIN ? { executable: secretEnvironment.FFPROBE_BIN } : {}),
+});
 registerUploadRoutes(server, {
   assets, storage, authorize: authorizer, authenticate: (request) => authenticator.authenticate(request),
   clock: () => new Date().toISOString(), ...(malwareScanner ? { scanner: malwareScanner } : {}),
