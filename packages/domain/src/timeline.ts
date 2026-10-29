@@ -1,4 +1,4 @@
-import type { Timeline, TimelineClip, TimelineOperation, TimelineTrack } from "./index.js";
+import { CLIP_ZOOMS, COLOUR_LOOKS, SOUND_EFFECTS, TRANSITIONS, type Timeline, type TimelineClip, type TimelineOperation, type TimelineTrack } from "./index.js";
 import { sanitizeFeatures } from "./learning.js";
 
 const GENERATED_PREFIX = "generated:";
@@ -121,6 +121,34 @@ export function applyTimelineOperations(timeline: Timeline, operations: Timeline
         found.track.clips[found.index] = { ...found.clip, transform };
         break;
       }
+      case "set-clip-effects": {
+        const found = findClip(tracks, operation.clipId);
+        if (!found || found.track.kind !== "video") throw new Error("set-clip-effects references an unknown video clip");
+        const transform: Record<string, string | number | boolean> = { ...(found.clip.transform ?? {}) };
+        const put = (key: string, value: string | undefined, off: string) => { if (value === undefined) return; if (value === off) delete transform[key]; else transform[key] = value; };
+        put("zoom", operation.zoom, "none"); put("look", operation.look, "none"); put("transitionIn", operation.transitionIn, "cut"); put("transitionOut", operation.transitionOut, "cut");
+        const { transform: _old, ...rest } = found.clip;
+        found.track.clips[found.index] = Object.keys(transform).length ? { ...rest, transform } : rest;
+        break;
+      }
+      case "set-look": {
+        for (const track of tracks) if (track.kind === "video") track.clips = track.clips.map((clip) => {
+          const transform: Record<string, string | number | boolean> = { ...(clip.transform ?? {}) };
+          if (operation.look === "none") delete transform.look; else transform.look = operation.look;
+          const { transform: _old, ...rest } = clip;
+          return Object.keys(transform).length ? { ...rest, transform } : rest;
+        });
+        break;
+      }
+      case "add-sfx": {
+        const audio = ensureTrack(tracks, "audio", "music");
+        const base = "sfx-" + operation.anchorSourceUs;
+        let id = base;
+        for (let n = 2; tracks.some((track) => track.clips.some((clip) => clip.id === id)); n += 1) id = base + "-" + n;
+        const durationUs = SFX_LENGTH_US[operation.kind] ?? 700_000;
+        audio.clips.push({ id, assetId: GENERATED_PREFIX + "sfx", sourceStartUs: 0, sourceEndUs: durationUs, timelineStartUs: 0, timelineEndUs: durationUs, transform: { role: "sfx", kind: operation.kind, volumeDb: operation.volumeDb ?? -10, anchorAssetId: operation.anchorAssetId, anchorSourceUs: operation.anchorSourceUs, durationUs } });
+        break;
+      }
       case "set-progress-bar": {
         for (const track of tracks) if (track.kind === "overlay") track.clips = track.clips.filter((clip) => clip.transform?.role !== "progress");
         if (operation.enabled) ensureTrack(tracks, "overlay", "graphics").clips.push({ id: "progress", assetId: GENERATED_PREFIX + "progress", sourceStartUs: 0, sourceEndUs: 1, timelineStartUs: 0, timelineEndUs: 1, transform: { role: "progress", ...(operation.color ? { color: operation.color } : {}) } });
@@ -217,7 +245,17 @@ export function normalizeTimeline(timeline: Timeline): Timeline {
   // A music bed always spans the whole cut, however the video track was edited.
   for (const track of tracks) {
     if (track.kind !== "audio") continue;
-    track.clips = track.clips.flatMap((clip) => clip.transform?.role !== "music" ? [clip] : videoEnd > 0 ? [{ ...clip, timelineStartUs: 0, timelineEndUs: videoEnd, sourceEndUs: clip.sourceStartUs + videoEnd }] : []);
+    track.clips = track.clips.flatMap((clip) => {
+      if (clip.transform?.role === "sfx") {
+        // A sound effect plays at its moment; it may ring past a cut but not past the end.
+        const host = video?.clips.find((candidate) => candidate.assetId === String(clip.transform!.anchorAssetId) && Number(clip.transform!.anchorSourceUs) >= candidate.sourceStartUs && Number(clip.transform!.anchorSourceUs) < candidate.sourceEndUs);
+        if (!host) return [];
+        const start = host.timelineStartUs + (Number(clip.transform.anchorSourceUs) - host.sourceStartUs);
+        const end = Math.min(start + Number(clip.transform.durationUs), videoEnd);
+        return end - start >= 50_000 ? [{ ...clip, timelineStartUs: start, timelineEndUs: end, sourceEndUs: end - start }] : [];
+      }
+      return clip.transform?.role !== "music" ? [clip] : videoEnd > 0 ? [{ ...clip, timelineStartUs: 0, timelineEndUs: videoEnd, sourceEndUs: clip.sourceStartUs + videoEnd }] : [];
+    });
   }
   for (let index = tracks.length - 1; index >= 0; index -= 1) if (tracks[index]!.kind === "audio" && tracks[index]!.clips.length === 0) tracks.splice(index, 1);
 
@@ -255,6 +293,7 @@ function findClip(tracks: TimelineTrack[], clipId: string): { track: TimelineTra
   return undefined;
 }
 
+const SFX_LENGTH_US: Record<string, number> = { whoosh: 700_000, pop: 250_000, hit: 1_200_000, riser: 1_800_000 };
 const MAX_OPERATIONS = 2_000;
 const isUs = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 const isId = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 200 && !value.includes("\0");
@@ -326,6 +365,21 @@ export function parseTimelineOperations(value: unknown): TimelineOperation[] {
         if (op.sourceStartUs !== undefined && !isUs(op.sourceStartUs)) return fail("add-broll sourceStartUs must be a non-negative integer");
         if (op.mode !== undefined && op.mode !== "full" && op.mode !== "pip") return fail("add-broll mode must be full or pip");
         return { type: "add-broll", assetId: op.assetId, anchorAssetId: op.anchorAssetId, anchorSourceUs: op.anchorSourceUs as number, durationUs: op.durationUs as number, ...(op.sourceStartUs === undefined ? {} : { sourceStartUs: op.sourceStartUs as number }), ...(op.mode === undefined ? {} : { mode: op.mode as "full" | "pip" }) };
+      case "set-clip-effects": {
+        if (!isId(op.clipId)) return fail("set-clip-effects needs clipId");
+        const pick = <T extends string>(key: string, allowed: readonly T[]): T | undefined => { const v = op[key]; if (v === undefined) return undefined; if (typeof v !== "string" || !allowed.includes(v as T)) return fail(key + " must be one of " + allowed.join(", ")); return v as T; };
+        const zoom = pick("zoom", CLIP_ZOOMS); const look = pick("look", COLOUR_LOOKS); const transitionIn = pick("transitionIn", TRANSITIONS); const transitionOut = pick("transitionOut", TRANSITIONS);
+        if (zoom === undefined && look === undefined && transitionIn === undefined && transitionOut === undefined) return fail("set-clip-effects needs at least one effect");
+        return { type: "set-clip-effects", clipId: op.clipId, ...(zoom ? { zoom } : {}), ...(look ? { look } : {}), ...(transitionIn ? { transitionIn } : {}), ...(transitionOut ? { transitionOut } : {}) };
+      }
+      case "set-look":
+        if (typeof op.look !== "string" || !(COLOUR_LOOKS as readonly string[]).includes(op.look)) return fail("set-look look must be one of " + COLOUR_LOOKS.join(", "));
+        return { type: "set-look", look: op.look as (typeof COLOUR_LOOKS)[number] };
+      case "add-sfx":
+        if (typeof op.kind !== "string" || !(SOUND_EFFECTS as readonly string[]).includes(op.kind)) return fail("add-sfx kind must be one of " + SOUND_EFFECTS.join(", "));
+        if (!isId(op.anchorAssetId) || !isUs(op.anchorSourceUs)) return fail("add-sfx needs anchorAssetId and anchorSourceUs");
+        if (op.volumeDb !== undefined && !(typeof op.volumeDb === "number" && op.volumeDb >= -40 && op.volumeDb <= 0)) return fail("add-sfx volumeDb must be between -40 and 0");
+        return { type: "add-sfx", kind: op.kind as (typeof SOUND_EFFECTS)[number], anchorAssetId: op.anchorAssetId, anchorSourceUs: op.anchorSourceUs as number, ...(op.volumeDb === undefined ? {} : { volumeDb: op.volumeDb as number }) };
       default:
         return fail("unknown operation type");
     }

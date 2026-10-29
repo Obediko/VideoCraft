@@ -6,7 +6,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { applyTimelineOperations, parseTimelineOperations, type ProjectRevision, type TranscriptSegment, type UUID } from "@videocraft/domain";
 import type { AssetRepository, ProjectRepository, RevisionRepository } from "@videocraft/application";
 import type { ObjectStorage } from "@videocraft/storage";
-import { briefHints, checkEdit, parseMediaSignals, planOperations, sanitizePlan, type CheckIssue, type Director, type DirectorInput, type DirectorPlan, type MediaSignals } from "@videocraft/director";
+import { briefHints, checkEdit, effectOperations, parseMediaSignals, planOperations, sanitizePlan, type CheckIssue, type Director, type DirectorInput, type DirectorPlan, type MediaSignals } from "@videocraft/director";
 import { findCandidates } from "@videocraft/strategies";
 import { composeMusicAsset } from "./music-routes.js";
 
@@ -61,6 +61,9 @@ export function registerDirectorRoutes(server: FastifyInstance, dependencies: Di
     const words = ctx.transcript.flatMap((segment) => segment.words);
     const ops = planOperations(plan, accepted, { timeline: ctx.revision.timeline, assetId: ctx.main.id, words });
     let timeline = applyTimelineOperations(ctx.revision.timeline, ops);
+    // Looks, zooms, transitions and sound effects refer to the clips of the new cut, so they come second.
+    const effects = effectOperations(plan, accepted, timeline, ctx.main.id);
+    if (effects.length) timeline = applyTimelineOperations(timeline, effects);
     const musicSuggestion = plan.suggestions.find((s) => s.kind === "music" && accepted.has(s.id));
     let music: { description: string } | undefined;
     if (musicSuggestion && musicSuggestion.kind === "music") {
@@ -182,7 +185,8 @@ export function registerCheckRoutes(server: FastifyInstance, dependencies: Direc
           if (op.type === "add-broll" && !["video", "image"].includes(owned.get(op.assetId) ?? "")) throw new Error("foreign asset");
           if (op.type === "set-music" && !["audio", "video"].includes(owned.get(op.assetId) ?? "")) throw new Error("foreign asset");
         }
-        timeline = applyTimelineOperations(timeline, rebase(ops)); applied.push(title);
+        const rebased = rebase(ops);
+        timeline = applyTimelineOperations(timeline, rebased); applied.push(title);
       } catch (caught) { request.log.info({ err: caught, fix: title }, "Fix skipped"); skipped.push(title); }
     }
     if (applied.length === 0) return error(reply, 409, "fixes_not_applicable", "None of the fixes still apply to this revision; run the check again");

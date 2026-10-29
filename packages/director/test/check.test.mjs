@@ -59,3 +59,19 @@ test("mostly-still footage gets one note, not a finding per pause in motion", ()
   const one = checkEdit({ timeline, assetId: A, words, sourceDurationUs: durationUs, platform: "youtube", media: { black: [], frozen: [{ startUs: 2_000_000, endUs: 3_000_000 }] } });
   assert.deepEqual(one.map((i) => [i.kind, i.severity]), [["frozen", "warn"]]);
 });
+
+test("a clipped word whose neighbour starts right after it is still fully kept", () => {
+  const tight = [{ text: "one", startUs: 1_000_000, endUs: 1_400_000 }, { text: "two.", startUs: 1_405_000, endUs: 1_800_000 }, { text: "three.", startUs: 3_000_000, endUs: 3_400_000 }];
+  const timeline = build([seg(0.9, 1.2)]);
+  const issue = checkEdit({ timeline, assetId: A, words: tight, sourceDurationUs: 5_000_000, platform: "youtube" }).find((i) => i.kind === "mid-word");
+  const fixed = applyTimelineOperations(timeline, issue.fix.operations);
+  assert.ok(!checkEdit({ timeline: fixed, assetId: A, words: tight, sourceDurationUs: 5_000_000, platform: "youtube" }).some((i) => i.kind === "mid-word"));
+});
+
+test("overlapping recogniser timings: the fix lands in a real gap", () => {
+  const messy = [{ text: "the", startUs: 1_000_000, endUs: 1_300_000 }, { text: "details", startUs: 1_250_000, endUs: 1_900_000 }, { text: "later.", startUs: 1_850_000, endUs: 2_600_000 }, { text: "Next", startUs: 2_640_000, endUs: 3_000_000 }, { text: "one.", startUs: 4_000_000, endUs: 4_300_000 }];
+  const timeline = build([seg(0.5, 2.0)]);
+  const issue = checkEdit({ timeline, assetId: A, words: messy, sourceDurationUs: 6_000_000, platform: "youtube" }).find((i) => i.kind === "mid-word");
+  const fixed = applyTimelineOperations(timeline, issue.fix.operations);
+  assert.ok(!checkEdit({ timeline: fixed, assetId: A, words: messy, sourceDurationUs: 6_000_000, platform: "youtube" }).some((i) => i.kind === "mid-word"), JSON.stringify(fixed.tracks[0].clips));
+});

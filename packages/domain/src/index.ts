@@ -37,7 +37,25 @@ export type TimelineOperation =
   /** Caption cue bound to source-media time so it follows the clip when the timeline is edited. */
   | { type: "add-caption-cue"; assetId: UUID; sourceStartUs: Microseconds; sourceEndUs: Microseconds; text: string; wordDurationsCs?: number[] }
   /** Correct the text of an existing caption cue. */
-  | { type: "update-caption"; clipId: UUID; text: string };
+  | { type: "update-caption"; clipId: UUID; text: string }
+  /**
+   * Effects on one video clip: a zoom ("punch" = a tighter framing for the whole clip, the classic jump-cut
+   * punch-in; "push" = a slow push-in), a colour look, and how it enters / leaves (a transition at the cut).
+   * Fields left out are unchanged; "none" / "cut" clears.
+   */
+  | { type: "set-clip-effects"; clipId: UUID; zoom?: ClipZoom; look?: ColourLook; transitionIn?: Transition; transitionOut?: Transition }
+  /** One colour look on every video clip ("none" clears). */
+  | { type: "set-look"; look: ColourLook }
+  /** A short generated sound effect anchored to a moment of a source video, like graphics. */
+  | { type: "add-sfx"; kind: SoundEffect; anchorAssetId: UUID; anchorSourceUs: Microseconds; volumeDb?: number };
+export const CLIP_ZOOMS = ["none", "punch", "push"] as const;
+export type ClipZoom = (typeof CLIP_ZOOMS)[number];
+export const COLOUR_LOOKS = ["none", "warm", "clean", "cinematic", "vivid", "soft", "mono"] as const;
+export type ColourLook = (typeof COLOUR_LOOKS)[number];
+export const TRANSITIONS = ["cut", "dip-black", "dip-white", "flash"] as const;
+export type Transition = (typeof TRANSITIONS)[number];
+export const SOUND_EFFECTS = ["whoosh", "pop", "hit", "riser"] as const;
+export type SoundEffect = (typeof SOUND_EFFECTS)[number];
 export interface TimelineSignals { silences?: Array<{ startUs: Microseconds; endUs: Microseconds }>; scenes?: Array<{ startUs: Microseconds; endUs: Microseconds }>; }
 export interface EditingProposal { id: UUID; projectId: UUID; baseRevision: number; strategyId: string; strategyVersion: string; rationale: string; confidence: number; evidence: Evidence[]; operations: TimelineOperation[]; status: "proposed" | "accepted" | "rejected" | "superseded"; }
 export interface ProjectRevision { projectId: UUID; revision: number; timeline: Timeline; tailoring?: TailoringProfile; acceptedProposalIds: UUID[]; createdAt: ISODateTime; createdBy: UUID; }
