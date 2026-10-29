@@ -62,6 +62,7 @@ export function App() {
   const playerRef = useRef<HTMLVideoElement | null>(null);
   const [sourceRetry, setSourceRetry] = useState(0);
   const [musicVolume, setMusicVolume] = useState(-16);
+  const [musicMood, setMusicMood] = useState("auto");
   const [musicDuck, setMusicDuck] = useState(true);
   const [learned, setLearned] = useState<{ samples: number; summary: string; counts: Record<string, number> } | null>(null);
   const [sourceNote, setSourceNote] = useState("");
@@ -155,6 +156,20 @@ export function App() {
     const anchorUs = host ? playheadUs : anchorClip.sourceStartUs;
     void applyEdit([{ type: "add-broll", assetId: brollAssetId, anchorAssetId: anchorClip.assetId, anchorSourceUs: anchorUs, durationUs: Math.round(brollSeconds * 1_000_000), mode: brollMode }], host ? "B-roll added" : "B-roll added at the start of the selected clip");
   }
+  /** Composes an instrumental for the saved cut (its length, lifting at its cuts) and lays it under the video. */
+  async function generateMusicBed() {
+    if (!projectId || revision === 0) { setStatus("Accept highlights or save a revision first, so the music can match the cut"); return; }
+    setBusy(true);
+    setStatus("Composing music for this cut…");
+    try {
+      const result = await request("/v1/projects/" + projectId + "/music/generate", { method: "POST", body: JSON.stringify({ revision, mood: musicMood, brief: { intent, audience, channel }, seed: Math.floor(Math.random() * 1_000_000_000) }) });
+      setAssets((current) => [...current.filter((asset) => asset.id !== result.asset.id), result.asset]);
+      setMusicAssetId(result.asset.id);
+      setBusy(false);
+      await applyEdit([{ type: "set-music", assetId: result.asset.id, volumeDb: musicVolume, duck: musicDuck }], "Music added: " + result.music.description);
+    } catch (error) { setStatus(errorMessage(error)); setBusy(false); }
+  }
+
   /** Anchor point under the playhead (or the selected clip's start), shared by b-roll and graphics. */
   function playheadAnchor(): { anchorAssetId: string; anchorSourceUs: number; atPlayhead: boolean } | undefined {
     const anchorClip = selectedClip ?? videoClips[0];
@@ -596,7 +611,10 @@ export function App() {
         </section>
         <section className="panel music-panel" aria-label="Background music">
           <h2>Background music</h2>
-          {musicClip ? <p>Playing <strong>{musicName}</strong> at {String(musicClip.transform?.volumeDb)} dB{musicClip.transform?.duck === false ? "" : ", ducked under speech"}.</p> : <p className="muted">Upload an audio file, then lay it under the whole cut. It loops, fades and dips while people speak.</p>}
+          {musicClip ? <p>Playing <strong>{musicName}</strong>{(() => { const meta = assets.find((asset) => asset.id === musicClip.assetId)?.metadata; return meta?.generated ? " (" + String(meta.mood) + ", " + String(meta.key) + ", " + String(meta.bpm) + " BPM)" : ""; })()} at {String(musicClip.transform?.volumeDb)} dB{musicClip.transform?.duck === false ? "" : ", ducked under speech"}.</p> : <p className="muted">Upload an audio file, then lay it under the whole cut. It loops, fades and dips while people speak.</p>}
+          <label>Mood<select value={musicMood} onChange={(event) => setMusicMood(event.target.value)}><option value="auto">Match my brief</option><option value="upbeat">Upbeat</option><option value="calm">Calm</option><option value="inspiring">Inspiring</option><option value="serious">Serious</option><option value="playful">Playful</option></select></label>
+          <button onClick={generateMusicBed} disabled={busy || revision === 0}>{musicClip && assets.find((asset) => asset.id === musicClip.assetId)?.metadata.generated ? "Try different music" : "Generate matching music"}</button>
+          <p className="muted">Or use your own track:</p>
           <label>Music track<select value={musicAssetId} onChange={(event) => setMusicAssetId(event.target.value)}><option value="">Choose an audio asset</option>{audioAssets.map((asset) => <option key={asset.id} value={asset.id}>{String(asset.metadata.filename ?? asset.id.slice(0, 8))}</option>)}</select></label>
           <label>Music volume ({musicVolume} dB)<input type="range" min={-30} max={-4} step={1} value={musicVolume} onChange={(event) => setMusicVolume(Number(event.target.value))} /></label>
           <label className="checkbox"><input type="checkbox" checked={musicDuck} onChange={(event) => setMusicDuck(event.target.checked)} /> Duck under speech</label>

@@ -20,6 +20,7 @@ import { StorageSilenceDetector } from "./media-analysis.js";
 import { registerRenderRoutes } from "./render-routes.js";
 import { registerMediaRoutes } from "./media-routes.js";
 import { registerPreferenceRoutes } from "./learning.js";
+import { registerMusicRoutes } from "./music-routes.js";
 import { registerIntentRoutes } from "./intent-routes.js";
 import { registerFeedbackRoutes } from "./feedback-routes.js";
 import { registerTimelineRoutes } from "./timeline-routes.js";
@@ -169,6 +170,7 @@ registerFeedbackRoutes(server, { feedback, revisions, proposals: new PostgresPro
 registerIntentRoutes(server, { analyzer: intentAnalyzer, assets, transcripts, quota: providerQuota, providerRateLimitMax: boundedInteger("INTENT_PROVIDER_MAX_PER_MINUTE", 20, 1, 1_000), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
 registerRenderRoutes(server, { jobs: renderJobs, storage, signingSecret: requiredSecret("DOWNLOAD_SIGNING_SECRET"), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
 registerPreferenceRoutes(server, { preferences, authenticate: (request) => authenticator.authenticate(request) });
+registerMusicRoutes(server, { assets, revisions, storage, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, clock: () => new Date().toISOString() });
 registerMediaRoutes(server, { assets, storage, signingSecret: requiredSecret("DOWNLOAD_SIGNING_SECRET"), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
 registerUploadRoutes(server, {
   assets, storage, authorize: authorizer, authenticate: (request) => authenticator.authenticate(request),
