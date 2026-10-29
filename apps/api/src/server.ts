@@ -5,7 +5,7 @@ import { applyTimelineOperations, validateProposal } from "@videocraft/domain";
 import type { Asset, EditingProposal, PreferenceRepository, ProjectRevision, RenderSettings, RendererPort, StrategyRegistry, TailoringProfile, Timeline, TimelineSignals, TranscriptSegment, TranscriptionPort, UUID } from "@videocraft/domain";
 import type { SceneDetector } from "@videocraft/scene-detection";
 import { exportedSamples, learnedFor, record, rejectedSamples } from "./learning.js";
-import { ProjectService, type Clock, type IdFactory, type ProjectMemberRepository, type ProjectRepository, type AssetRepository, type RevisionRepository, type SceneRepository } from "@videocraft/application";
+import { ProjectNameTakenError, ProjectService, type Clock, type IdFactory, type ProjectMemberRepository, type ProjectRepository, type AssetRepository, type RevisionRepository, type SceneRepository } from "@videocraft/application";
 import type { ObjectStorage } from "@videocraft/storage";
 import { MetricsRegistry } from "@videocraft/observability";
 
@@ -174,6 +174,7 @@ export function buildServer(dependencies: ApiDependencies): FastifyInstance {
       const project = await projectService.renameProject(projectId, body.name);
       return { project };
     } catch (error) {
+      if (error instanceof ProjectNameTakenError) return sendError(reply, 409, error.code, error.message);
       return sendError(reply, 400, "invalid_request", messageOf(error));
     }
   });
@@ -187,6 +188,7 @@ export function buildServer(dependencies: ApiDependencies): FastifyInstance {
       const project = await projectService.createProject({ ownerId: principal.userId, name: body.name });
       return reply.code(201).send({ project });
     } catch (error) {
+      if (error instanceof ProjectNameTakenError) return sendError(reply, 409, error.code, error.message);
       return sendError(reply, 400, "invalid_request", messageOf(error));
     }
   });

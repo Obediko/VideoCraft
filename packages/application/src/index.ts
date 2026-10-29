@@ -28,6 +28,16 @@ export interface SaveRevisionInput {
   acceptedProposalIds?: UUID[];
 }
 
+/** A person already has a project with this name (compared ignoring case and repeated spaces). */
+export class ProjectNameTakenError extends Error {
+  readonly code = "project_name_taken";
+  constructor(readonly projectName: string) { super("You already have a project called \"" + projectName + "\". Choose a different name."); }
+}
+/** Trims and collapses whitespace; the stored form of a project name. */
+export function normalizeProjectName(name: string): string { return name.trim().replace(/\s+/g, " "); }
+/** The form compared for uniqueness. */
+export function projectNameKey(name: string): string { return normalizeProjectName(name).toLowerCase(); }
+
 export class ProjectService {
   constructor(
     private readonly projects: ProjectRepository,
@@ -38,9 +48,10 @@ export class ProjectService {
   ) {}
 
   async createProject(input: CreateProjectInput): Promise<Project> {
-    const name = input.name.trim();
+    const name = normalizeProjectName(input.name);
     if (!name) throw new Error("Project name is required");
     if (name.length > 120) throw new Error("Project name is too long");
+    await this.requireUniqueName(input.ownerId, name);
     const timestamp = this.clock.now();
     const project: Project = { id: this.ids.next(), ownerId: input.ownerId, name, revision: 0, createdAt: timestamp, updatedAt: timestamp };
     await this.projects.save(project);
@@ -49,12 +60,19 @@ export class ProjectService {
 
   async renameProject(projectId: UUID, name: string): Promise<Project> {
     const project = await this.requireProject(projectId);
-    const normalizedName = name.trim();
+    const normalizedName = normalizeProjectName(name);
     if (!normalizedName) throw new Error("Project name is required");
     if (normalizedName.length > 120) throw new Error("Project name is too long");
+    await this.requireUniqueName(project.ownerId, normalizedName, project.id);
     const renamed = { ...project, name: normalizedName, updatedAt: this.clock.now() };
     await this.projects.save(renamed);
     return renamed;
+  }
+
+  private async requireUniqueName(ownerId: UUID, name: string, exceptProjectId?: UUID): Promise<void> {
+    const key = projectNameKey(name);
+    const clash = (await this.projects.listForOwner(ownerId)).find((existing) => existing.id !== exceptProjectId && projectNameKey(existing.name) === key);
+    if (clash) throw new ProjectNameTakenError(clash.name);
   }
 
   async addAsset(asset: Asset): Promise<void> {
@@ -104,7 +122,12 @@ export class InMemoryProjectRepository implements ProjectRepository {
   private readonly values = new Map<UUID, Project>();
   async get(id: UUID) { return this.values.get(id); }
   async listForOwner(ownerId: UUID) { return [...this.values.values()].filter((project) => project.ownerId === ownerId).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)); }
-  async save(project: Project) { this.values.set(project.id, project); }
+  async save(project: Project) {
+    // Mirrors the database's unique index on (owner, normalised name).
+    const clash = [...this.values.values()].find((existing) => existing.id !== project.id && existing.ownerId === project.ownerId && projectNameKey(existing.name) === projectNameKey(project.name));
+    if (clash) throw new ProjectNameTakenError(clash.name);
+    this.values.set(project.id, project);
+  }
 }
 export class InMemoryAssetRepository implements AssetRepository {
   private readonly values = new Map<UUID, Asset>();
