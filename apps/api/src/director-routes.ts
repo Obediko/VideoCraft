@@ -37,6 +37,9 @@ export function registerDirectorRoutes(server: FastifyInstance, dependencies: Di
     const brief = typeof ctx.body.brief === "string" ? ctx.body.brief.trim().slice(0, 2000) : "";
     if (brief.length < 3) return error(reply, 400, "invalid_request", "Describe what the video is about and what you want");
     const plan = await dependencies.director.plan(await directorInput(ctx, brief, request));
+    if (plan.source === "rules" && plan.note?.includes("unavailable")) {
+      request.log.warn({ requestId: request.id, projectId: ctx.projectId, reason: plan.note.slice(0, 300), stage: "director_plan" }, "AI director fell back to rules");
+    }
     return { plan };
   });
 
@@ -63,6 +66,9 @@ export function registerDirectorRoutes(server: FastifyInstance, dependencies: Di
     const playheadS = typeof ctx.body.playheadS === "number" && Number.isFinite(ctx.body.playheadS) && ctx.body.playheadS >= 0 ? ctx.body.playheadS : undefined;
     const input = { ...(await directorInput(ctx, brief || instruction, request)), instruction, current, ...(playheadS !== undefined ? { playheadS } : {}) };
     const plan = dependencies.director.ask ? await dependencies.director.ask(input) : await new RuleDirector().ask(input);
+    if (plan.source === "rules" && plan.note?.includes("unavailable")) {
+      request.log.warn({ requestId: request.id, projectId: ctx.projectId, reason: plan.note.slice(0, 300), stage: "director_ask" }, "AI director fell back to rules");
+    }
     return { plan };
   });
 
