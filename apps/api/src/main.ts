@@ -7,7 +7,8 @@ import { createDatabase, createPool, PostgresAssetRepository, PostgresProjectMem
 import { BullMqMediaQueue, BullMqRenderQueue, CloudflareMediaQueue, CloudflareQueueRenderQueue, type MediaQueuePort } from "@videocraft/jobs";
 import { ProjectService } from "@videocraft/application";
 import { FasterWhisperWorker } from "@videocraft/transcription";
-import { LocalObjectStorage, S3ObjectStorage, type ObjectStorage } from "@videocraft/storage";
+import { LocalObjectStorage, S3ObjectStorage, sweepScratch, type ObjectStorage } from "@videocraft/storage";
+import { tmpdir } from "node:os";
 import { HighlightReelStrategy, OpenAiCompatibleReranker, ShortFormExplainerStrategy, StaticStrategyRegistry } from "@videocraft/strategies";
 import { PySceneDetectWorker } from "@videocraft/scene-detection";
 import { OpenAiCompatibleIntentAnalyzer, RuleBasedIntentAnalyzer } from "@videocraft/intent-analysis";
@@ -206,6 +207,10 @@ registerUploadRoutes(server, {
   ...(mediaQueue ? { proxyQueue: mediaQueue } : {}),
   onBackgroundDone: (assetId, outcome, caught) => { if (outcome === "failed") server.log.warn({ assetId, err: caught }, "Preview proxy failed"); },
 });
+
+// Scratch files of uploads, face tracking, mattes and the like that an interrupted request left behind.
+const sweep = () => void sweepScratch(tmpdir(), ["videocraft-"]).then((removed) => { if (removed) server.log.info({ removed }, "Old scratch files removed"); });
+sweep(); setInterval(sweep, 3600_000).unref();
 
 const port = Number(secretEnvironment.PORT ?? "8080");
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("PORT must be a valid TCP port");

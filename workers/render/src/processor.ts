@@ -4,7 +4,7 @@ import { mkdir, rm } from "node:fs/promises";
 import { safeMediaPath } from "@videocraft/transcription";
 import { FfmpegCommandPlanner, FfmpegProcess } from "@videocraft/rendering";
 import { detectFocus, isStillImage, loadOrDetectFaceTrack, probeMedia } from "@videocraft/analysis";
-import { LocalObjectStorage, S3ObjectStorage, type ObjectStorage } from "@videocraft/storage";
+import { LocalObjectStorage, S3ObjectStorage, sweepScratch, type ObjectStorage } from "@videocraft/storage";
 import { PostgresRenderJobRepository, type Database } from "@videocraft/persistence";
 import type { RenderTask } from "@videocraft/jobs";
 import type { RenderJob } from "@videocraft/domain";
@@ -67,6 +67,8 @@ export class RenderTaskProcessor {
 
   async initialize(): Promise<void> {
     await mkdir(this.outputRoot, { recursive: true });
+    // Folders of renders that were interrupted (a crash or a redeploy) are cleared after a day.
+    void sweepScratch(safeMediaPath(this.outputRoot, "runs"), [""], 24 * 3600_000);
   }
 
   async process(task: RenderTask, progress: RenderProgress): Promise<RenderJob> {

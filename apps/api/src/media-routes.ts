@@ -41,7 +41,8 @@ export function matteKey(projectId: string, assetId: string): string { return "p
 
 async function storedExists(storage: ObjectStorage, key: string): Promise<boolean> {
   try {
-    if (storage.list) return (await storage.list(key)).some((item) => item.key === key && item.size > 0);
+    // Listing is by folder (local storage only matches whole folders), so list the folder and look for the file.
+    if (storage.list) return (await storage.list(key.slice(0, key.lastIndexOf("/") + 1))).some((item) => item.key === key && item.size > 0);
     return (await stat(storage.resolve(key))).size > 0;
   } catch { return false; }
 }

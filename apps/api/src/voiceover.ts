@@ -12,7 +12,7 @@ import type { MediaInfo } from "@videocraft/analysis";
  * Voice-over from typed text with OpenAI's text-to-speech voices (the account's own API key). Recordings made in
  * the browser go through the ordinary upload route; both become audio assets placed with add-voiceover.
  */
-export const VOICES = ["alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer"] as const;
+export const VOICES = ["marin", "cedar", "alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse"] as const;
 type Fetcher = (url: string, init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal }) => Promise<{ ok: boolean; status: number; arrayBuffer(): Promise<ArrayBuffer>; text(): Promise<string> }>;
 
 export interface VoiceoverDependencies {
@@ -44,7 +44,7 @@ export function registerVoiceoverRoutes(server: FastifyInstance, dependencies: V
     const body = (request.body ?? {}) as { text?: unknown; voice?: unknown; style?: unknown };
     const text = typeof body.text === "string" ? body.text.trim() : "";
     if (!text || text.length > 3000) return error(reply, 400, "invalid_request", "Type up to 3000 characters to read out");
-    const voice = typeof body.voice === "string" && (VOICES as readonly string[]).includes(body.voice) ? body.voice : "alloy";
+    const voice = typeof body.voice === "string" && (VOICES as readonly string[]).includes(body.voice) ? body.voice : "marin";
     const style = typeof body.style === "string" ? body.style.trim().slice(0, 200) : "";
     const response = await fetcher((dependencies.endpoint ?? "https://api.openai.com/v1") + "/audio/speech", {
       method: "POST", signal: AbortSignal.timeout(90_000),
