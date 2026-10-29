@@ -135,7 +135,7 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
     await page.getByLabel("Target length (seconds)").fill("30");
     await nextStep.getByRole("button", { name: "Create highlights" }).click();
     await waitStatus(/Step 1 of 3: listening/, 10_000);
-    await waitStatus(/Highlights ready: review the \d+ suggested clips/, 180_000);
+    await waitStatus(/Highlights ready: review the \d+ suggested highlights?/, 180_000);
     await page.locator(".highlight-list li").first().waitFor({ timeout: 60_000 });
     const reasons = await page.locator(".highlight-list li").allInnerTexts();
     assert.ok(reasons.length >= 1 && reasons.every((text) => /score \d+/.test(text) && /Highlight \d+\/\d+/.test(text)), "every suggestion explains itself: " + reasons.join(" | "));
@@ -146,6 +146,8 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
     await nextStep.getByRole("button", { name: "Accept highlights" }).click();
     await waitStatus(/Proposal accepted/);
     await nextStep.filter({ hasText: "Export your video" }).waitFor();
+    // Accepting fills the timeline with clips and caption cues; the page itself must not start scrolling sideways.
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), "no horizontal page scroll after accepting");
     const clips = page.locator("button.clip");
     await clips.first().waitFor();
     const videoClipCount = await page.locator(".track", { has: page.locator(".track-label", { hasText: /^video$/ }) }).locator("button.clip").count();
