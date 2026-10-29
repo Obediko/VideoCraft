@@ -26,7 +26,7 @@ def make_detector():
             _, faces = net.detect(small)
             if faces is None or len(faces) == 0:
                 return None
-            fx, fy, fw, fh = max(faces, key=lambda f: f[2] * f[3])[:4]
+            fx, fy, fw, fh = (float(v) for v in max(faces, key=lambda f: f[2] * f[3])[:4])
             if fw / sw < MIN_FACE_FRACTION:
                 return None
             # YuNet's box is brow to chin; extend it to cover hair and chin.
