@@ -16,7 +16,9 @@ code() { curl -s -o "$TMP/body" -w '%{http_code}' "$@"; }
 [ "$(curl -fsS "$SITE/healthz" 2>/dev/null | tr -d '\n')" = ok ] && ok "web /healthz -> ok" || bad "web /healthz"
 [ "$(curl -s -o /dev/null -w '%{http_code}' "http://videocraft.emancipationdevelopment.org/")" = 308 ] && ok "HTTP redirects to HTTPS" || bad "HTTP->HTTPS redirect"
 [ "$(code "$API/healthz")" = 200 ] && ok "api /api/healthz -> 200" || bad "api /api/healthz"
-c="$(code "$API/readyz")"; [ "$c" = 200 ] && ok "api /api/readyz -> 200 $(cat "$TMP/body")" || bad "api /api/readyz -> $c $(cat "$TMP/body")"
+# Right after a deploy the API needs a few seconds to connect to its dependencies.
+for i in $(seq 1 12); do c="$(code "$API/readyz")"; [ "$c" = 200 ] && break; sleep 5; done
+[ "$c" = 200 ] && ok "api /api/readyz -> 200 $(cat "$TMP/body")" || bad "api /api/readyz -> $c $(cat "$TMP/body")"
 asset_js="$(curl -fsS "$SITE/" | grep -o 'assets/index-[^"]*\.js' | head -1)"
 curl -fsS "$SITE/$asset_js" | grep -q "videocraft.emancipationdevelopment.org/api" && ok "browser bundle targets $API" || bad "browser bundle API base"
 
@@ -29,7 +31,7 @@ const t = await new SignJWT({}).setProtectedHeader({ alg: "HS256" }).setSubject(
 process.stdout.write("Authorization: Bearer " + t);' > "$TMP/auth"
 H=(-H "$(cat "$TMP/auth")")
 
-c="$(code -X POST "${H[@]}" -H 'content-type: application/json' -d '{"name":"staging smoke test"}' "$API/v1/projects")"
+c="$(code -X POST "${H[@]}" -H 'content-type: application/json' -d "{\"name\":\"staging smoke test $(date -u +%Y%m%d-%H%M%S)\"}" "$API/v1/projects")"
 if [ "$c" = 201 ]; then PID="$(js 'd["project"]["id"]' < "$TMP/body")"; ok "project created $PID"; else bad "create project -> $c $(cat "$TMP/body")"; exit 1; fi
 
 docker exec videocraft-render-worker ffmpeg -loglevel error -f lavfi -i testsrc=duration=2:size=320x240:rate=25 \
