@@ -140,3 +140,32 @@ test("with a media queue the API only enqueues the proxy; if the queue is down i
     assert.equal(queueDown.inline(), 1);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("broken storage pipe returns a traceable server failure without leaking internal exception text", async () => {
+  const server = Fastify();
+  const cause = Object.assign(new Error("write EPIPE: internal worker path"), { code: "EPIPE" });
+  const storage = {
+    putFile: async () => { throw cause; },
+    remove: async () => {},
+  };
+  registerUploadRoutes(server, {
+    authenticate: async () => ({ userId: "u" }),
+    authorize: { canAccess: async () => true },
+    assets: new InMemoryAssetRepository(),
+    storage,
+    clock: () => new Date().toISOString(),
+  });
+  await server.listen({ host: "127.0.0.1", port: 0 });
+  try {
+    const form = new FormData();
+    form.append("file", new Blob([Buffer.from("test")]), "test.mp4");
+    const response = await fetch("http://127.0.0.1:" + server.server.address().port + "/v1/projects/p1/assets/upload?kind=video", { method: "POST", body: form });
+    assert.equal(response.status, 503);
+    const body = await response.json();
+    assert.equal(body.error.code, "upload_connection_lost");
+    assert.ok(body.error.requestId);
+    assert.doesNotMatch(body.error.message, /EPIPE|internal worker path/);
+  } finally {
+    await server.close();
+  }
+});
