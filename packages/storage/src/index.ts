@@ -99,3 +99,4 @@ function safeObjectPrefix(root: string, prefix: string): string {
   if (rel === ".." || rel.startsWith(".." + sep) || isAbsolute(rel)) throw new Error("Object prefix escapes storage root");
   return candidate;
 }
+export * from "./scratch.js";

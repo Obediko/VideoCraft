@@ -25,6 +25,8 @@ RUN npm install --include=dev --ignore-scripts   && npm run build --workspace=@v
 
 # Speech-model cache: a persistent volume in deployments (not /tmp, which is RAM-backed tmpfs there).
 RUN mkdir -p /opt/hf-cache && chown node:node /opt/hf-cache
+# Disk-backed scratch space (a volume in deployments); the named volume takes this ownership.
+RUN mkdir -p /var/videocraft-work && chown node:node /var/videocraft-work
 USER node
 EXPOSE 8080
 CMD ["node", "apps/api/dist/main.js"]

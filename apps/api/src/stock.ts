@@ -26,7 +26,7 @@ export interface StockItem {
 }
 interface Rendition { url: string; width: number; height: number; mimeType: string; extension: string }
 export interface StockKeys { pexels?: string; pixabay?: string; giphy?: string }
-export type Fetcher = (url: string, init?: { headers?: Record<string, string>; signal?: AbortSignal }) => Promise<{ ok: boolean; status: number; json(): Promise<unknown>; body: ReadableStream<Uint8Array> | null; headers: { get(name: string): string | null } }>;
+export type Fetcher = (url: string, init?: { headers?: Record<string, string>; signal?: AbortSignal; redirect?: "follow" | "manual" }) => Promise<{ ok: boolean; status: number; json(): Promise<unknown>; body: ReadableStream<Uint8Array> | null; headers: { get(name: string): string | null } }>;
 
 /** Media hosts downloads may come from; anything else is refused. */
 const MEDIA_HOSTS = [/(^|\.)pexels\.com$/, /(^|\.)vimeo\.com$/, /(^|\.)vimeocdn\.com$/, /(^|\.)pixabay\.com$/, /(^|\.)giphy\.com$/];
@@ -126,8 +126,19 @@ export function allowedMediaUrl(url: string): boolean {
 }
 
 async function download(fetcher: Fetcher, url: string, path: string): Promise<void> {
-  if (!allowedMediaUrl(url)) throw new StockError(502, "The stock file is on an unexpected host");
-  const response = await fetcher(url, { signal: AbortSignal.timeout(120_000) });
+  // Redirects are followed by hand so every hop stays on the libraries' own media hosts.
+  const signal = AbortSignal.timeout(120_000);
+  let response: Awaited<ReturnType<Fetcher>> | undefined;
+  for (let hop = 0; hop < 5; hop += 1) {
+    if (!allowedMediaUrl(url)) throw new StockError(502, "The stock file is on an unexpected host");
+    response = await fetcher(url, { signal, redirect: "manual" });
+    if (response.status < 300 || response.status >= 400) break;
+    const location = response.headers.get("location");
+    if (!location) throw new StockError(502, "The stock file could not be downloaded (" + response.status + ")");
+    url = new URL(location, url).toString();
+    response = undefined;
+  }
+  if (!response) throw new StockError(502, "Too many redirects for the stock file");
   if (!response.ok || !response.body) throw new StockError(502, "The stock file could not be downloaded (" + response.status + ")");
   const length = Number(response.headers.get("content-length") ?? 0);
   if (length > MAX_BYTES) throw new StockError(413, "The stock file is too large");

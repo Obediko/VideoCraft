@@ -16,12 +16,12 @@ type Props = {
   /** Place the stored recording on the edit. */
   onAdd(asset: Asset, options: { volumeDb: number; duck: boolean }): void;
 };
-const VOICE_LABEL: Record<string, string> = { alloy: "Alloy (neutral)", ash: "Ash (clear, male)", ballad: "Ballad (soft)", coral: "Coral (bright, female)", echo: "Echo (calm, male)", fable: "Fable (storyteller)", nova: "Nova (warm, female)", onyx: "Onyx (deep, male)", sage: "Sage (gentle)", shimmer: "Shimmer (light, female)" };
+const VOICE_LABEL: Record<string, string> = { marin: "Marin (natural, female)", cedar: "Cedar (natural, male)", verse: "Verse (expressive)", alloy: "Alloy (neutral)", ash: "Ash (clear, male)", ballad: "Ballad (soft)", coral: "Coral (bright, female)", echo: "Echo (calm, male)", fable: "Fable (storyteller)", nova: "Nova (warm, female)", onyx: "Onyx (deep, male)", sage: "Sage (gentle)", shimmer: "Shimmer (light, female)" };
 
 export function VoiceOver({ projectId, apiBase, token, request, disabled, onRecording, onAdd }: Props) {
   const [voices, setVoices] = useState<string[]>([]);
   const [script, setScript] = useState("");
-  const [voice, setVoice] = useState("nova");
+  const [voice, setVoice] = useState("marin");
   const [style, setStyle] = useState("");
   const [duck, setDuck] = useState(true);
   const [volumeDb, setVolumeDb] = useState(0);

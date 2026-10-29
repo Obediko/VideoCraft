@@ -94,7 +94,7 @@ services:
       CLAMAV_PORT: "3310"
       OTEL_SERVICE_NAME: videocraft-api
       INTENT_PROVIDER_MODE: rule-based
-      MEDIA_ROOT: /tmp/videocraft-media
+      MEDIA_ROOT: /var/videocraft-work/media
       WHISPER_WORKER_PATH: /app/workers/transcription/worker.py
       WHISPER_MODEL: small
       # AI director (OpenAI). Without a key the built-in rules director is used.
@@ -104,9 +104,11 @@ services:
       PEXELS_API_KEY: ${PEXELS_API_KEY:-}
       PIXABAY_API_KEY: ${PIXABAY_API_KEY:-}
       GIPHY_API_KEY: ${GIPHY_API_KEY:-}
-    tmpfs: ["/tmp:size=1g"]
+      # Uploads, face tracking and preview mattes work on disk, not the RAM-backed /tmp (big videos would not fit).
+      TMPDIR: /var/videocraft-work
+    tmpfs: ["/tmp:size=256m"]
     # Downloaded once and kept across restarts; keeping it off the RAM-backed /tmp avoids out-of-memory kills.
-    volumes: [hfcache:/opt/hf-cache]
+    volumes: [hfcache:/opt/hf-cache, apiwork:/var/videocraft-work]
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -126,7 +128,11 @@ services:
       <<: *app-env
       OTEL_SERVICE_NAME: videocraft-render-worker
       RENDER_CONCURRENCY: "1"
-    tmpfs: ["/tmp:size=1g"]
+      # Staged footage, mattes and the output are on disk: a long video does not fit in RAM.
+      RENDER_WORK_ROOT: /var/videocraft-work
+      TMPDIR: /var/videocraft-work
+    tmpfs: ["/tmp:size=256m"]
+    volumes: [renderwork:/var/videocraft-work]
     depends_on:
       postgres: { condition: service_healthy }
     mem_limit: 1536m
@@ -147,6 +153,8 @@ services:
 
 volumes:
   hfcache:
+  apiwork:
+  renderwork:
   pgdata:
   redisdata:
   clamdb:
