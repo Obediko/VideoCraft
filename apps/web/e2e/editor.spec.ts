@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 
 test("edits a timeline clip with the keyboard", async ({ page }) => {
   await page.goto("/");
+  await page.getByText("Advanced").click();
   await page.getByPlaceholder("asset ID").fill("asset-browser-123");
   await page.getByRole("button", { name: "Add video clip" }).click();
 

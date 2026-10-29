@@ -118,7 +118,7 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
     await page.getByRole("button", { name: "Create account" }).last().click();
     await waitStatus(/Account created/);
 
-    await page.locator(".sidebar").getByRole("button", { name: "Create project" }).click();
+    await page.locator(".next-step").getByRole("button", { name: "Create project" }).click();
     await waitStatus(/Project created/);
     await page.locator('input[type="file"]').setInputFiles(sample + ".mp4");
     await waitStatus(/Uploaded asset/);
@@ -152,11 +152,11 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), "no horizontal page scroll after accepting");
     const clips = page.locator("button.clip");
     await clips.first().waitFor();
-    const videoClipCount = await page.locator(".track", { has: page.locator(".track-label", { hasText: /^video$/ }) }).locator("button.clip").count();
+    const videoClipCount = await page.locator(".track", { has: page.locator(".track-label", { hasText: /^Video$/ }) }).locator("button.clip").count();
     assert.ok(videoClipCount >= 1);
 
     // Editing through the UI: select, move, trim, remove nothing yet.
-    const videoClips = page.locator(".track", { has: page.locator(".track-label", { hasText: /^video$/ }) }).locator("button.clip");
+    const videoClips = page.locator(".track", { has: page.locator(".track-label", { hasText: /^Video$/ }) }).locator("button.clip");
     await videoClips.first().click();
     const before = await page.getByText(/of source/).first().innerText();
     await page.getByRole("button", { name: "Trim end −0.5s" }).click();
@@ -268,6 +268,24 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
     await page.getByRole("button", { name: "Reset what was learned" }).click();
     await waitStatus(/Learned preferences cleared/);
     await learnedPanel.filter({ hasText: /^[\s\S]*0 signals/ }).waitFor({ timeout: 15_000 });
+    // Everything fits the window at laptop, large-screen and phone sizes: no sideways page scroll, no panel overflow.
+    for (const [w, h] of [[1366, 768], [1920, 1080], [390, 844]]) {
+      await page.setViewportSize({ width: w, height: h });
+      await page.waitForTimeout(300);
+      const layout = await page.evaluate(() => {
+        const bad = [];
+        for (const el of document.querySelectorAll(".panel, .next-step, .editor-toolbar, .topbar, .sidebar, .editor")) if (el.scrollWidth > el.clientWidth + 2) bad.push((el.className || el.tagName) + " " + el.scrollWidth + ">" + el.clientWidth);
+        return { extra: document.documentElement.scrollWidth - window.innerWidth, bad };
+      });
+      if (process.env.E2E_SHOTS) await page.screenshot({ path: join(process.env.E2E_SHOTS, "ui-" + w + "x" + h + ".png"), fullPage: true });
+      assert.ok(layout.extra <= 1, w + "x" + h + ": page is " + layout.extra + "px wider than the window");
+      assert.deepEqual(layout.bad, [], w + "x" + h + ": overflowing panels");
+    }
+    // Readable names, not internal ids.
+    const chipText = (await page.locator(".track button.clip strong").allInnerTexts()).join(" | ");
+    assert.match(chipText, /talk\.mp4/, "video clips are labelled with the file name: " + chipText.slice(0, 200));
+    assert.doesNotMatch(await page.locator(".evidence").innerText(), /tailoring-profile\./, "evidence uses plain labels");
+
     assert.deepEqual(errors, [], "no page errors during the session: " + errors.join(" | ") + " | " + (await status()));
   } finally {
     await browser.close();

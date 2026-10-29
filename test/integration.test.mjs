@@ -91,7 +91,7 @@ test("migration 006 renames existing duplicate project names, then enforces uniq
     const rows = [["p1", "obed", "My first cut", "2026-10-22T21:00:00Z"], ["p2", "obed", "My first cut", "2026-10-22T21:07:00Z"], ["p3", "obed", "my  first CUT ", "2026-10-23T10:00:00Z"], ["p4", "obed", "My first cut (2)", "2026-10-23T11:00:00Z"], ["p5", "obed", "My first cut", "2026-10-24T09:00:00Z"], ["q1", "someone-else", "My first cut", "2026-10-23T09:00:00Z"]];
     for (const [id, owner, n, at] of rows) await pool.query("INSERT INTO projects (id, owner_id, name, revision, created_at, updated_at) VALUES ($1,$2,$3,0,$4,$4)", [id, owner, n, at]);
 
-    assert.deepEqual(await migrateDatabase(pool), ["006_unique_project_names.sql"]);
+    assert.ok((await migrateDatabase(pool)).includes("006_unique_project_names.sql"), "006 is applied on top of 001-005");
     const names = Object.fromEntries((await pool.query("SELECT id, name FROM projects ORDER BY id")).rows.map((r) => [r.id, r.name]));
     assert.equal(names.p1, "My first cut", "the oldest keeps its name");
     assert.equal(names.p4, "My first cut (2)", "an existing numbered name is left alone");
@@ -107,4 +107,36 @@ test("migration 006 renames existing duplicate project names, then enforces uniq
     await admin.query("DROP DATABASE IF EXISTS " + name);
     await admin.end();
   }
+});
+
+test("session refresh: concurrent refreshes from two tabs both succeed; logged-out and stale rotated sessions are refused", { skip }, async () => {
+  const Fastify = (await import("fastify")).default;
+  const rateLimit = (await import("@fastify/rate-limit")).default;
+  const { registerAuthRoutes } = await import("../apps/api/dist/auth-routes.js");
+  const pool = new Pool({ connectionString: databaseUrl });
+  await migrateDatabase(pool);
+  const server = Fastify();
+  await server.register(rateLimit, { global: true, max: 1000, timeWindow: "1 minute" });
+  registerAuthRoutes(server, { database: pool, secret: "integration-secret-0123456789abcdef0123", allowedEmails: "*" });
+  await server.ready();
+  const cookieOf = (response) => String(response.headers["set-cookie"]).split(";")[0];
+  try {
+    const email = "tabs-" + Date.now() + "@example.org";
+    const registered = await server.inject({ method: "POST", url: "/auth/register", payload: { email, password: "correct horse battery staple" } });
+    assert.equal(registered.statusCode, 201, registered.body);
+    const cookie = cookieOf(registered);
+    const refresh = (c) => server.inject({ method: "POST", url: "/auth/refresh", headers: { cookie: c } });
+    // Two tabs reload at once with the same cookie.
+    const [a, b] = await Promise.all([refresh(cookie), refresh(cookie)]);
+    assert.deepEqual([a.statusCode, b.statusCode], [200, 200], "neither tab is signed out");
+    // The same old cookie again, still inside the grace minute: accepted.
+    assert.equal((await refresh(cookie)).statusCode, 200);
+    // Outside the grace window the replaced cookie no longer works.
+    await pool.query("UPDATE auth_sessions SET rotated_at = NOW() - INTERVAL '2 minutes' WHERE rotated_at IS NOT NULL");
+    assert.equal((await refresh(cookie)).statusCode, 401, "a long-replaced session is refused");
+    // Logging out ends the current session for good.
+    const current = cookieOf(a);
+    await server.inject({ method: "POST", url: "/auth/logout", headers: { cookie: current } });
+    assert.equal((await refresh(current)).statusCode, 401, "a logged-out session is refused even within a minute");
+  } finally { await server.close(); await pool.end(); }
 });

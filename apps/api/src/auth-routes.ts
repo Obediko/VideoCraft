@@ -53,13 +53,15 @@ export function registerAuthRoutes(server: FastifyInstance, options: AuthOptions
   server.post("/auth/refresh", limited, async (request, reply) => {
     const presented = readCookie(request.headers.cookie, REFRESH_COOKIE);
     if (!presented) return authError(reply, 401, "Refresh session required");
-    const result = await options.database.query<UserRow & { session_id: string }>(
-      "SELECT u.id, u.email, u.password_hash, u.created_at, s.id AS session_id FROM auth_sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = $1 AND s.expires_at > NOW() AND s.revoked_at IS NULL AND u.disabled_at IS NULL",
+    // A session replaced by rotation in the last minute is still accepted: two tabs (or two requests) refreshing at
+    // once would otherwise sign the slower one out. A session ended by logout (rotated_at null) never is.
+    const result = await options.database.query<UserRow & { session_id: string; rotated: boolean }>(
+      "SELECT u.id, u.email, u.password_hash, u.created_at, s.id AS session_id, (s.revoked_at IS NOT NULL) AS rotated FROM auth_sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = $1 AND s.expires_at > NOW() AND u.disabled_at IS NULL AND (s.revoked_at IS NULL OR (s.rotated_at IS NOT NULL AND s.rotated_at > NOW() - INTERVAL '60 seconds'))",
       [digest(presented)],
     );
     const user = result.rows[0];
     if (!user) return authError(reply, 401, "Refresh session expired");
-    await options.database.query("UPDATE auth_sessions SET revoked_at = NOW() WHERE id = $1", [user.session_id]);
+    if (!user.rotated) await options.database.query("UPDATE auth_sessions SET revoked_at = NOW(), rotated_at = NOW() WHERE id = $1 AND revoked_at IS NULL", [user.session_id]);
     await setRefreshCookie(reply, options.database, user.id);
     return { user: { id: user.id, email: user.email }, accessToken: await signAccessToken(options, user) };
   });
