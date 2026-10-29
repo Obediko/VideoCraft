@@ -236,3 +236,28 @@ export async function isStillImage(path: string, options: ToolOptions = {}): Pro
   await run(options.executable === undefined ? "ffmpeg" : options.executable.replace(/ffprobe$/, "ffmpeg"), ["-v", "error", "-xerror", "-i", path, "-frames:v", "1", "-f", "null", "-"], options);
   return STILL_CODECS.has(stream.codec_name) && (/image2|_pipe/.test(format) || !Number.isFinite(frames) || frames <= 1);
 }
+
+export interface FaceTrackResult { step: number; boxes: Array<[number, number, number, number] | null>; }
+export interface FaceTrackOptions extends ToolOptions { script: string; step?: number; }
+
+/** The speaker's face through a whole video (sampled every `step` seconds) via the OpenCV faces worker. */
+export async function detectFaceTrack(path: string, options: FaceTrackOptions): Promise<FaceTrackResult> {
+  if (!path || path.includes("\0")) throw new Error("Media path is required");
+  const { stdout } = await run(options.executable ?? "python3", [options.script, path, String(options.step ?? 0.5)], { ...options, timeoutMs: options.timeoutMs ?? 30 * 60_000 });
+  return parseFaceTrack(stdout);
+}
+
+/** Validates a face track document (worker output or a stored copy). */
+export function parseFaceTrack(output: string): FaceTrackResult {
+  const value = JSON.parse(output) as { step?: unknown; boxes?: unknown };
+  const step = Number(value.step);
+  if (!(step > 0) || !Array.isArray(value.boxes)) throw new Error("Invalid face track");
+  const clamp = (n: number) => Math.min(1, Math.max(0, n));
+  const boxes = value.boxes.slice(0, 100_000).map((box) => {
+    if (!Array.isArray(box) || box.length !== 4 || !box.every((n) => typeof n === "number" && Number.isFinite(n))) return null;
+    const [x0, y0, x1, y1] = box.map(clamp) as [number, number, number, number];
+    return x1 > x0 && y1 > y0 ? [x0, y0, x1, y1] as [number, number, number, number] : null;
+  });
+  return { step, boxes };
+}
+export * from "./face-store.js";

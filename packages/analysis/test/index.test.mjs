@@ -82,3 +82,11 @@ test("real ffprobe: stills are recognised, videos are not, and junk is rejected"
     await assert.rejects(isStillImage(junk));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("parseFaceTrack validates and clamps boxes", async () => {
+  const { parseFaceTrack } = await import("../dist/index.js");
+  const track = parseFaceTrack(JSON.stringify({ step: 0.5, engine: "yunet", boxes: [[0.1, 0.2, 0.3, 0.4], null, [0.5, 0.5, 0.4, 0.6], [-1, 0, 2, 1], "x"] }));
+  assert.equal(track.step, 0.5);
+  assert.deepEqual(track.boxes, [[0.1, 0.2, 0.3, 0.4], null, null, [0, 0, 1, 1], null]);
+  assert.throws(() => parseFaceTrack(JSON.stringify({ step: 0, boxes: [] })));
+});

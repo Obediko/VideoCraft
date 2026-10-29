@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
-import { LOOK_CSS, veilAt, zoomAt, type PreviewClip as Clip } from "./preview.js";
+import { LOOK_CSS, captionBottomFor, faceDuring, faceInFrame, focusDuring, titleTopFor, veilAt, zoomAt, type FaceTrack, type FrameBox, type PreviewClip as Clip } from "./preview.js";
 
 /**
  * Live preview of the edit in the browser: plays the cut clip by clip and draws captions, titles, cutaways,
@@ -15,10 +15,16 @@ type Props = {
   /** Shape of the output frame and how the footage fills it. */
   shape: "tall" | "wide" | "square";
   fit: "cover" | "contain";
+  /** Output size (for the crop maths) and caption style, so text sits where the export puts it. */
+  output?: { width: number; height: number };
+  captionStyle?: string;
+  /** The speaker's face per video asset, and each asset's picture size: captions and text stay off the face. */
+  faces?: Record<string, FaceTrack>;
+  sizes?: Record<string, { width: number; height: number }>;
   onTime?(timelineUs: number): void;
 };
 
-export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePreview({ tracks, durationUs, urls, shape, fit, onTime }, ref) {
+export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePreview({ tracks, durationUs, urls, shape, fit, output, captionStyle = "bold-pop", faces, sizes, onTime }, ref) {
   const video = useRef<HTMLVideoElement | null>(null);
   const music = useRef<HTMLAudioElement | null>(null);
   const [tUs, setT] = useState(0);
@@ -102,19 +108,50 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
   const broll = overlays.filter((c) => c.transform?.role === "broll" && tUs >= c.timelineStartUs && tUs < c.timelineEndUs);
   const progress = overlays.find((c) => c.transform?.role === "progress");
   const musicUrl = musicClip ? urls[musicClip.assetId] : undefined;
+  // Where the face is on screen during a stretch of the edit (fractions of the frame), as the export works it out.
+  const out = output ?? (shape === "tall" ? { width: 1080, height: 1920 } : shape === "square" ? { width: 1080, height: 1080 } : { width: 1920, height: 1080 });
+  const focusOf = (clip: Clip) => {
+    const manualX = Number(clip.transform?.focusX); const manualY = Number(clip.transform?.focusY);
+    return Number.isFinite(manualX) && Number.isFinite(manualY) && clip.transform?.focusX !== undefined ? { x: manualX, y: manualY } : focusDuring(faces?.[clip.assetId], clip.sourceStartUs, clip.sourceEndUs);
+  };
+  const faceOver = (startUs: number, endUs: number): FrameBox | undefined => {
+    let u: FrameBox | undefined;
+    for (const clip of clips) {
+      const from = Math.max(startUs, clip.timelineStartUs); const to = Math.min(endUs, clip.timelineEndUs);
+      const size = sizes?.[clip.assetId];
+      if (to <= from || !size) continue;
+      const box = faceDuring(faces?.[clip.assetId], clip.sourceStartUs + from - clip.timelineStartUs, clip.sourceStartUs + to - clip.timelineStartUs);
+      const zooms = clip.transform?.zoom === "punch" ? [1.12] : clip.transform?.zoom === "push" ? [1, 1.08] : [1];
+      for (const z of zooms) {
+        const b = box ? faceInFrame(box, size, out, fit, fit === "cover" ? focusOf(clip) : null, z) : undefined;
+        if (b) u = u ? { x0: Math.min(u.x0, b.x0), y0: Math.min(u.y0, b.y0), x1: Math.max(u.x1, b.x1), y1: Math.max(u.y1, b.y1) } : b;
+      }
+    }
+    return u;
+  };
+  const captionBottom = cue ? captionBottomFor(faceOver(cue.timelineStartUs, cue.timelineEndUs), captionStyle) : 0;
+  const captionTop = cue ? 1 - captionBottom - 0.13 : undefined;
+  const currentFocus = current && fit === "cover" ? focusOf(current) : null;
   const fmt = (us: number) => { const s = us / 1e6; return Math.floor(s / 60) + ":" + (s % 60).toFixed(1).padStart(4, "0"); };
 
   return <div className="live">
     <div className={"live-frame " + shape} aria-label="Live preview of the edit">
-      <video ref={video} className="live-video" muted={false} playsInline preload="auto" style={{ objectFit: fit, transform: zoom !== 1 ? "scale(" + zoom.toFixed(4) + ")" : undefined, transformOrigin: "50% 40%", filter: look }} />
+      <video ref={video} className="live-video" muted={false} playsInline preload="auto" style={{ objectFit: fit, ...(currentFocus ? { objectPosition: (currentFocus.x * 100).toFixed(1) + "% " + (currentFocus.y * 100).toFixed(1) + "%" } : {}), transform: zoom !== 1 ? "scale(" + zoom.toFixed(4) + ")" : undefined, transformOrigin: "50% 40%", filter: look }} />
       {!urls[current?.assetId ?? ""] && <span className="live-empty">Preparing the footage…</span>}
       {broll.map((c) => { const url = urls[c.assetId]; const pip = c.transform?.mode === "pip"; return url ? <img key={c.id} className={"live-broll" + (pip ? " pip" : "")} src={url} alt="" /> : <span key={c.id} className={"live-broll placeholder" + (pip ? " pip" : "")}>Cutaway</span>; })}
       {progress && <span className="live-progress" style={{ width: (100 * tUs) / Math.max(1, durationUs) + "%", background: String(progress.transform?.color ?? "#A8C49A") }} />}
       {graphics.map((g) => { const kind = String(g.transform?.kind ?? "title"); const pos = String(g.transform?.position ?? (kind === "lower-third" ? "bottom" : "center")); const color = String(g.transform?.color ?? "#A8C49A");
+        const face = faceOver(g.timelineStartUs, g.timelineEndUs);
+        let lowerBottom = 0.22;
+        if (kind === "lower-third" && face && face.x0 < 0.6 && 1 - lowerBottom > face.y0 - 0.02 && 1 - lowerBottom - 0.12 < face.y1 + 0.02) {
+          const below = 1 - (face.y1 + 0.02 + 0.12); const above = 1 - (face.y0 - 0.02);
+          lowerBottom = below >= (captionTop !== undefined ? 1 - captionTop + 0.02 : 0.06) ? below : face.y0 - 0.14 >= 0.06 ? above : lowerBottom;
+        }
+        const titleTop = kind === "lower-third" ? 0 : titleTopFor(pos, face, captionTop);
         return kind === "lower-third"
-          ? <div key={g.id} className="live-lower"><span className="bar" style={{ background: color }} /><span className="text"><strong>{String(g.transform?.text ?? "")}</strong>{g.transform?.subtitle ? <span>{String(g.transform.subtitle)}</span> : null}</span></div>
-          : <div key={g.id} className={"live-title " + kind + " " + pos} style={kind === "title" ? { borderColor: color } : { background: color }}><strong>{String(g.transform?.text ?? "")}</strong>{kind === "title" && g.transform?.subtitle ? <span>{String(g.transform.subtitle)}</span> : null}</div>; })}
-      {cue && <div className="live-caption">{cueWords.map((w, i) => <span key={i} className={i === activeWord ? "on" : ""}>{w} </span>)}</div>}
+          ? <div key={g.id} className="live-lower" style={{ bottom: (lowerBottom * 100).toFixed(1) + "%" }}><span className="bar" style={{ background: color }} /><span className="text"><strong>{String(g.transform?.text ?? "")}</strong>{g.transform?.subtitle ? <span>{String(g.transform.subtitle)}</span> : null}</span></div>
+          : <div key={g.id} className={"live-title " + kind} style={{ top: (titleTop * 100).toFixed(1) + "%", ...(kind === "title" ? { borderColor: color } : { background: color }) }}><strong>{String(g.transform?.text ?? "")}</strong>{kind === "title" && g.transform?.subtitle ? <span>{String(g.transform.subtitle)}</span> : null}</div>; })}
+      {cue && <div className={"live-caption " + captionStyle} style={{ bottom: (captionBottom * 100).toFixed(1) + "%" }}>{cueWords.map((w, i) => <span key={i} className={i === activeWord ? "on" : ""}>{w} </span>)}</div>}
       {veil.opacity > 0 && <span className="live-veil" style={{ opacity: veil.opacity, background: veil.color }} />}
     </div>
     {musicUrl && <audio ref={music} src={musicUrl} loop preload="auto" />}

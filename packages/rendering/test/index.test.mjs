@@ -254,3 +254,48 @@ test("real ffmpeg: a title card pops in only during its window, a lower third sl
     assert.ok(Math.abs(filled(6.0) - 0.75) < 0.06, "progress ~75% at 6s of 8s: " + filled(6.0));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("captions and titles move off the speaker's face, following the clip's crop", async () => {
+  // A low face in a 9:16 source (face spans 55%..72% of the height): the bold-pop band sits over it.
+  const track = { step: 0.5, boxes: Array.from({ length: 20 }, (_, i) => (i < 10 ? [0.3, 0.55, 0.7, 0.72] : null)) };
+  const planner = new FfmpegCommandPlanner({ resolve: async () => "/media/source.mp4", faces: async () => track, dimensions: async () => ({ width: 1080, height: 1920 }) });
+  const cue = (id, s, e, text) => ({ id, assetId: "asset", sourceStartUs: s, sourceEndUs: e, timelineStartUs: s, timelineEndUs: e, transform: { text } });
+  const captions = { id: "c", kind: "caption", clips: [cue("q1", 0, 2_000_000, "face is here"), cue("q2", 6_000_000, 8_000_000, "no face now")] };
+  const overlay = { id: "o", kind: "overlay", clips: [{ id: "g", assetId: "asset", sourceStartUs: 0, sourceEndUs: 2_000_000, timelineStartUs: 0, timelineEndUs: 2_000_000, transform: { role: "graphic", kind: "title", text: "Hello", position: "center" } }] };
+  const plan = await planner.plan(revision([clip("c", 0, 9_000_000, 0)], [captions, overlay]), { ...PLATFORM_PRESETS.tiktok.settings }, "/renders/o.mp4");
+  const ass = plan.files.find((f) => f.path.endsWith(".captions.ass")).content;
+  const events = ass.split("\n").filter((l) => l.startsWith("Dialogue:"));
+  const margin = (line) => Number(line.split(",")[7]);
+  const moved = margin(events[0]);
+  assert.ok(moved > 0, "first caption has its own margin");
+  const bottom = 1920 - moved;
+  assert.ok(bottom <= 0.55 * 1920 || bottom - 260 >= 0.72 * 1920, "caption clear of the face: bottom at " + bottom);
+  assert.equal(margin(events[events.length - 1]), 0, "without a face the caption keeps the style's place");
+  const graphics = plan.files.find((f) => f.path.endsWith(".graphics.ass")).content;
+  const y = Number(/\\pos\(\d+,(\d+)\)/.exec(graphics)[1]);
+  assert.ok(y < 0.55 * 1920 - 60 || y > 0.72 * 1920 + 60, "title clear of the face at " + y);
+});
+
+test("real video: the face track finds the speaker and stays empty without a face", { skip: !haveCv }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vc-faces-"));
+  try {
+    const frame = join(dir, "frame.png"); const withFace = join(dir, "face.mp4"); const noFace = join(dir, "none.mp4");
+    execFileSync(python, ["-c", `
+import cv2, numpy as np
+from skimage import data
+img = cv2.cvtColor(data.astronaut(), cv2.COLOR_RGB2BGR)
+canvas = np.full((1280, 720, 3), 40, np.uint8)
+canvas[700:1212, 104:616] = img
+cv2.imwrite(${JSON.stringify(frame)}, canvas)`]);
+    execFileSync("ffmpeg", ["-v", "error", "-y", "-loop", "1", "-framerate", "25", "-t", "3", "-i", frame, "-pix_fmt", "yuv420p", "-c:v", "libx264", withFace]);
+    execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=720x1280:rate=25:duration=3", "-pix_fmt", "yuv420p", "-c:v", "libx264", noFace]);
+    const facesScript = new URL("../../../workers/reframe/faces.py", import.meta.url).pathname;
+    const track = (path) => JSON.parse(execFileSync(python, [facesScript, path]).toString());
+    const found = track(withFace);
+    const boxes = found.boxes.filter(Boolean);
+    assert.ok(boxes.length >= found.boxes.length - 1, "face seen throughout: " + JSON.stringify(found));
+    // The astronaut's face sits in the lower half of the tall frame.
+    assert.ok(boxes[0][1] > 0.5 && boxes[0][3] < 1, JSON.stringify(boxes[0]));
+    assert.deepEqual(track(noFace).boxes.filter(Boolean), [], "no false faces on a test pattern");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

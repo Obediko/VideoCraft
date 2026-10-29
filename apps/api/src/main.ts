@@ -178,7 +178,8 @@ const director = secretEnvironment.OPENAI_API_KEY && secretEnvironment.DIRECTOR_
   : new RuleDirector();
 registerDirectorRoutes(server, { projects, assets, revisions, storage, transcripts, director, saveRevision: (input) => timelineService.saveRevision(input), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, clock: () => new Date().toISOString(), ...(secretEnvironment.FFMPEG_BIN ? { ffmpeg: secretEnvironment.FFMPEG_BIN } : {}) });
 registerMusicRoutes(server, { assets, revisions, storage, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, clock: () => new Date().toISOString() });
-registerMediaRoutes(server, { assets, storage, signingSecret: requiredSecret("DOWNLOAD_SIGNING_SECRET"), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
+registerMediaRoutes(server, { assets, storage, signingSecret: requiredSecret("DOWNLOAD_SIGNING_SECRET"), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer,
+  ...(secretEnvironment.FACES_SCRIPT ? { faces: { script: secretEnvironment.FACES_SCRIPT, ...(secretEnvironment.SCENE_PYTHON ? { executable: secretEnvironment.SCENE_PYTHON } : {}) } } : {}) });
 registerUploadRoutes(server, {
   assets, storage, authorize: authorizer, authenticate: (request) => authenticator.authenticate(request),
   clock: () => new Date().toISOString(), ...(malwareScanner ? { scanner: malwareScanner } : {}),

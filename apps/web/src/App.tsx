@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { LivePreview, type LivePreviewHandle } from "./LivePreview.js";
+import type { FaceTrack } from "./preview.js";
 import { cueOps, keptWords, rangeForWords, removeRangeOps, restoreRangeOps, secondsFromBrief, sourceToTimeline, timelineToSource, type Word } from "./story.js";
 
 type TimelineClip = {
@@ -104,6 +105,8 @@ export function App() {
   const [sourceUrls, setSourceUrls] = useState<Record<string, string>>({});
   const playerRef = useRef<HTMLVideoElement | null>(null);
   const [sourceRetry, setSourceRetry] = useState(0);
+  const [faceTracks, setFaceTracks] = useState<Record<string, FaceTrack>>({});
+  const [faceRetry, setFaceRetry] = useState(0);
   const [musicVolume, setMusicVolume] = useState(-16);
   const [musicMood, setMusicMood] = useState("auto");
   const [musicDuck, setMusicDuck] = useState(true);
@@ -186,6 +189,25 @@ export function App() {
     }
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, [token, projectId, neededAssets.join(","), sourceRetry]);
+
+  // The speaker's face in each video on the timeline, so the live preview keeps captions and text off it.
+  const faceAssets = [...new Set(videoClips.map((clip) => clip.assetId))].filter((id) => assets.some((asset) => asset.id === id && asset.kind === "video"));
+  useEffect(() => {
+    const missing = faceAssets.filter((id) => !faceTracks[id]);
+    if (!token || !projectId || missing.length === 0) return;
+    let cancelled = false; let timer: ReturnType<typeof setTimeout> | undefined;
+    for (const id of missing) {
+      request("/v1/projects/" + projectId + "/assets/" + id + "/faces")
+        .then((result) => {
+          if (cancelled) return;
+          if (result.pending) { timer = setTimeout(() => setFaceRetry((n) => n + 1), (result.retryAfterSeconds ?? 5) * 1000); return; }
+          if (typeof result.step === "number" && Array.isArray(result.boxes)) setFaceTracks((current) => ({ ...current, [id]: { step: result.step, boxes: result.boxes } }));
+        })
+        .catch(() => undefined);
+    }
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [token, projectId, faceAssets.join(","), faceRetry]);
+  const assetSizes = useMemo(() => Object.fromEntries(assets.filter((asset) => Number(asset.metadata.width) > 0 && Number(asset.metadata.height) > 0).map((asset) => [asset.id, { width: Number(asset.metadata.width), height: Number(asset.metadata.height) }])), [assets]);
 
   // Selecting a clip cues the player to the start of that clip's source range.
   useEffect(() => {
@@ -374,7 +396,7 @@ export function App() {
     try {
       const result = await request("/v1/projects/" + project.id, { method: "DELETE", body: JSON.stringify({ confirmName: deleteConfirm }) });
       setProjects((current) => current.filter((item) => item.id !== project.id));
-      resetProjectState(); setProjectId(""); setSourceUrls({}); setDeleteConfirm(""); setScreen("projects");
+      resetProjectState(); setProjectId(""); setSourceUrls({}); setFaceTracks({}); setDeleteConfirm(""); setScreen("projects");
       if (recall(LAST_PROJECT_KEY) === project.id) remember(LAST_PROJECT_KEY, "");
       setStatus("Deleted “" + project.name + "” and its " + result.removedObjects + " stored file" + (result.removedObjects === 1 ? "" : "s"));
     } catch (error) { setStatus(errorMessage(error)); }
@@ -784,7 +806,7 @@ export function App() {
 
   const player = <div className="player">
     <div className="preview-tabs" role="tablist"><button role="tab" aria-selected={previewMode === "edit"} className={previewMode === "edit" ? "on" : ""} onClick={() => setPreviewMode("edit")} disabled={videoClips.length === 0}>Edit</button><button role="tab" aria-selected={previewMode === "source"} className={previewMode === "source" ? "on" : ""} onClick={() => setPreviewMode("source")}>Original</button><button role="tab" aria-selected={previewMode === "render"} className={previewMode === "render" ? "on" : ""} onClick={() => setPreviewMode("render")}>Export</button></div>
-    {previewMode === "edit" && videoClips.length > 0 ? <LivePreview ref={liveRef} tracks={timeline.tracks} durationUs={timeline.durationUs} urls={sourceUrls} shape={(PLATFORMS[platform]?.width ?? 9) < (PLATFORMS[platform]?.height ?? 16) ? "tall" : PLATFORMS[platform]?.width === PLATFORMS[platform]?.height ? "square" : "wide"} fit={PLATFORMS[platform]?.fit ?? "cover"} onTime={onLiveTime} />
+    {previewMode === "edit" && videoClips.length > 0 ? <LivePreview ref={liveRef} tracks={timeline.tracks} durationUs={timeline.durationUs} urls={sourceUrls} shape={(PLATFORMS[platform]?.width ?? 9) < (PLATFORMS[platform]?.height ?? 16) ? "tall" : PLATFORMS[platform]?.width === PLATFORMS[platform]?.height ? "square" : "wide"} fit={PLATFORMS[platform]?.fit ?? "cover"} output={{ width: PLATFORMS[platform]?.width ?? 1080, height: PLATFORMS[platform]?.height ?? 1920 }} captionStyle={PLATFORMS[platform]?.captionStyle ?? "bold-pop"} faces={faceTracks} sizes={assetSizes} onTime={onLiveTime} />
     : <div className={"preview-screen " + ((PLATFORMS[platform]?.width ?? 9) < (PLATFORMS[platform]?.height ?? 16) ? "tall" : "wide")}>{previewMode === "render" ? (renderUrl ? <video controls src={renderUrl} /> : <span>{renderJobId ? "Exporting " + renderJobStatus : "Your exported video will play here"}</span>) : (sourceUrl ? <video ref={playerRef} controls src={sourceUrl} onTimeUpdate={stopAtClipEnd} /> : <span>{sourceNote || "Preparing the preview…"}</span>)}</div>}
     {previewMode === "source" && sourceNote && sourceUrl && <p className="muted small">{sourceNote}</p>}
   </div>;

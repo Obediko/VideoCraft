@@ -113,7 +113,7 @@ export function resolveCaptionStyle(id: string | undefined): CaptionStyle | unde
   return CAPTION_STYLES[id ?? "bold-pop"] ?? CAPTION_STYLES["bold-pop"];
 }
 
-export interface TimedCue { startUs: Microseconds; endUs: Microseconds; text: string; wordDurationsCs?: number[]; }
+export interface TimedCue { startUs: Microseconds; endUs: Microseconds; text: string; wordDurationsCs?: number[]; /** Distance from the bottom in pixels, overriding the style (used to keep captions off a face). */ marginV?: number; }
 
 /** Renders cues positioned on the output timeline to an Advanced SubStation Alpha document. */
 export function renderAss(cues: TimedCue[], style: CaptionStyle, frame: { width: number; height: number }): string {
@@ -138,7 +138,7 @@ export function renderAss(cues: TimedCue[], style: CaptionStyle, frame: { width:
     if (words.length === 0) continue;
     const timings = cue.wordDurationsCs && cue.wordDurationsCs.length === words.length ? cue.wordDurationsCs : undefined;
     if (!active || !timings) {
-      lines.push(event(cue.startUs, cue.endUs, words.map(escapeAss).join(" ")));
+      lines.push(event(cue.startUs, cue.endUs, words.map(escapeAss).join(" "), cue.marginV));
       continue;
     }
     // One event per spoken word, with the active word recoloured (and optionally popped).
@@ -154,15 +154,17 @@ export function renderAss(cues: TimedCue[], style: CaptionStyle, frame: { width:
         const pop = style.popActiveWord ? "\\fscx112\\fscy112\\t(0,90,\\fscx100\\fscy100)" : "";
         return "{\\c&H" + active + "&" + pop + "}" + safe + "{\\c&H" + style.textColor + "&}";
       }).join(" ");
-      if (end > cursor) lines.push(event(cursor, end, text));
+      if (end > cursor) lines.push(event(cursor, end, text, cue.marginV));
       cursor = end;
     });
   }
   return header.concat(lines).join("\n") + "\n";
 }
 
-function event(startUs: number, endUs: number, text: string): string {
-  return "Dialogue: 0," + assTime(startUs) + "," + assTime(endUs) + ",Default,,0,0,0,," + text;
+function event(startUs: number, endUs: number, text: string, marginV?: number): string {
+  // An event MarginV of 0 means "use the style's"; any other value moves this caption.
+  const margin = marginV !== undefined && Number.isFinite(marginV) ? Math.max(1, Math.round(marginV)) : 0;
+  return "Dialogue: 0," + assTime(startUs) + "," + assTime(endUs) + ",Default,,0,0," + margin + ",," + text;
 }
 
 export function assTime(us: number): string {
@@ -177,6 +179,7 @@ export function escapeAss(text: string): string {
   return text.replace(/\\/g, "\\\\").replace(/\{/g, "(").replace(/\}/g, ")").replace(/[\r\n]+/g, " ");
 }
 export * from "./graphics.js";
+export * from "./placement.js";
 
 /** The vertical band (in pixels) captions of this style can occupy, assuming up to `lines` lines. */
 export function captionBand(style: CaptionStyle, height: number, lines = 3): { topY: number; bottomY: number } {

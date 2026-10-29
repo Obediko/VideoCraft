@@ -11,6 +11,7 @@ opencv-python-headless>=4.8,<5
 REQ
 ENV REFRAME_PYTHON=/opt/venv/bin/python
 ENV REFRAME_SCRIPT=/app/workers/reframe/focus.py
+ENV FACES_SCRIPT=/app/workers/reframe/faces.py
 
 WORKDIR /app
 COPY . .

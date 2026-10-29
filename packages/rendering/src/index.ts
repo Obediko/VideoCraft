@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { captionBand, renderAss, renderGraphicsAss, resolveCaptionStyle, type GraphicItem, type TimedCue } from "@videocraft/captions";
+import { captionBand, captionBandAt, captionMarginFor, faceDuring, faceInOutput, focusFromTrack, renderAss, renderGraphicsAss, resolveCaptionStyle, type CaptionStyle, type FaceTrack, type GraphicItem, type PixelBox, type TimedCue } from "@videocraft/captions";
 import type { ProjectRevision, RenderSettings, TimelineClip, TimelineTrack } from "@videocraft/domain";
 import { encodeWav, generateSoundEffect, type SoundEffectKind } from "@videocraft/music";
 
@@ -13,6 +13,10 @@ export interface AssetPathResolver {
   /** Whether the asset is a still image (looped for its on-screen time). Without it, assets are treated as video. */
   isStill?(assetId: string): Promise<boolean>;
   focus?(assetId: string, startUs: number, endUs: number): Promise<{ x: number; y: number; confidence: number } | null>;
+  /** Where the speaker's face is through the asset, so captions and text can stay off it. Null when unknown. */
+  faces?(assetId: string): Promise<FaceTrack | null>;
+  /** Display size of the asset's picture (after rotation). Needed to place text around faces. */
+  dimensions?(assetId: string): Promise<{ width: number; height: number } | null>;
 }
 export interface RenderPlan { args: string[]; outputPath: string; /** Side files (caption documents, generated sound effects) written before FFmpeg starts. */ files: Array<{ path: string; content: string | Uint8Array }>; }
 
@@ -52,6 +56,36 @@ export function presetForChannel(channel: string): PlatformPreset {
 
 export class FfmpegCommandPlanner {
   constructor(private readonly assets: AssetPathResolver) {}
+
+  /**
+   * Where the face is on screen (output pixels) during a stretch of the edit: the union over the clips showing then,
+   * following each clip's crop and zoom. Without a face track or the source size, nothing is avoided.
+   */
+  async loadFaceData(clips: TimelineClip[]): Promise<{ tracks: Map<string, FaceTrack | null>; sizes: Map<string, { width: number; height: number } | null> }> {
+    const tracks = new Map<string, FaceTrack | null>(); const sizes = new Map<string, { width: number; height: number } | null>();
+    if (!this.assets.faces) return { tracks, sizes };
+    for (const assetId of new Set(clips.map((clip) => clip.assetId))) {
+      try { tracks.set(assetId, await this.assets.faces(assetId)); } catch { tracks.set(assetId, null); }
+      try { sizes.set(assetId, this.assets.dimensions ? await this.assets.dimensions(assetId) : null); } catch { sizes.set(assetId, null); }
+    }
+    return { tracks, sizes };
+  }
+
+  faceLocator(data: { tracks: Map<string, FaceTrack | null>; sizes: Map<string, { width: number; height: number } | null> }, clips: TimelineClip[], focus: Array<{ x: number; y: number } | null>, fit: "cover" | "contain", output: { width: number; height: number }): (startUs: number, endUs: number) => PixelBox | undefined {
+    const { tracks, sizes } = data;
+    return (startUs, endUs) => {
+      let union: PixelBox | undefined;
+      clips.forEach((clip, index) => {
+        const from = Math.max(startUs, clip.timelineStartUs); const to = Math.min(endUs, clip.timelineEndUs);
+        const track = tracks.get(clip.assetId); const source = sizes.get(clip.assetId);
+        if (to <= from || !track || !source) return;
+        const box = faceDuring(track, clip.sourceStartUs + (from - clip.timelineStartUs), clip.sourceStartUs + (to - clip.timelineStartUs));
+        const placed = box ? faceInOutput(box, { source, output, fit, focus: focus[index] ?? null, ...(typeof clip.transform?.zoom === "string" ? { zoom: clip.transform.zoom } : {}) }) : undefined;
+        if (placed) union = union ? { x0: Math.min(union.x0, placed.x0), y0: Math.min(union.y0, placed.y0), x1: Math.max(union.x1, placed.x1), y1: Math.max(union.y1, placed.y1) } : placed;
+      });
+      return union;
+    };
+  }
 
   async plan(revision: ProjectRevision, settings: RenderSettings, outputPath: string): Promise<RenderPlan> {
     if (!outputPath || outputPath.includes("\0")) throw new Error("Output path is required");
@@ -126,19 +160,24 @@ export class FfmpegCommandPlanner {
     const totalSeconds = clips.reduce((sum, clip) => sum + (clip.sourceEndUs - clip.sourceStartUs), 0) / 1_000_000;
 
     const contain = "scale=" + width + ":" + height + ":force_original_aspect_ratio=decrease,pad=" + width + ":" + height + ":(ow-iw)/2:(oh-ih)/2:color=black";
-    const fitFor = async (clip: TimelineClip): Promise<string> => {
+    const focusUsed: Array<{ x: number; y: number } | null> = clips.map(() => null);
+    const faceData = await this.loadFaceData(clips);
+    const fitFor = async (clip: TimelineClip, index: number): Promise<string> => {
       if (settings.fit !== "cover") return contain;
       // A manual focus on the clip wins; otherwise ask the resolver to find the subject.
       const manualX = Number(clip.transform?.focusX);
       const manualY = Number(clip.transform?.focusY);
       let focus: { x: number; y: number } | null = Number.isFinite(manualX) && Number.isFinite(manualY) ? { x: manualX, y: manualY } : null;
-      if (!focus && this.assets.focus) {
+      // The face track (shared with captions and the live preview) aims the crop; the focus detector is the fallback.
+      if (!focus) { const fromTrack = focusFromTrack(faceData.tracks.get(clip.assetId) ?? undefined, clip.sourceStartUs, clip.sourceEndUs); if (fromTrack) focus = fromTrack; }
+      if (!focus && this.assets.focus && !faceData.tracks.get(clip.assetId)) {
         const found = await this.assets.focus(clip.assetId, clip.sourceStartUs, clip.sourceEndUs);
         if (found && found.confidence >= 0.3) focus = found;
       }
+      focusUsed[index] = focus;
       return "scale=" + width + ":" + height + ":force_original_aspect_ratio=increase," + coverCrop(width, height, focus);
     };
-    const fits = await Promise.all(clips.map(fitFor));
+    const fits = await Promise.all(clips.map((clip, index) => fitFor(clip, index)));
 
     const useEmbeddedAudio = !externalAudio && [...audioPresent.values()].some(Boolean);
     const filters: string[] = [];
@@ -160,7 +199,8 @@ export class FfmpegCommandPlanner {
     filters.push(concatInputs.join("") + "concat=n=" + clips.length + ":v=1:a=" + (useEmbeddedAudio ? 1 : 0) + "[vcat]" + (useEmbeddedAudio ? "[acat]" : ""));
 
     const style = resolveCaptionStyle(settings.captionStyle);
-    const cues = style ? captionCues(tracks, videoTrack, revision.timeline.durationUs) : [];
+    const faceFor = this.faceLocator(faceData, clips, focusUsed, settings.fit === "cover" ? "cover" : "contain", { width, height });
+    const cues = style ? placeCaptions(captionCues(tracks, videoTrack, revision.timeline.durationUs), style, { width, height }, faceFor) : [];
     let videoLabel = "[vcat]";
     brolls.forEach((broll, index) => {
       const start = (broll.timelineStartUs / 1_000_000).toFixed(6);
@@ -182,12 +222,20 @@ export class FfmpegCommandPlanner {
     });
     // Motion graphics (title cards, callouts, lower thirds, progress bar): above b-roll, beneath captions.
     const overlayClips = tracks.filter((track) => track.kind === "overlay").flatMap((track) => track.clips);
+    const faceAndBand = (startUs: number, endUs: number): Pick<GraphicItem, "face" | "avoid"> => {
+      const face = faceFor(startUs, endUs);
+      const during = style ? cues.filter((cue) => cue.startUs < endUs && cue.endUs > startUs) : [];
+      const bands = during.map((cue) => captionBandAt(style!, height, cue.marginV ?? Math.round(height * style!.bottomRatio)));
+      const avoid = bands.length ? { topY: Math.min(...bands.map((b) => b.topY)), bottomY: Math.max(...bands.map((b) => b.bottomY)) } : undefined;
+      return { ...(face ? { face } : {}), ...(avoid ? { avoid } : {}) };
+    };
     const graphics: GraphicItem[] = overlayClips.filter((clip) => clip.transform?.role === "graphic" && typeof clip.transform.text === "string").map((clip) => ({
       kind: clip.transform!.kind === "lower-third" ? "lower-third" : clip.transform!.kind === "callout" ? "callout" : "title",
       text: String(clip.transform!.text).slice(0, 120), startUs: clip.timelineStartUs, endUs: clip.timelineEndUs,
       ...(typeof clip.transform!.subtitle === "string" ? { subtitle: clip.transform!.subtitle.slice(0, 120) } : {}),
       ...(clip.transform!.position === "top" || clip.transform!.position === "bottom" || clip.transform!.position === "center" ? { position: clip.transform!.position } : {}),
       ...(typeof clip.transform!.color === "string" ? { color: clip.transform!.color } : {}),
+      ...faceAndBand(clip.timelineStartUs, clip.timelineEndUs),
     }));
     const progressClip = overlayClips.find((clip) => clip.transform?.role === "progress");
     if (graphics.length > 0 || progressClip) {
@@ -253,6 +301,16 @@ export class FfmpegCommandPlanner {
     args.push("-movflags", "+faststart", outputPath);
     return { args, outputPath, files };
   }
+}
+
+/** Gives each caption the margin that keeps it off the speaker's face at that moment. */
+export function placeCaptions(cues: TimedCue[], style: CaptionStyle, frame: { width: number; height: number }, faceFor: (startUs: number, endUs: number) => PixelBox | undefined): TimedCue[] {
+  return cues.map((cue) => {
+    const face = faceFor(cue.startUs, cue.endUs);
+    if (!face) return cue;
+    const marginV = captionMarginFor(face, style, frame, 2);
+    return marginV === Math.round(frame.height * style.bottomRatio) ? cue : { ...cue, marginV };
+  });
 }
 
 function captionCues(tracks: TimelineTrack[], video: TimelineTrack | undefined, durationUs: number): TimedCue[] {
