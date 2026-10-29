@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { LivePreview, type LivePreviewHandle } from "./LivePreview.js";
+import { StockSearch } from "./StockSearch.js";
 import type { FaceTrack } from "./preview.js";
 import { cueOps, keptWords, rangeForWords, removeRangeOps, restoreRangeOps, secondsFromBrief, sourceToTimeline, timelineToSource, type Word } from "./story.js";
 
@@ -281,10 +282,10 @@ export function App() {
     const inside = videoClips.some((clip) => clip.assetId === anchorClip.assetId && playheadUs >= clip.sourceStartUs && playheadUs < clip.sourceEndUs);
     return { anchorAssetId: anchorClip.assetId, anchorSourceUs: inside ? playheadUs : anchorClip.sourceStartUs, where: inside ? "at the playhead" : "at the start of the selected clip" };
   }
-  function addBroll() {
+  function addBroll(assetId = brollAssetId) {
     const anchor = anchorPoint();
     if (!anchor) { setStatus("Add a video clip first"); return; }
-    void applyEdit([{ type: "add-broll", assetId: brollAssetId, anchorAssetId: anchor.anchorAssetId, anchorSourceUs: anchor.anchorSourceUs, durationUs: Math.round(brollSeconds * 1_000_000), mode: brollMode }], "Cutaway added " + anchor.where);
+    void applyEdit([{ type: "add-broll", assetId, anchorAssetId: anchor.anchorAssetId, anchorSourceUs: anchor.anchorSourceUs, durationUs: Math.round(brollSeconds * 1_000_000), mode: brollMode }], "Cutaway added " + anchor.where);
   }
   function addSoundEffect() {
     const anchor = anchorPoint();
@@ -990,7 +991,10 @@ export function App() {
         <label>Cutaway media<select value={brollAssetId} onChange={(event) => setBrollAssetId(event.target.value)}><option value="">Choose a photo or clip</option>{brollAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.kind === "image" ? "Photo" : "Clip"} · {String(asset.metadata.filename ?? asset.id.slice(0, 8))}</option>)}</select></label>
         <label>On screen for (seconds)<input type="number" min={0.5} max={60} step={0.5} value={brollSeconds} onChange={(event) => setBrollSeconds(Math.max(0.5, Number(event.target.value) || 3))} /></label>
         <label>Style<select value={brollMode} onChange={(event) => setBrollMode(event.target.value as "full" | "pip")}><option value="full">Full frame</option><option value="pip">Corner inset</option></select></label>
-        <button className="btn" onClick={addBroll} disabled={busy || revision === 0 || !brollAssetId}>{selection ? "Add at the selected words" : "Add at the playhead"}</button>
+        <button className="btn" onClick={() => addBroll()} disabled={busy || revision === 0 || !brollAssetId}>{selection ? "Add at the selected words" : "Add at the playhead"}</button>
+        <h3>Free stock</h3>
+        <StockSearch projectId={projectId} request={request} disabled={busy || revision === 0} orientation={(PLATFORMS[platform]?.width ?? 9) < (PLATFORMS[platform]?.height ?? 16) ? "portrait" : PLATFORMS[platform]?.width === PLATFORMS[platform]?.height ? "square" : "landscape"}
+          onUse={(asset) => { setAssets((current) => [...current.filter((a) => a.id !== asset.id), asset as unknown as Asset]); setBrollAssetId(asset.id); addBroll(asset.id); }} />
         {brolls.length > 0 && <ul className="item-list broll-list">{brolls.map((clip) => <li key={clip.id}><span>{formatSeconds(clip.timelineStartUs)}–{formatSeconds(clip.timelineEndUs)} · {assetName(clip.assetId)} · {clip.transform?.mode === "pip" ? "inset" : "full"}</span><button className="btn" onClick={() => void applyEdit([{ type: "remove-clip", clipId: clip.id, reason: "Cutaway removed" }], "Cutaway removed")} disabled={busy}>Remove</button></li>)}</ul>}
       </div>
     </section>
