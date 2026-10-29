@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, rm, stat } from "node:fs/promises";
 import { safeMediaPath } from "@videocraft/transcription";
 import { FfmpegCommandPlanner, FfmpegProcess } from "@videocraft/rendering";
 import { detectFocus, isStillImage, loadOrDetectFaceTrack, probeMedia } from "@videocraft/analysis";
@@ -168,6 +168,19 @@ export class RenderTaskProcessor {
         clearInterval(cancellationWatcher);
       }
 
+      // FFmpeg exiting successfully does not prove that a playable picture was written.
+      const outputInfo = await probeMedia(outputPath, process.env.FFPROBE_BIN ? { executable: process.env.FFPROBE_BIN } : {});
+      const outputStat = await stat(outputPath);
+      const expectedUs = task.revision.timeline.tracks
+        .filter((track) => track.kind === "video")
+        .flatMap((track) => track.clips)
+        .reduce((total, clip) => total + Math.max(0, clip.sourceEndUs - clip.sourceStartUs), 0);
+      if (!outputInfo.hasVideo || !outputInfo.width || !outputInfo.height || outputStat.size === 0) {
+        throw new Error("Render validation failed: the exported file has no usable video stream");
+      }
+      if (expectedUs > 0 && outputInfo.durationUs < expectedUs * 0.8) {
+        throw new Error("Render validation failed: video duration is unexpectedly short");
+      }
       const stored = await this.storage.putFile(outputPath, outputKey);
       const succeeded: RenderJob = {
         ...running,
