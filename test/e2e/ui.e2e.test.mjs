@@ -16,6 +16,8 @@ import { registerRenderRoutes } from "../../apps/api/dist/render-routes.js";
 import { registerMediaRoutes } from "../../apps/api/dist/media-routes.js";
 import { registerPreferenceRoutes } from "../../apps/api/dist/learning.js";
 import { registerMusicRoutes } from "../../apps/api/dist/music-routes.js";
+import { registerDirectorRoutes } from "../../apps/api/dist/director-routes.js";
+import { RuleDirector } from "../../packages/director/dist/index.js";
 import { StorageSilenceDetector } from "../../apps/api/dist/media-analysis.js";
 import { isStillImage, probeMedia } from "../../packages/analysis/dist/index.js";
 import { FasterWhisperWorker } from "../../packages/transcription/dist/index.js";
@@ -86,6 +88,7 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
   registerRenderRoutes(server, { jobs: jobRepository, storage, signingSecret: "test-signing-secret-test-signing", authenticate, authorize });
   registerPreferenceRoutes(server, { preferences, authenticate });
   registerMusicRoutes(server, { assets, revisions, storage, authenticate, authorize, clock: clock.now });
+  registerDirectorRoutes(server, { projects, assets, revisions, storage, transcripts: { listForAsset: async (id) => transcriptValues.get(id) ?? [] }, director: new RuleDirector(), saveRevision: (i) => service.saveRevision(i), authenticate, authorize, clock: clock.now });
   registerMediaRoutes(server, { assets, storage, signingSecret: "test-signing-secret-test-signing", authenticate, authorize });
   let registeredEmail = "";
   server.post("/auth/register", async (request, reply) => { registeredEmail = request.body.email; return reply.code(201).send({ user: { id: "user-1", email: registeredEmail }, accessToken: "test-token" }); });
@@ -126,16 +129,18 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
 
     // A reload must bring the person back to the same project and video, not an empty editor.
     await page.reload();
-    await page.locator(".next-step").filter({ hasText: "Create highlights" }).waitFor({ timeout: 20_000 });
+    await page.locator(".next-step").filter({ hasText: "Describe your video" }).waitFor({ timeout: 20_000 });
     assert.ok((await page.getByLabel("Project library").locator("option").allInnerTexts()).some((text) => /talk\.mp4/.test(text)), "the uploaded video is still in the project after a reload");
 
-    // The guided path: after upload the next-step bar offers one button that does transcription, layout and selection.
+    // The classic path: Create highlights in the brief panel does transcription, layout and selection in one go.
     const nextStep = page.locator(".next-step");
-    await nextStep.filter({ hasText: "Create highlights" }).waitFor();
+    // Planning with an empty description is refused with a pointer to the box.
+    await nextStep.getByRole("button", { name: "Plan my video" }).click();
+    await waitStatus(/Describe the video first/);
     await page.getByLabel("Intent").fill("Explain why customer onboarding fails and how to fix it");
     await page.getByLabel("Audience").fill("SaaS founders");
     await page.getByLabel("Target length (seconds)").fill("30");
-    await nextStep.getByRole("button", { name: "Create highlights" }).click();
+    await page.getByRole("button", { name: "Create highlights" }).click();
     await waitStatus(/Step 1 of 3: listening/, 10_000);
     await waitStatus(/Highlights ready: review the \d+ suggested highlights?/, 180_000);
     await page.locator(".highlight-list li").first().waitFor({ timeout: 60_000 });
@@ -261,6 +266,34 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
     assert.ok(!(r0 > 150 && g0 < 90 && b0 < 90), "and not outside its window: " + [r0, g0, b0]);
     assert.ok(Number(probe.format.duration) > 10 && Number(probe.format.duration) < 45, "duration " + probe.format.duration);
     execFileSync("ffmpeg", ["-v", "error", "-i", outPath, "-f", "null", "-"]);
+
+    // The AI director path (built-in rules director here): describe once, review each suggestion, apply, export.
+    const director = page.locator(".director-panel");
+    await director.getByLabel(/What is it about/).fill("A 20 second upbeat YouTube clip for SaaS founders about fixing onboarding");
+    await director.getByRole("button", { name: "Plan again" }).or(director.getByRole("button", { name: "Plan my video" })).click();
+    await waitStatus(/Plan ready: \d+ suggestions/, 120_000);
+    await nextStep.filter({ hasText: "Review the director's plan" }).waitFor();
+    const suggestionText = (await director.locator(".suggestion-list li").allInnerTexts()).join(" | ");
+    for (const label of ["The cut", "Title", "Music", "Format"]) assert.match(suggestionText, new RegExp(label), "plan offers " + label + ": " + suggestionText);
+    const titleItem = director.locator(".suggestion-list li", { has: page.locator(".badge", { hasText: /^Title$/ }) }).first();
+    await titleItem.locator('input:not([type="checkbox"])').fill("Fix onboarding in a week");
+    // Say no to the format change: the export stays 9:16.
+    await director.locator(".suggestion-list li", { has: page.locator(".badge", { hasText: /^Format$/ }) }).locator('input[type="checkbox"]').uncheck();
+    await nextStep.getByRole("button", { name: "Apply plan" }).click();
+    await waitStatus(/Plan applied \(revision \d+\)\. Music: Upbeat/, 120_000);
+    await nextStep.filter({ hasText: "Export your video" }).waitFor();
+    assert.equal(await page.getByLabel("Platform").inputValue(), "tiktok", "the unticked format change is not applied");
+    const overlayChips = (await page.locator(".track", { has: page.locator(".track-label", { hasText: /^Overlays$/ }) }).locator("button.clip strong").allInnerTexts()).join(" | ");
+    assert.match(overlayChips, /Fix onboarding in a week/, "the edited title text is used: " + overlayChips);
+    await nextStep.getByRole("button", { name: "Export video" }).click();
+    await waitStatus(/Render succeeded/, 240_000);
+    const directorSrc = await page.locator(".preview-screen video").getAttribute("src");
+    const directorOut = join(work, "director-export.mp4");
+    execFileSync("sh", ["-c", "cat > " + JSON.stringify(directorOut)], { input: Buffer.from(await (await fetch(directorSrc.startsWith("http") ? directorSrc : base + directorSrc)).arrayBuffer()) });
+    const directorProbe = JSON.parse(execFileSync("ffprobe", ["-v", "error", "-show_streams", "-show_format", "-of", "json", directorOut]).toString());
+    const directorVideo = directorProbe.streams.find((s) => s.codec_type === "video");
+    assert.deepEqual([directorVideo.width, directorVideo.height], [1080, 1920]);
+    assert.ok(Number(directorProbe.format.duration) > 5 && Number(directorProbe.format.duration) < 26, "director cut is about 20 s: " + directorProbe.format.duration);
 
     // Exporting teaches the highlight finder; the editor shows what it learned and can reset it.
     const learnedPanel = page.locator(".learned-panel");

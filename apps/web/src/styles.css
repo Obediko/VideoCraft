@@ -133,3 +133,11 @@ select:focus-visible { outline: 2px solid #7c70f4; outline-offset: 1px; }
 .track-lane .clip.progress strong, .track-lane .clip.progress small { display: none; }
 .track-lane .clip:not(.progress) { z-index: 1; bottom: 14px; }
 .track:not(:has(.progress)) .track-lane .clip:not(.progress) { bottom: 6px; }
+
+.director-panel textarea { min-height: 4.5rem; }
+.suggestion-list { list-style: none; margin: 0.5rem 0; padding: 0; display: grid; gap: 0.5rem; }
+.suggestion-list li { border: 1px solid var(--line, #2a2f3a); border-radius: 10px; padding: 0.55rem 0.7rem; min-width: 0; }
+.suggestion-list li.off { opacity: 0.55; }
+.suggestion-list label.checkbox { display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem; margin: 0; }
+.suggestion-list p { margin: 0.3rem 0 0; overflow-wrap: anywhere; }
+.suggestion-list input:not([type="checkbox"]) { margin-top: 0.4rem; width: 100%; }
