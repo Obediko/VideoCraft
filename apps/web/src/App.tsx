@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import { LivePreview, type LivePreviewHandle } from "./LivePreview.js";
 import { StockSearch } from "./StockSearch.js";
 import { VoiceOver } from "./VoiceOver.js";
+import { Level } from "./Level.js";
 import type { FaceTrack } from "./preview.js";
 import { cueOps, keptWords, rangeForWords, removeRangeOps, restoreRangeOps, secondsFromBrief, sourceToTimeline, timelineToSource, type Word } from "./story.js";
 
@@ -112,7 +113,7 @@ export function App() {
   const [faceRetry, setFaceRetry] = useState(0);
   const [matteUrls, setMatteUrls] = useState<Record<string, string>>({});
   const [matteRetry, setMatteRetry] = useState(0);
-  const [musicVolume, setMusicVolume] = useState(-16);
+  const [musicVolume, setMusicVolume] = useState(-20);
   const [musicMood, setMusicMood] = useState("auto");
   const [musicDuck, setMusicDuck] = useState(true);
   const [learned, setLearned] = useState<{ samples: number; summary: string; counts: Record<string, number> } | null>(null);
@@ -337,7 +338,7 @@ export function App() {
       setAssets((current) => [...current.filter((asset) => asset.id !== result.asset.id), result.asset]);
       setMusicAssetId(result.asset.id);
       setBusy(false);
-      await applyEdit([{ type: "set-music", assetId: result.asset.id, volumeDb: musicVolume, duck: musicDuck }], "Music added: " + result.music.description);
+      await applyEdit([{ type: "set-music", assetId: result.asset.id, volumeDb: musicClip ? Number(musicClip.transform?.volumeDb ?? musicVolume) : musicVolume, duck: musicDuck }], "Music added: " + result.music.description);
     } catch (error) { setStatus(errorMessage(error)); setBusy(false); }
   }
 
@@ -1040,15 +1041,23 @@ export function App() {
     : mode === "audio" ? <section className="pane" aria-label="Audio">
       <div className="pane-head"><h2>Audio</h2></div>
       <div className="pad stack music-panel">
+        {(musicClip || sfxClips.length > 0 || voiceovers.length > 0) && <>
+          <h3>Levels</h3>
+          <p className="muted small">Drag and let go: the change is saved and you hear it in the preview.</p>
+          {musicClip && <Level label="Music" valueDb={Number(musicClip.transform?.volumeDb ?? -20)} disabled={busy} onCommit={(db) => void applyEdit([{ type: "set-volume", role: "music", volumeDb: db }], "Music volume " + db + " dB")} />}
+          {sfxClips.length > 0 && <Level label={"Sound effects (" + sfxClips.length + ")"} valueDb={Math.round(sfxClips.reduce((sum, clip) => sum + Number(clip.transform?.volumeDb ?? -18), 0) / sfxClips.length)} disabled={busy} onCommit={(db) => void applyEdit([{ type: "set-volume", role: "sfx", volumeDb: db }], "Sound effects volume " + db + " dB")} />}
+          {voiceovers.length > 0 && <Level label="Voice-overs" valueDb={Math.round(voiceovers.reduce((sum, clip) => sum + Number(clip.transform?.volumeDb ?? 0), 0) / voiceovers.length)} min={-20} disabled={busy} onCommit={(db) => void applyEdit([{ type: "set-volume", role: "voiceover", volumeDb: db }], "Voice-over volume " + db + " dB")} />}
+          {sfxClips.length > 0 && <button className="btn" onClick={() => void applyEdit(sfxClips.map((clip) => ({ type: "remove-clip", clipId: clip.id, reason: "Sound effects removed" })), "All sound effects removed")} disabled={busy}>Remove all sound effects</button>}
+        </>}
         <h3>Music</h3>
         {musicClip ? <p className="small">Playing <strong>{musicName}</strong>{(() => { const meta = assets.find((asset) => asset.id === musicClip.assetId)?.metadata; return meta?.generated ? " (" + String(meta.mood) + ", " + String(meta.key) + ", " + String(meta.bpm) + " BPM)" : ""; })()} at {String(musicClip.transform?.volumeDb)} dB{musicClip.transform?.duck === false ? "" : ", lowered while people speak"}.</p> : <p className="muted small">Music fades in and out and dips while people speak.</p>}
         <label>Mood<select value={musicMood} onChange={(event) => setMusicMood(event.target.value)}><option value="auto">Match my description</option><option value="upbeat">Upbeat</option><option value="calm">Calm</option><option value="inspiring">Inspiring</option><option value="serious">Serious</option><option value="playful">Playful</option></select></label>
         <button className="btn" onClick={generateMusicBed} disabled={busy || revision === 0}>{musicClip && assets.find((asset) => asset.id === musicClip.assetId)?.metadata.generated ? "Try different music" : "Generate matching music"}</button>
         <label className="btn file-btn">Upload your own track<input type="file" accept="audio/*" aria-label="Upload a music track" onChange={(event) => void uploadAsset(event, "media")} disabled={busy} /></label>
         {audioAssets.length > 0 && <label>Music track<select value={musicAssetId} onChange={(event) => setMusicAssetId(event.target.value)}><option value="">Choose a track</option>{audioAssets.map((asset) => <option key={asset.id} value={asset.id}>{String(asset.metadata.filename ?? asset.id.slice(0, 8))}</option>)}</select></label>}
-        <label>Music volume ({musicVolume} dB)<input type="range" min={-30} max={-4} step={1} value={musicVolume} onChange={(event) => setMusicVolume(Number(event.target.value))} /></label>
+        {!musicClip && <label>Music volume ({musicVolume} dB)<input type="range" min={-36} max={-4} step={1} value={musicVolume} onChange={(event) => setMusicVolume(Number(event.target.value))} /></label>}
         <label className="checkbox"><input type="checkbox" checked={musicDuck} onChange={(event) => setMusicDuck(event.target.checked)} /> Lower it while people speak</label>
-        {audioAssets.length > 0 && <button className="btn" onClick={() => void applyEdit([{ type: "set-music", assetId: musicAssetId, volumeDb: musicVolume, duck: musicDuck }], "Music set")} disabled={busy || revision === 0 || !musicAssetId}>{musicClip ? "Use this track instead" : "Use this track"}</button>}
+        {audioAssets.length > 0 && <button className="btn" onClick={() => void applyEdit([{ type: "set-music", assetId: musicAssetId, volumeDb: musicClip ? Number(musicClip.transform?.volumeDb ?? musicVolume) : musicVolume, duck: musicDuck }], "Music set")} disabled={busy || revision === 0 || !musicAssetId}>{musicClip ? "Use this track instead" : "Use this track"}</button>}
         {musicClip && <button className="btn" onClick={() => void applyEdit([{ type: "clear-music" }], "Music removed")} disabled={busy}>Remove music</button>}
         <h3>Voice-over</h3>
         <VoiceOver projectId={projectId} apiBase={API} token={token} request={request} disabled={busy || revision === 0}
@@ -1097,7 +1106,10 @@ export function App() {
         <label>Look<select value={String(selectedClip.transform?.look ?? "none")} disabled={busy} onChange={(event) => void applyEdit([{ type: "set-clip-effects", clipId: selectedClip.id, look: event.target.value }], "Clip look: " + (LOOK_LABEL[event.target.value] ?? event.target.value))}>{Object.entries(LOOK_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
       </div>
       <button className="btn danger-outline" onClick={() => removeSelectedClip()} disabled={busy}>Remove clip</button>
-    </div> : selected.kind !== "caption" && selected.clip.transform?.role !== "music" && selected.clip.transform?.role !== "progress" ? <button className="btn danger-outline" onClick={() => removeSelectedClip()} disabled={busy}>Remove</button> : null}
+    </div> : <>
+      {selected.kind === "audio" && <Level label="Volume" valueDb={Number(selected.clip.transform?.volumeDb ?? (selected.clip.transform?.role === "music" ? -20 : selected.clip.transform?.role === "sfx" ? -18 : 0))} disabled={busy} onCommit={(db) => void applyEdit([{ type: "set-volume", clipId: selected.clip.id, volumeDb: db }], "Volume " + db + " dB")} />}
+      {selected.kind !== "caption" && selected.clip.transform?.role !== "music" && selected.clip.transform?.role !== "progress" ? <button className="btn danger-outline" onClick={() => removeSelectedClip()} disabled={busy}>Remove</button> : null}
+    </>}
   </aside> : null;
 
   return <div className="app-shell">{projectHeader}

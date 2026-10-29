@@ -57,6 +57,11 @@ export type TimelineOperation =
    * Narration over the edit: an audio asset (a recording or a generated voice) that starts at a moment of a source
    * video and follows the cut like graphics. While it plays the original sound is lowered (duck, on by default).
    */
+  /**
+   * Loudness of sound on the audio track, in dB: one clip (clipId), or every clip of a kind (role: the music bed,
+   * all sound effects or all voice-overs).
+   */
+  | { type: "set-volume"; clipId?: UUID; role?: "music" | "sfx" | "voiceover"; volumeDb: number }
   | { type: "add-voiceover"; assetId: UUID; anchorAssetId: UUID; anchorSourceUs: Microseconds; durationUs: Microseconds; volumeDb?: number; duck?: boolean }
   | { type: "set-background"; clipId?: UUID; background: Background; color?: string; assetId?: UUID; edge?: number; feather?: number };
 export const BACKGROUNDS = ["none", "blur", "color", "media"] as const;

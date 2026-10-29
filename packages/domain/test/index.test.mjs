@@ -200,3 +200,18 @@ test("set-background changes one clip or all, and assetsUsedBy includes backgrou
   assert.ok(t.tracks[0].clips.every((c) => !c.transform));
   assert.throws(() => apply(t, [{ type: "set-background", clipId: "nope", background: "blur" }]));
 });
+
+test("set-volume changes one sound or every sound of a kind", async () => {
+  const { applyTimelineOperations: apply } = await import("../dist/index.js");
+  let t = apply({ durationUs: 0, tracks: [] }, [{ type: "insert-clip", assetId: "a", sourceStartUs: 0, sourceEndUs: 4_000_000, reason: "r" }, { type: "set-music", assetId: "m" }, { type: "add-sfx", kind: "pop", anchorAssetId: "a", anchorSourceUs: 1_000_000 }, { type: "add-sfx", kind: "whoosh", anchorAssetId: "a", anchorSourceUs: 2_000_000 }]);
+  const audio = () => t.tracks.find((x) => x.kind === "audio").clips;
+  assert.equal(audio().find((c) => c.transform.role === "music").transform.volumeDb, -20, "generated music starts quiet");
+  assert.ok(audio().filter((c) => c.transform.role === "sfx").every((c) => c.transform.volumeDb === -18));
+  t = apply(t, [{ type: "set-volume", role: "sfx", volumeDb: -30 }]);
+  assert.ok(audio().filter((c) => c.transform.role === "sfx").every((c) => c.transform.volumeDb === -30));
+  const pop = audio().find((c) => c.transform.kind === "pop");
+  t = apply(t, [{ type: "set-volume", clipId: pop.id, volumeDb: -12 }, { type: "set-volume", role: "music", volumeDb: -26 }]);
+  assert.equal(audio().find((c) => c.id === pop.id).transform.volumeDb, -12);
+  assert.equal(audio().find((c) => c.transform.role === "music").transform.volumeDb, -26);
+  assert.throws(() => apply(t, [{ type: "set-volume", role: "voiceover", volumeDb: -3 }]), /no matching/);
+});

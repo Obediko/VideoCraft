@@ -332,7 +332,7 @@ export class FfmpegCommandPlanner {
 
     let audioLabel = useEmbeddedAudio ? "[acat]" : "";
     if (music && !externalAudio) {
-      const volumeDb = clampNumber(Number(music.transform?.volumeDb ?? -16), -40, 0);
+      const volumeDb = clampNumber(Number(music.transform?.volumeDb ?? -20), -40, 6);
       const fadeOut = Math.min(1.5, totalSeconds / 4);
       filters.push("[" + musicIndex + ":a]aresample=48000,aformat=channel_layouts=stereo,atrim=duration=" + totalSeconds.toFixed(6) + ",asetpts=PTS-STARTPTS,volume=" + volumeDb + "dB,afade=t=in:d=" + Math.min(1, totalSeconds / 4).toFixed(3) + ",afade=t=out:st=" + Math.max(0, totalSeconds - fadeOut).toFixed(3) + ":d=" + fadeOut.toFixed(3) + "[mus]");
       if (useEmbeddedAudio) {
@@ -355,7 +355,7 @@ export class FfmpegCommandPlanner {
         if (sfxInputs[i] === undefined) return;
         const delayMs = Math.round(sfx.timelineStartUs / 1000);
         const length = ((sfx.timelineEndUs - sfx.timelineStartUs) / 1_000_000).toFixed(6);
-        const volume = clampNumber(Number(sfx.transform?.volumeDb ?? -10), -40, 0);
+        const volume = clampNumber(Number(sfx.transform?.volumeDb ?? -18), -40, 6);
         filters.push("[" + sfxInputs[i] + ":a]aresample=48000,aformat=channel_layouts=stereo,atrim=duration=" + length + ",volume=" + volume + "dB,adelay=" + delayMs + "|" + delayMs + "[fx" + i + "]");
         labels.push("[fx" + i + "]");
       });

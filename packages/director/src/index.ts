@@ -434,11 +434,11 @@ export function effectOperations(plan: DirectorPlan, accepted: Set<string>, time
       if (i === pieces.length - 1) effect.transitionOut = "dip-black";
     }
     if (Object.keys(effect).length > 2) ops.push(effect);
-    if (sfx && transitions && jumps.has(i) && piece.assetId === assetId) ops.push({ type: "add-sfx", kind: "whoosh", anchorAssetId: piece.assetId, anchorSourceUs: Math.max(piece.sourceStartUs, piece.sourceStartUs + 10_000), volumeDb: -14 });
+    if (sfx && transitions && jumps.has(i) && piece.assetId === assetId) ops.push({ type: "add-sfx", kind: "whoosh", anchorAssetId: piece.assetId, anchorSourceUs: Math.max(piece.sourceStartUs, piece.sourceStartUs + 10_000), volumeDb: -20 });
   });
   if (sfx) {
     for (const g of timeline.tracks.filter((t) => t.kind === "overlay").flatMap((t) => t.clips).filter((c) => c.transform?.role === "graphic").slice(0, 8)) {
-      ops.push({ type: "add-sfx", kind: "pop", anchorAssetId: String(g.transform?.anchorAssetId), anchorSourceUs: Number(g.transform?.anchorSourceUs), volumeDb: -16 });
+      ops.push({ type: "add-sfx", kind: "pop", anchorAssetId: String(g.transform?.anchorAssetId), anchorSourceUs: Number(g.transform?.anchorSourceUs), volumeDb: -22 });
     }
   }
   return ops;

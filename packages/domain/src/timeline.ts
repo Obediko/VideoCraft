@@ -88,7 +88,7 @@ export function applyTimelineOperations(timeline: Timeline, operations: Timeline
         audio.clips = audio.clips.filter((clip) => clip.transform?.role !== "music");
         const start = operation.sourceStartUs ?? 0;
         // The span is re-laid to cover the whole cut by normalizeTimeline; the renderer loops the track.
-        audio.clips.push({ id: "music", assetId: operation.assetId, sourceStartUs: start, sourceEndUs: start + 1, timelineStartUs: 0, timelineEndUs: 1, transform: { role: "music", volumeDb: operation.volumeDb ?? -16, duck: operation.duck ?? true } });
+        audio.clips.push({ id: "music", assetId: operation.assetId, sourceStartUs: start, sourceEndUs: start + 1, timelineStartUs: 0, timelineEndUs: 1, transform: { role: "music", volumeDb: operation.volumeDb ?? -20, duck: operation.duck ?? true } });
         break;
       }
       case "add-broll": {
@@ -165,7 +165,21 @@ export function applyTimelineOperations(timeline: Timeline, operations: Timeline
         let id = base;
         for (let n = 2; tracks.some((track) => track.clips.some((clip) => clip.id === id)); n += 1) id = base + "-" + n;
         const durationUs = SFX_LENGTH_US[operation.kind] ?? 700_000;
-        audio.clips.push({ id, assetId: GENERATED_PREFIX + "sfx", sourceStartUs: 0, sourceEndUs: durationUs, timelineStartUs: 0, timelineEndUs: durationUs, transform: { role: "sfx", kind: operation.kind, volumeDb: operation.volumeDb ?? -10, anchorAssetId: operation.anchorAssetId, anchorSourceUs: operation.anchorSourceUs, durationUs } });
+        audio.clips.push({ id, assetId: GENERATED_PREFIX + "sfx", sourceStartUs: 0, sourceEndUs: durationUs, timelineStartUs: 0, timelineEndUs: durationUs, transform: { role: "sfx", kind: operation.kind, volumeDb: operation.volumeDb ?? -18, anchorAssetId: operation.anchorAssetId, anchorSourceUs: operation.anchorSourceUs, durationUs } });
+        break;
+      }
+      case "set-volume": {
+        let changed = 0;
+        for (const track of tracks) {
+          if (track.kind !== "audio") continue;
+          track.clips = track.clips.map((clip) => {
+            const role = String(clip.transform?.role ?? "");
+            if (operation.clipId !== undefined ? clip.id !== operation.clipId : role !== operation.role) return clip;
+            changed += 1;
+            return { ...clip, transform: { ...(clip.transform ?? {}), volumeDb: operation.volumeDb } };
+          });
+        }
+        if (changed === 0) throw new Error("set-volume found no matching sound");
         break;
       }
       case "add-voiceover": {
@@ -398,6 +412,12 @@ export function parseTimelineOperations(value: unknown): TimelineOperation[] {
         const zoom = pick("zoom", CLIP_ZOOMS); const look = pick("look", COLOUR_LOOKS); const transitionIn = pick("transitionIn", TRANSITIONS); const transitionOut = pick("transitionOut", TRANSITIONS);
         if (zoom === undefined && look === undefined && transitionIn === undefined && transitionOut === undefined) return fail("set-clip-effects needs at least one effect");
         return { type: "set-clip-effects", clipId: op.clipId, ...(zoom ? { zoom } : {}), ...(look ? { look } : {}), ...(transitionIn ? { transitionIn } : {}), ...(transitionOut ? { transitionOut } : {}) };
+      }
+      case "set-volume": {
+        if (op.clipId === undefined && op.role !== "music" && op.role !== "sfx" && op.role !== "voiceover") return fail("set-volume needs clipId or role (music, sfx or voiceover)");
+        if (op.clipId !== undefined && !isId(op.clipId)) return fail("set-volume clipId must be an id");
+        if (!(typeof op.volumeDb === "number" && Number.isFinite(op.volumeDb) && op.volumeDb >= -40 && op.volumeDb <= 6)) return fail("set-volume volumeDb must be between -40 and 6");
+        return { type: "set-volume", ...(op.clipId !== undefined ? { clipId: op.clipId as string } : { role: op.role as "music" | "sfx" | "voiceover" }), volumeDb: Math.round((op.volumeDb as number) * 2) / 2 };
       }
       case "add-voiceover":
         if (!isId(op.assetId) || !isId(op.anchorAssetId) || !isUs(op.anchorSourceUs)) return fail("add-voiceover needs assetId, anchorAssetId and anchorSourceUs");
