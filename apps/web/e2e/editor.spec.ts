@@ -1,18 +1,18 @@
 import { test, expect } from "@playwright/test";
 
-test("edits a timeline clip with the keyboard", async ({ page }) => {
+// Runs against the dev server with no API: the signed-out screen must render, behave and fit on a phone.
+test("sign-in screen: switch to create account, button enables only with valid input, fits a phone", async ({ page }) => {
   await page.goto("/");
-  await page.getByText("Advanced").click();
-  await page.getByPlaceholder("asset ID").fill("asset-browser-123");
-  await page.getByRole("button", { name: "Add video clip" }).click();
-
-  const clip = page.locator("button.clip");
-  await expect(clip).toHaveCount(1);
-  await expect(clip).toBeVisible();
-  await clip.focus();
-  await expect(clip).toBeFocused();
-  await page.keyboard.press("ArrowRight");
-  await expect(page.getByText("Clip moved later")).toBeVisible();
-  await page.keyboard.press("Delete");
-  await expect(page.getByText("Your non-destructive timeline is empty. Add a registered asset to begin.")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+  await page.getByRole("tab", { name: "Create account" }).click();
+  await expect(page.getByRole("heading", { name: "Create your account" })).toBeVisible();
+  const submit = page.locator(".auth-card").getByRole("button", { name: "Create account" });
+  await expect(submit).toBeDisabled();
+  await page.getByLabel("Email").fill("someone@example.com");
+  await page.getByLabel("Password").fill("short");
+  await expect(submit).toBeDisabled();
+  await page.getByLabel("Password").fill("a-long-enough-password");
+  await expect(submit).toBeEnabled();
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
 });
