@@ -25,6 +25,8 @@ type Project = { id: string; name: string; revision: number; createdAt: string; 
 type Asset = { id: string; kind: string; storageKey: string; durationUs?: number; metadata: Record<string, string | number | boolean> };
 
 const API = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
+const LAST_PROJECT_KEY = "videocraft.lastProject";
+function rememberProject(id: string) { try { localStorage.setItem(LAST_PROJECT_KEY, id); } catch { /* storage unavailable */ } }
 
 export function App() {
   const [token, setToken] = useState("");
@@ -33,7 +35,7 @@ export function App() {
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [userEmail, setUserEmail] = useState("");
   const [projectId, setProjectId] = useState("");
-  const [projectName, setProjectName] = useState("My first cut");
+  const [projectName, setProjectName] = useState(() => "Video " + new Date().toLocaleDateString(undefined, { day: "numeric", month: "short" }) + " " + new Date().toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }));
   const [projects, setProjects] = useState<Project[]>([]);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [intent, setIntent] = useState("Create a clear short-form explainer");
@@ -212,6 +214,25 @@ export function App() {
 
   useEffect(() => { if (!token) void restoreSession(); }, []);
 
+  // After signing in (or a page reload), reopen the project the person was working on instead of
+  // showing an empty editor that invites them to create yet another project.
+  const [projectsLoaded, setProjectsLoaded] = useState(false);
+  useEffect(() => {
+    if (!token || projectId) return;
+    let cancelled = false;
+    request("/v1/projects").then((result) => {
+      if (cancelled) return;
+      const list: Project[] = result.projects ?? [];
+      setProjects(list);
+      setProjectsLoaded(true);
+      let remembered = "";
+      try { remembered = localStorage.getItem(LAST_PROJECT_KEY) ?? ""; } catch { /* storage unavailable */ }
+      const target = list.find((project) => project.id === remembered) ?? [...list].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+      if (target) void openProject(target);
+    }).catch(() => { if (!cancelled) setProjectsLoaded(true); });
+    return () => { cancelled = true; };
+  }, [token]);
+
   async function signOut() {
     await request("/auth/logout", { method: "POST" }).catch(() => undefined);
     setToken("");
@@ -226,6 +247,11 @@ export function App() {
     try {
       const result = await request("/v1/projects", { method: "POST", body: JSON.stringify({ name: projectName }) });
       setProjectId(result.project.id);
+      rememberProject(result.project.id);
+      setAssets([]);
+      setTimeline({ durationUs: 30_000_000, tracks: [] });
+      setRevision(0);
+      setProposal(null);
       setProjects((current) => [...current.filter((project) => project.id !== result.project.id), result.project]);
       setStatus("Project created");
     } catch (error) { setStatus(errorMessage(error)); }
@@ -247,6 +273,7 @@ export function App() {
     setBusy(true);
     try {
       setProjectId(project.id);
+      rememberProject(project.id);
       setProjectName(project.name);
       setRevision(project.revision);
       setProposal(null);
@@ -527,6 +554,8 @@ export function App() {
   const accepted = proposal?.status === "accepted";
   const next: { title: string; detail: string; action?: { label: string; run: () => void; disabled?: boolean } } =
     !userEmail ? { title: "Sign in", detail: "Create an account or sign in in the Project panel on the left." }
+    : !projectId && !projectsLoaded ? { title: "Loading your projects…", detail: "Opening the project you last worked on." }
+    : !projectId && projects.length > 0 ? { title: "Open your project", detail: "You have " + projects.length + " project" + (projects.length === 1 ? "" : "s") + ". Open the latest, pick another under Existing project (left), or create a new one.", action: { label: "Open latest project", run: () => { const latest = [...projects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]; if (latest) void openProject(latest); } } }
     : !projectId ? { title: "Create a project", detail: "Name it, then click Create project.", action: { label: "Create project", run: () => void createProject() } }
     : !hasVideo ? { title: "Upload a video", detail: "Use Upload media in the Asset reference panel on the left. A talk, interview or vlog works best." }
     : proposal?.status === "proposed" ? { title: "Review the suggested highlights", detail: "Each clip says why it was chosen, with the transcript as evidence. Accept to build your cut, or adjust the goal and try again.", action: { label: "Accept highlights", run: () => void decideProposal("accepted") } }
