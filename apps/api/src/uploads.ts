@@ -130,7 +130,13 @@ export function registerUploadRoutes(server: FastifyInstance, dependencies: Uplo
 async function buildProxy(dependencies: UploadDependencies, asset: Asset): Promise<void> {
   if (dependencies.proxyQueue) {
     try { await dependencies.proxyQueue.enqueueProxy(asset); return; }
-    catch (caught) { dependencies.onBackgroundDone?.(asset.id, "failed", caught); if (!dependencies.proxy) return; }
+    catch (caught) {
+      dependencies.onBackgroundDone?.(asset.id, "failed", caught);
+      if (!dependencies.proxy) {
+        await dependencies.assets.updateMetadata?.(asset.id, { ...asset.metadata, proxyStatus: "failed" });
+        return;
+      }
+    }
   }
   if (!dependencies.proxy) return;
   try {
