@@ -26,7 +26,7 @@ async function setup(director, options = {}) {
   const durationUs = Math.round((t + 1) * 1e6);
   const server = buildServer({ projects, assets, revisions, members: new InMemoryProjectMemberRepository(), scenes: new InMemorySceneRepository(), authenticate: auth, authorize, strategies: new StaticStrategyRegistry(), clock, ids });
   const service = new ProjectService(projects, assets, revisions, ids, clock);
-  registerDirectorRoutes(server, { projects, assets, revisions, storage, transcripts: { listForAsset: async (id) => (id === "talk" ? segments : []) }, director, saveRevision: (i) => service.saveRevision(i), authenticate: auth.authenticate, authorize, clock: clock.now });
+  registerDirectorRoutes(server, { projects, assets, revisions, storage, transcripts: { listForAsset: async (id) => (id === "talk" ? segments : []) }, director, saveRevision: (i) => service.saveRevision(i), authenticate: auth.authenticate, authorize, clock: clock.now, ...(options.extra ?? {}) });
   registerTimelineRoutes(server, { projects, revisions, assets, authenticate: auth.authenticate, authorize, saveRevision: (i) => service.saveRevision(i) });
   const projectId = (await server.inject({ method: "POST", url: "/v1/projects", payload: { name: "Director" } })).json().project.id;
   const video = join(dir, "talk.mp4");
@@ -194,4 +194,33 @@ test("ask for a change (built-in rules): shorter + black and white, applied with
     const nothing = (await server.inject({ method: "POST", url: url("ask"), payload: { revision: changed.revision, instruction: "add my logo in the corner" } })).json().plan;
     assert.equal(nothing.suggestions[0].kind, "advice", "what the rules cannot do is said plainly");
   } finally { close(); }
+});
+
+test("ask → apply: free stock behind you and a typed voice-over are made on the server; missing services are explained", async () => {
+  const made = [];
+  const { server, projectId, close } = await setup(new RuleDirector(), { extra: {
+    findStock: async (_p, query, kind) => { made.push("stock:" + query + ":" + kind); return { id: "pic" }; },
+    speak: async (_p, text) => { made.push("voice:" + text); return { id: "pic", durationUs: 2_000_000 }; },
+  } });
+  try {
+    const url = (p) => "/v1/projects/" + projectId + "/director/" + p;
+    const asked = (await server.inject({ method: "POST", url: url("ask"), payload: { revision: 1, instruction: "add a clip of a city at night behind me", playheadS: 6 } })).json().plan;
+    assert.equal(asked.suggestions[0].kind, "stock");
+    const applied = await server.inject({ method: "POST", url: url("apply"), payload: { revision: 1, plan: asked, accepted: [asked.suggestions[0].id], keepTailoring: true } });
+    assert.equal(applied.statusCode, 201, applied.body);
+    const broll = applied.json().revision.timeline.tracks.find((t) => t.kind === "overlay").clips.find((c) => c.transform.role === "broll");
+    assert.equal(broll.transform.mode, "behind"); assert.equal(broll.assetId, "pic");
+    assert.deepEqual(made, ["stock:city at night:video"]);
+    const voice = (await server.inject({ method: "POST", url: url("ask"), payload: { revision: 2, instruction: "add a voice-over \"Welcome to the course\"" } })).json().plan;
+    const withVoice = await server.inject({ method: "POST", url: url("apply"), payload: { revision: 2, plan: voice, accepted: [voice.suggestions[0].id], keepTailoring: true } });
+    assert.equal(withVoice.statusCode, 201, withVoice.body);
+    assert.ok(withVoice.json().revision.timeline.tracks.find((t) => t.kind === "audio").clips.some((c) => c.transform.role === "voiceover"));
+  } finally { close(); }
+  const bare = await setup(new RuleDirector());
+  try {
+    const url = (p) => "/v1/projects/" + bare.projectId + "/director/" + p;
+    const asked = (await bare.server.inject({ method: "POST", url: url("ask"), payload: { revision: 1, instruction: "add a gif of applause" } })).json().plan;
+    const applied = (await bare.server.inject({ method: "POST", url: url("apply"), payload: { revision: 1, plan: asked, accepted: [asked.suggestions[0].id] } })).json();
+    assert.match(applied.notes[0], /not set up/);
+  } finally { bare.close(); }
 });

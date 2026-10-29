@@ -28,8 +28,10 @@ export interface VoiceoverDependencies {
   clock(): string;
 }
 
+export function voiceFetcher(dependencies: VoiceoverDependencies): Fetcher { return dependencies.fetch ?? ((url, init) => fetch(url, init) as never); }
+
 export function registerVoiceoverRoutes(server: FastifyInstance, dependencies: VoiceoverDependencies): void {
-  const fetcher: Fetcher = dependencies.fetch ?? ((url, init) => fetch(url, init) as never);
+  const fetcher = voiceFetcher(dependencies);
   server.get("/v1/projects/:projectId/voiceover/voices", async (request, reply) => {
     const principal = await dependencies.authenticate(request);
     if (!principal) return error(reply, 401, "unauthorized", "Authentication required");
@@ -46,34 +48,41 @@ export function registerVoiceoverRoutes(server: FastifyInstance, dependencies: V
     if (!text || text.length > 3000) return error(reply, 400, "invalid_request", "Type up to 3000 characters to read out");
     const voice = typeof body.voice === "string" && (VOICES as readonly string[]).includes(body.voice) ? body.voice : "marin";
     const style = typeof body.style === "string" ? body.style.trim().slice(0, 200) : "";
-    const response = await fetcher((dependencies.endpoint ?? "https://api.openai.com/v1") + "/audio/speech", {
-      method: "POST", signal: AbortSignal.timeout(90_000),
-      headers: { authorization: "Bearer " + dependencies.apiKey, "content-type": "application/json" },
-      body: JSON.stringify({ model: dependencies.model ?? "gpt-4o-mini-tts", voice, input: text, response_format: "mp3", ...(style ? { instructions: style } : {}) }),
-    }).catch(() => undefined);
-    if (!response || !response.ok) return error(reply, 502, "voice_failed", response?.status === 429 ? "The voice service is busy; try again in a minute" : "The voice could not be made");
-    const assetId = randomUUID();
-    const directory = join(tmpdir(), "videocraft-voice", assetId);
-    try {
-      await mkdir(directory, { recursive: true });
-      const path = join(directory, "voice.mp3");
-      await writeFile(path, Buffer.from(await response.arrayBuffer()));
-      const info = dependencies.inspector ? await dependencies.inspector(path) : undefined;
-      if (info && !info.hasAudio) return error(reply, 502, "voice_failed", "The voice came back empty");
-      const storageKey = "projects/" + projectId + "/assets/" + assetId + ".media";
-      const stored = await dependencies.storage.putFile(path, storageKey);
-      const asset: Asset = {
-        id: assetId, projectId, kind: "audio", storageKey: stored.key, checksumSha256: stored.checksumSha256,
-        ...(info ? { durationUs: info.durationUs } : {}),
-        metadata: { filename: ("Voice-over · " + text.slice(0, 40) + (text.length > 40 ? "…" : "") + ".mp3").slice(0, 255), mimeType: "audio/mpeg", voiceover: true, voice, script: text.slice(0, 3000), hasAudio: true },
-        createdAt: dependencies.clock(),
-      };
-      try { await dependencies.assets.save(asset); } catch (caught) { await dependencies.storage.remove(storageKey).catch(() => undefined); throw caught; }
-      return reply.code(201).send({ asset });
-    } finally {
-      await rm(directory, { recursive: true, force: true }).catch(() => undefined);
-    }
+    try { return reply.code(201).send({ asset: await speak(dependencies, fetcher, projectId, text, voice, style) }); }
+    catch (caught) { return error(reply, 502, "voice_failed", caught instanceof Error ? caught.message : "The voice could not be made"); }
   });
+}
+
+/** Reads `text` aloud with an OpenAI voice and stores it as an audio asset. */
+export async function speak(dependencies: VoiceoverDependencies, fetcher: Fetcher, projectId: string, text: string, voice: string, style = ""): Promise<Asset> {
+  if (!dependencies.apiKey) throw new Error("Typed voice-over needs the OpenAI key on the server");
+  const response = await fetcher((dependencies.endpoint ?? "https://api.openai.com/v1") + "/audio/speech", {
+    method: "POST", signal: AbortSignal.timeout(90_000),
+    headers: { authorization: "Bearer " + dependencies.apiKey, "content-type": "application/json" },
+    body: JSON.stringify({ model: dependencies.model ?? "gpt-4o-mini-tts", voice, input: text, response_format: "mp3", ...(style ? { instructions: style } : {}) }),
+  }).catch(() => undefined);
+  if (!response || !response.ok) throw new Error(response?.status === 429 ? "The voice service is busy; try again in a minute" : "The voice could not be made");
+  const assetId = randomUUID();
+  const directory = join(tmpdir(), "videocraft-voice", assetId);
+  try {
+    await mkdir(directory, { recursive: true });
+    const path = join(directory, "voice.mp3");
+    await writeFile(path, Buffer.from(await response.arrayBuffer()));
+    const info = dependencies.inspector ? await dependencies.inspector(path) : undefined;
+    if (info && !info.hasAudio) throw new Error("The voice came back empty");
+    const storageKey = "projects/" + projectId + "/assets/" + assetId + ".media";
+    const stored = await dependencies.storage.putFile(path, storageKey);
+    const asset: Asset = {
+      id: assetId, projectId, kind: "audio", storageKey: stored.key, checksumSha256: stored.checksumSha256,
+      ...(info ? { durationUs: info.durationUs } : {}),
+      metadata: { filename: ("Voice-over · " + text.slice(0, 40) + (text.length > 40 ? "…" : "") + ".mp3").slice(0, 255), mimeType: "audio/mpeg", voiceover: true, voice, script: text.slice(0, 3000), hasAudio: true },
+      createdAt: dependencies.clock(),
+    };
+    try { await dependencies.assets.save(asset); } catch (caught) { await dependencies.storage.remove(storageKey).catch(() => undefined); throw caught; }
+    return asset;
+  } finally {
+    await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+  }
 }
 
 function error(reply: FastifyReply, status: number, code: string, message: string) { return reply.code(status).send({ error: { code, message } }); }

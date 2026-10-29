@@ -203,47 +203,66 @@ export function registerStockRoutes(server: FastifyInstance, dependencies: Stock
     const provider = body.provider === "pexels" || body.provider === "pixabay" || body.provider === "giphy" ? body.provider : undefined;
     const kind = body.kind === "video" || body.kind === "photo" || body.kind === "gif" ? body.kind : undefined;
     if (!provider || !kind || typeof body.id !== "string") return error(reply, 400, "invalid_request", "provider, kind and id are required");
-    // The same item imported twice is the same asset.
-    const existing = (await dependencies.assets.listForProject(projectId)).find((asset) => asset.metadata.stockProvider === provider && asset.metadata.stockId === body.id && asset.metadata.stockKind === kind);
-    if (existing) return { asset: existing };
-    const assetId = randomUUID();
-    const directory = join(tmpdir(), "videocraft-stock", assetId);
     try {
-      const { rendition, item } = await resolveRendition(fetcher, dependencies.keys, provider, kind, body.id);
-      await mkdir(directory, { recursive: true });
-      const path = join(directory, "download." + rendition.extension);
-      await download(fetcher, rendition.url, path);
-      const assetKind: Asset["kind"] = kind === "photo" ? "image" : "video";
-      let info: MediaInfo | undefined;
-      if (assetKind === "video" && dependencies.inspector) { info = await dependencies.inspector(path); validateMedia(info); if (!info.hasVideo) throw new StockError(422, "The stock file has no picture"); }
-      if (assetKind === "image" && dependencies.imageInspector && !(await dependencies.imageInspector(path))) throw new StockError(422, "The stock file is not an image");
-      const storageKey = "projects/" + projectId + "/assets/" + assetId + ".media";
-      const stored = await dependencies.storage.putFile(path, storageKey);
-      const label = kind === "gif" ? "GIF" : kind === "photo" ? "Photo" : "Video";
-      const libraryName = provider === "pexels" ? "Pexels" : provider === "pixabay" ? "Pixabay" : "GIPHY";
-      const asset: Asset = {
-        id: assetId, projectId, kind: assetKind, storageKey: stored.key, checksumSha256: stored.checksumSha256,
-        ...(info ? { durationUs: info.durationUs } : {}),
-        metadata: {
-          filename: (label + " · " + (item.title?.split(",")[0]?.trim() || libraryName) + "." + rendition.extension).slice(0, 255), mimeType: rendition.mimeType,
-          stockProvider: provider, stockKind: kind, stockId: body.id,
-          credit: ((item.credit ? item.credit + " on " : "") + libraryName).slice(0, 200),
-          ...(item.pageUrl ? { sourceUrl: item.pageUrl.slice(0, 500) } : {}),
-          ...(info ? { hasVideo: info.hasVideo, hasAudio: info.hasAudio, ...(info.width ? { width: info.width } : {}), ...(info.height ? { height: info.height } : {}) } : { width: rendition.width, height: rendition.height }),
-        },
-        createdAt: dependencies.clock(),
-      };
-      try { await dependencies.assets.save(asset); }
-      catch (caught) { await dependencies.storage.remove(storageKey).catch(() => undefined); throw caught; }
-      return reply.code(201).send({ asset });
+      const { asset, created } = await importStock(dependencies, fetcher, projectId, provider, kind, body.id);
+      return reply.code(created ? 201 : 200).send({ asset });
     } catch (caught) {
       if (caught instanceof StockError) return error(reply, caught.status, "stock_failed", caught.message);
       request.log.warn({ err: caught }, "stock import failed");
       return error(reply, 502, "stock_failed", "The stock file could not be imported");
-    } finally {
-      await rm(directory, { recursive: true, force: true }).catch(() => undefined);
     }
   });
+}
+
+/** Imports one stock item as a project asset (reusing it when it was imported before). */
+export async function importStock(dependencies: StockDependencies, fetcher: Fetcher, projectId: string, provider: StockProvider, kind: StockKind, id: string): Promise<{ asset: Asset; created: boolean }> {
+  const existing = (await dependencies.assets.listForProject(projectId)).find((asset) => asset.metadata.stockProvider === provider && asset.metadata.stockId === id && asset.metadata.stockKind === kind);
+  if (existing) return { asset: existing, created: false };
+  const assetId = randomUUID();
+  const directory = join(tmpdir(), "videocraft-stock", assetId);
+  try {
+    const { rendition, item } = await resolveRendition(fetcher, dependencies.keys, provider, kind, id);
+    await mkdir(directory, { recursive: true });
+    const path = join(directory, "download." + rendition.extension);
+    await download(fetcher, rendition.url, path);
+    const assetKind: Asset["kind"] = kind === "photo" ? "image" : "video";
+    let info: MediaInfo | undefined;
+    if (assetKind === "video" && dependencies.inspector) { info = await dependencies.inspector(path); validateMedia(info); if (!info.hasVideo) throw new StockError(422, "The stock file has no picture"); }
+    if (assetKind === "image" && dependencies.imageInspector && !(await dependencies.imageInspector(path))) throw new StockError(422, "The stock file is not an image");
+    const storageKey = "projects/" + projectId + "/assets/" + assetId + ".media";
+    const stored = await dependencies.storage.putFile(path, storageKey);
+    const label = kind === "gif" ? "GIF" : kind === "photo" ? "Photo" : "Video";
+    const libraryName = provider === "pexels" ? "Pexels" : provider === "pixabay" ? "Pixabay" : "GIPHY";
+    const asset: Asset = {
+      id: assetId, projectId, kind: assetKind, storageKey: stored.key, checksumSha256: stored.checksumSha256,
+      ...(info ? { durationUs: info.durationUs } : {}),
+      metadata: {
+        filename: (label + " · " + (item.title?.split(",")[0]?.trim() || libraryName) + "." + rendition.extension).slice(0, 255), mimeType: rendition.mimeType,
+        stockProvider: provider, stockKind: kind, stockId: id,
+        credit: ((item.credit ? item.credit + " on " : "") + libraryName).slice(0, 200),
+        ...(item.pageUrl ? { sourceUrl: item.pageUrl.slice(0, 500) } : {}),
+        ...(info ? { hasVideo: info.hasVideo, hasAudio: info.hasAudio, ...(info.width ? { width: info.width } : {}), ...(info.height ? { height: info.height } : {}) } : { width: rendition.width, height: rendition.height }),
+      },
+      createdAt: dependencies.clock(),
+    };
+    try { await dependencies.assets.save(asset); }
+    catch (caught) { await dependencies.storage.remove(storageKey).catch(() => undefined); throw caught; }
+    return { asset, created: true };
+  } finally {
+    await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+/** The best free stock match for a few words, imported as an asset (for the director). Undefined when none. */
+export async function findStock(dependencies: StockDependencies, projectId: string, query: string, kind: StockKind, orientation?: "portrait" | "landscape" | "square"): Promise<Asset | undefined> {
+  const fetcher: Fetcher = dependencies.fetch ?? ((url, init) => fetch(url, init) as never);
+  for (const provider of providersFor(dependencies.keys, kind)) {
+    const items = await searchProvider(fetcher, dependencies.keys, provider, kind, query, orientation).catch(() => []);
+    for (const item of items.slice(0, 3)) {
+      try { return (await importStock(dependencies, fetcher, projectId, provider, kind, item.id)).asset; } catch { /* try the next one */ }
+    }
+  }
+  return undefined;
 }
 
 function error(reply: FastifyReply, status: number, code: string, message: string) { return reply.code(status).send({ error: { code, message } }); }

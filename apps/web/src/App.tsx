@@ -27,7 +27,7 @@ const PLATFORMS: Record<string, { label: string; short: string; width: number; h
   square: { label: "Feed · 1:1", short: "Feed 1:1", width: 1080, height: 1080, fit: "cover", captionStyle: "clean" },
   preview: { label: "Quick preview · 720p", short: "Preview 720p", width: 1280, height: 720, fit: "contain", captionStyle: "clean" },
 };
-type Suggestion = { id: string; kind: string; title: string; reason: string; text?: string; subtitle?: string; atS?: number; durationS?: number; segments?: Array<{ startS: number; endS: number }>; mood?: string; platform?: string; assetId?: string; mode?: string };
+type Suggestion = { id: string; kind: string; title: string; reason: string; text?: string; subtitle?: string; atS?: number; durationS?: number; segments?: Array<{ startS: number; endS: number }>; mood?: string; platform?: string; assetId?: string; mode?: string; changeDb?: number; target?: string; query?: string; color?: string };
 type DirectorPlan = { summary: string; profile: { intent: string; audience: string; channel: string; tone: string; targetSeconds: number }; suggestions: Suggestion[]; source: "ai" | "rules"; model?: string; note?: string };
 const PLAN_GROUPS: Array<{ name: string; kinds: string[] }> = [
   { name: "Story", kinds: ["cut"] },
@@ -643,7 +643,9 @@ export function App() {
     setBusy(true); setAskPlan(null);
     setStatus("Working out how to “" + askText.trim().slice(0, 60) + "”…");
     try {
-      const result = await request("/v1/projects/" + projectId + "/director/ask", { method: "POST", body: JSON.stringify({ revision, instruction: askText.trim() }) });
+      // "Here" means the playhead: send where it is in the original video.
+      const here = timelineToSource(videoClips, liveUsRef.current);
+      const result = await request("/v1/projects/" + projectId + "/director/ask", { method: "POST", body: JSON.stringify({ revision, instruction: askText.trim(), ...(here && here.assetId === videoClips[0]?.assetId ? { playheadS: here.sourceUs / 1e6 } : {}) }) });
       const next: DirectorPlan = result.plan;
       setAskPlan(next);
       setAskPicked(Object.fromEntries(next.suggestions.map((item) => [item.id, item.kind !== "advice"])));
@@ -661,9 +663,10 @@ export function App() {
       setRevision(result.revision.revision); setTimeline(result.revision.timeline);
       setRenderUrl(""); setRenderJobId(""); setRenderJobStatus("");
       if (result.platform && PLATFORMS[result.platform]) setPlatform(result.platform);
-      if (result.music) { const listed = await request("/v1/projects/" + projectId + "/assets").catch(() => null); if (listed) setAssets(listed.assets); }
+      // Music, stock and voice-overs made on the server are new assets.
+      const listed = await request("/v1/projects/" + projectId + "/assets").catch(() => null); if (listed) setAssets(listed.assets);
       setAskPlan(null); setAskText(""); setCheck(null);
-      setStatus("Changed (revision " + result.revision.revision + ")" + (result.music ? ". Music: " + result.music.description : ""));
+      setStatus("Changed (revision " + result.revision.revision + ")" + (result.music ? ". Music: " + result.music.description : "") + (Array.isArray(result.notes) && result.notes.length ? ". " + result.notes.join(" ") : ""));
     } catch (error) { setStatus(errorMessage(error)); }
     finally { setBusy(false); }
   }
@@ -1168,7 +1171,10 @@ function describeSuggestion(item: Suggestion): string {
   if (item.kind === "cut" && item.segments) return item.segments.length + " part" + (item.segments.length === 1 ? "" : "s") + ", " + Math.round(item.segments.reduce((sum, seg) => sum + seg.endS - seg.startS, 0)) + " seconds: " + item.segments.map((seg) => formatClock(seg.startS * 1e6) + "–" + formatClock(seg.endS * 1e6)).join(", ");
   if (item.kind === "music") return "Mood: " + (item.mood ?? "") + ", lowered while people speak";
   if (item.kind === "platform") return PLATFORMS[item.platform ?? ""]?.label ?? "";
-  if (item.kind === "look" || item.kind === "background") return "Whole video";
+  if (item.kind === "look" || item.kind === "background" || item.kind === "remove" || item.kind === "color" || item.kind === "captions") return "Whole video";
+  if (item.kind === "volume" && typeof item.changeDb === "number") return (item.changeDb > 0 ? "+" : "") + item.changeDb + " dB from where it is now";
+  if (item.kind === "stock") return "Free stock · " + (item.mode === "behind" ? "behind you" : item.mode === "pip" ? "corner" : "full screen") + (typeof item.atS === "number" ? " · at " + formatClock(item.atS * 1e6) + " of the original" : "");
+  if (item.kind === "voiceover" && item.text) return "“" + item.text.slice(0, 120) + (item.text.length > 120 ? "…" : "") + "”";
   if (typeof item.atS === "number" && item.kind !== "advice") return "At " + formatClock(item.atS * 1e6) + " of the original" + (item.durationS ? ", for " + item.durationS.toFixed(1) + " s" : "");
   return item.kind === "advice" ? item.reason : "";
 }
