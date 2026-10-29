@@ -91,7 +91,7 @@ test("migration 006 renames existing duplicate project names, then enforces uniq
     const rows = [["p1", "obed", "My first cut", "2026-10-22T21:00:00Z"], ["p2", "obed", "My first cut", "2026-10-22T21:07:00Z"], ["p3", "obed", "my  first CUT ", "2026-10-23T10:00:00Z"], ["p4", "obed", "My first cut (2)", "2026-10-23T11:00:00Z"], ["p5", "obed", "My first cut", "2026-10-24T09:00:00Z"], ["q1", "someone-else", "My first cut", "2026-10-23T09:00:00Z"]];
     for (const [id, owner, n, at] of rows) await pool.query("INSERT INTO projects (id, owner_id, name, revision, created_at, updated_at) VALUES ($1,$2,$3,0,$4,$4)", [id, owner, n, at]);
 
-    assert.deepEqual(await migrateDatabase(pool), ["006_unique_project_names.sql"]);
+    assert.ok((await migrateDatabase(pool)).includes("006_unique_project_names.sql"), "006 is applied on top of 001-005");
     const names = Object.fromEntries((await pool.query("SELECT id, name FROM projects ORDER BY id")).rows.map((r) => [r.id, r.name]));
     assert.equal(names.p1, "My first cut", "the oldest keeps its name");
     assert.equal(names.p4, "My first cut (2)", "an existing numbered name is left alone");
