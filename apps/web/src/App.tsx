@@ -25,6 +25,8 @@ type Project = { id: string; name: string; revision: number; createdAt: string; 
 type Asset = { id: string; kind: string; storageKey: string; durationUs?: number; metadata: Record<string, string | number | boolean> };
 
 const API = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
+const LAST_PROJECT_KEY = "videocraft.lastProject";
+function rememberProject(id: string) { try { localStorage.setItem(LAST_PROJECT_KEY, id); } catch { /* storage unavailable */ } }
 
 export function App() {
   const [token, setToken] = useState("");
@@ -33,7 +35,7 @@ export function App() {
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [userEmail, setUserEmail] = useState("");
   const [projectId, setProjectId] = useState("");
-  const [projectName, setProjectName] = useState("My first cut");
+  const [projectName, setProjectName] = useState(() => "Video " + new Date().toLocaleDateString(undefined, { day: "numeric", month: "short" }) + " " + new Date().toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }));
   const [projects, setProjects] = useState<Project[]>([]);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [intent, setIntent] = useState("Create a clear short-form explainer");
@@ -212,6 +214,25 @@ export function App() {
 
   useEffect(() => { if (!token) void restoreSession(); }, []);
 
+  // After signing in (or a page reload), reopen the project the person was working on instead of
+  // showing an empty editor that invites them to create yet another project.
+  const [projectsLoaded, setProjectsLoaded] = useState(false);
+  useEffect(() => {
+    if (!token || projectId) return;
+    let cancelled = false;
+    request("/v1/projects").then((result) => {
+      if (cancelled) return;
+      const list: Project[] = result.projects ?? [];
+      setProjects(list);
+      setProjectsLoaded(true);
+      let remembered = "";
+      try { remembered = localStorage.getItem(LAST_PROJECT_KEY) ?? ""; } catch { /* storage unavailable */ }
+      const target = list.find((project) => project.id === remembered) ?? [...list].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+      if (target) void openProject(target);
+    }).catch(() => { if (!cancelled) setProjectsLoaded(true); });
+    return () => { cancelled = true; };
+  }, [token]);
+
   async function signOut() {
     await request("/auth/logout", { method: "POST" }).catch(() => undefined);
     setToken("");
@@ -226,6 +247,11 @@ export function App() {
     try {
       const result = await request("/v1/projects", { method: "POST", body: JSON.stringify({ name: projectName }) });
       setProjectId(result.project.id);
+      rememberProject(result.project.id);
+      setAssets([]);
+      setTimeline({ durationUs: 30_000_000, tracks: [] });
+      setRevision(0);
+      setProposal(null);
       setProjects((current) => [...current.filter((project) => project.id !== result.project.id), result.project]);
       setStatus("Project created");
     } catch (error) { setStatus(errorMessage(error)); }
@@ -247,6 +273,7 @@ export function App() {
     setBusy(true);
     try {
       setProjectId(project.id);
+      rememberProject(project.id);
       setProjectName(project.name);
       setRevision(project.revision);
       setProposal(null);
@@ -487,8 +514,8 @@ export function App() {
         body: JSON.stringify({ revision: workingRevision, strategyId: "highlight-reel", profile: { intent, audience, channel, targetDurationUs: Math.round(targetSeconds * 1_000_000), constraints: [] } }),
       });
       setProposal(found.proposal);
-      const picks = found.proposal.operations.filter((operation: Operation) => operation.type === "insert-clip").length;
-      setStatus(picks ? "Highlights ready: review the " + picks + " suggested clips, then Accept" : found.proposal.rationale);
+      const picks = groupHighlights(found.proposal.operations).length;
+      setStatus(picks ? "Highlights ready: review the " + picks + " suggested highlight" + (picks === 1 ? "" : "s") + ", then Accept" : found.proposal.rationale);
       setTimeout(() => document.querySelector(".proposal-panel")?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
     } catch (error) { setStatus(errorMessage(error)); }
     finally { setBusy(false); }
@@ -524,9 +551,12 @@ export function App() {
   }
 
   const hasVideo = assets.some((asset) => asset.kind === "video");
+  const proposalHighlights = proposal ? groupHighlights(proposal.operations) : [];
   const accepted = proposal?.status === "accepted";
   const next: { title: string; detail: string; action?: { label: string; run: () => void; disabled?: boolean } } =
     !userEmail ? { title: "Sign in", detail: "Create an account or sign in in the Project panel on the left." }
+    : !projectId && !projectsLoaded ? { title: "Loading your projects…", detail: "Opening the project you last worked on." }
+    : !projectId && projects.length > 0 ? { title: "Open your project", detail: "You have " + projects.length + " project" + (projects.length === 1 ? "" : "s") + ". Open the latest, pick another under Existing project (left), or create a new one.", action: { label: "Open latest project", run: () => { const latest = [...projects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]; if (latest) void openProject(latest); } } }
     : !projectId ? { title: "Create a project", detail: "Name it, then click Create project.", action: { label: "Create project", run: () => void createProject() } }
     : !hasVideo ? { title: "Upload a video", detail: "Use Upload media in the Asset reference panel on the left. A talk, interview or vlog works best." }
     : proposal?.status === "proposed" ? { title: "Review the suggested highlights", detail: "Each clip says why it was chosen, with the transcript as evidence. Accept to build your cut, or adjust the goal and try again.", action: { label: "Accept highlights", run: () => void decideProposal("accepted") } }
@@ -617,7 +647,7 @@ export function App() {
           <div className="ruler"><span>00:00</span><span>00:10</span><span>00:20</span><span>00:30</span></div>
           <div className="track-list">
             {timeline.tracks.length === 0 && <div className="empty-state">Your non-destructive timeline is empty. Add a registered asset to begin.</div>}
-            {timeline.tracks.map((track) => <div className="track" key={track.id}><div className="track-label">{track.kind}</div><div className="track-lane">{track.clips.map((clip) => <button type="button" className={"clip" + (selectedClipId === clip.id ? " selected" : "")} key={clip.id} style={{ width: Math.max(16, ((clip.timelineEndUs - clip.timelineStartUs) / timeline.durationUs) * 100) + "%" }} aria-label={"Clip " + clip.assetId.slice(0, 12) + ", " + formatSeconds(clip.sourceEndUs - clip.sourceStartUs)} aria-pressed={selectedClipId === clip.id} onClick={() => setSelectedClipId(clip.id)} onKeyDown={(event) => handleClipKeyDown(event, clip)}><strong>{clip.assetId.slice(0, 12)}</strong><small>{formatSeconds(clip.sourceEndUs - clip.sourceStartUs)}</small></button>)}</div></div>)}
+            {timeline.tracks.map((track) => <div className="track" key={track.id}><div className="track-label">{track.kind}</div><div className="track-lane">{track.clips.map((clip) => <button type="button" className={"clip" + (selectedClipId === clip.id ? " selected" : "")} key={clip.id} style={{ width: Math.max(1.5, ((clip.timelineEndUs - clip.timelineStartUs) / Math.max(1, timeline.durationUs)) * 100) + "%" }} aria-label={"Clip " + clip.assetId.slice(0, 12) + ", " + formatSeconds(clip.sourceEndUs - clip.sourceStartUs)} aria-pressed={selectedClipId === clip.id} onClick={() => setSelectedClipId(clip.id)} onKeyDown={(event) => handleClipKeyDown(event, clip)}><strong>{clip.assetId.slice(0, 12)}</strong><small>{formatSeconds(clip.sourceEndUs - clip.sourceStartUs)}</small></button>)}</div></div>)}
           </div>
         </div>
         {selectedClip && <section className="panel clip-panel" aria-label="Selected clip">
@@ -644,11 +674,24 @@ export function App() {
         </section>}
         <div className="lower-grid">
           <section className="panel preview-panel"><div className="panel-heading"><h2>Preview</h2><span className="badge">Non-destructive</span></div><div className="preview-tabs" role="tablist"><button role="tab" aria-selected={previewMode === "source"} className={previewMode === "source" ? "" : "secondary"} onClick={() => setPreviewMode("source")}>Source</button><button role="tab" aria-selected={previewMode === "render"} className={previewMode === "render" ? "" : "secondary"} onClick={() => setPreviewMode("render")}>Rendered export</button></div><div className="preview-screen">{previewMode === "render" ? (renderUrl ? <video controls src={renderUrl} /> : <span>{renderJobId ? "Render " + renderJobStatus : "Render a platform export to preview it here"}</span>) : (sourceUrl ? <video ref={playerRef} controls src={sourceUrl} onTimeUpdate={stopAtClipEnd} /> : <span>{sourceNote || "Sign in and add a video to scrub the source here"}</span>)}</div>{previewMode === "source" && sourceUrl && sourceNote && <p className="muted">{sourceNote}</p>}{previewMode === "source" && sourceUrl && <div className="player-actions"><button className="secondary" onClick={playSelectedClip} disabled={!selectedClip}>Play selected clip</button><button className="secondary" onClick={() => trimToPlayhead("start")} disabled={busy || !selectedClip || revision === 0}>Trim start to playhead</button><button className="secondary" onClick={() => trimToPlayhead("end")} disabled={busy || !selectedClip || revision === 0}>Trim end to playhead</button><button className="secondary" onClick={() => markSegmentFromPlayhead("start")}>Segment start = playhead</button><button className="secondary" onClick={() => markSegmentFromPlayhead("end")}>Segment end = playhead</button></div>}</section>
-          <section className="panel proposal-panel"><div className="panel-heading"><h2>AI proposal</h2>{proposal && <span className="badge">{Math.round(proposal.confidence * 100)}% confidence</span>}</div>{proposal ? <><p>{proposal.rationale}</p>{proposal.operations.some((operation) => operation.type === "insert-clip") && <ol className="highlight-list">{proposal.operations.filter((operation) => operation.type === "insert-clip").map((operation, index) => <li key={index}><strong>{formatSeconds(operation.sourceStartUs ?? 0)}–{formatSeconds(operation.sourceEndUs ?? 0)}</strong>{typeof operation.score === "number" && <span className="badge">score {Math.round(operation.score * 100)}</span>}<p>{operation.reason}</p></li>)}</ol>}<div className="evidence">{proposal.evidence.map((item) => <div key={item.reference}><span>{item.source}</span><code>{item.reference}{typeof item.startUs === "number" && typeof item.endUs === "number" ? " · " + formatSeconds(item.startUs) + "–" + formatSeconds(item.endUs) : ""}</code>{item.excerpt && <p>{item.excerpt}</p>}</div>)}</div>{proposal.status === "proposed" && <div className="decision-actions"><button className="secondary" onClick={() => decideProposal("rejected")} disabled={busy}>Reject</button><button onClick={() => decideProposal("accepted")} disabled={busy}>Accept as revision</button></div>}</> : <p className="muted">Click Create highlights: suggested clips appear here with the reason and transcript evidence for each.</p>}</section>
+          <section className="panel proposal-panel"><div className="panel-heading"><h2>AI proposal</h2>{proposal && <span className="badge">{Math.round(proposal.confidence * 100)}% confidence</span>}</div>{proposal ? <><p>{proposal.rationale}</p>{proposalHighlights.length > 0 && <ol className="highlight-list">{proposalHighlights.map((highlight, index) => <li key={index}><strong>{formatSeconds(highlight.startUs)}–{formatSeconds(highlight.endUs)}</strong>{typeof highlight.score === "number" && <span className="badge">score {Math.round(highlight.score * 100)}</span>}{highlight.parts > 1 && <span className="badge">{highlight.parts} parts, pauses cut</span>}<p>{highlight.reason}</p></li>)}</ol>}<div className="evidence">{proposal.evidence.map((item) => <div key={item.reference}><span>{item.source}</span><code>{item.reference}{typeof item.startUs === "number" && typeof item.endUs === "number" ? " · " + formatSeconds(item.startUs) + "–" + formatSeconds(item.endUs) : ""}</code>{item.excerpt && <p>{item.excerpt}</p>}</div>)}</div>{proposal.status === "proposed" && <div className="decision-actions"><button className="secondary" onClick={() => decideProposal("rejected")} disabled={busy}>Reject</button><button onClick={() => decideProposal("accepted")} disabled={busy}>Accept highlights</button></div>}</> : <p className="muted">Click Create highlights: suggested clips appear here with the reason and transcript evidence for each.</p>}</section>
         </div>
       </section>
     </main>
   </div>;
+}
+
+/** One entry per highlight: clips cut from one highlight (pauses removed) share its reason. */
+function groupHighlights(operations: Operation[]): Array<{ startUs: number; endUs: number; score?: number; reason: string; parts: number }> {
+  const groups: Array<{ startUs: number; endUs: number; score?: number; reason: string; parts: number }> = [];
+  for (const operation of operations) {
+    if (operation.type !== "insert-clip") continue;
+    const reason = String(operation.reason ?? "");
+    const last = groups[groups.length - 1];
+    if (last && last.reason === reason) { last.endUs = Math.max(last.endUs, operation.sourceEndUs ?? last.endUs); last.parts += 1; continue; }
+    groups.push({ startUs: operation.sourceStartUs ?? 0, endUs: operation.sourceEndUs ?? 0, ...(typeof operation.score === "number" ? { score: operation.score } : {}), reason, parts: 1 });
+  }
+  return groups;
 }
 
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : "Something went wrong"; }

@@ -85,8 +85,10 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
   registerRenderRoutes(server, { jobs: jobRepository, storage, signingSecret: "test-signing-secret-test-signing", authenticate, authorize });
   registerPreferenceRoutes(server, { preferences, authenticate });
   registerMediaRoutes(server, { assets, storage, signingSecret: "test-signing-secret-test-signing", authenticate, authorize });
-  server.post("/auth/register", async (request, reply) => reply.code(201).send({ user: { id: "user-1", email: request.body.email }, accessToken: "test-token" }));
-  server.post("/auth/refresh", async (_request, reply) => reply.code(401).send({ error: { code: "no_session", message: "No session" } }));
+  let registeredEmail = "";
+  server.post("/auth/register", async (request, reply) => { registeredEmail = request.body.email; return reply.code(201).send({ user: { id: "user-1", email: registeredEmail }, accessToken: "test-token" }); });
+  // Like the real refresh cookie: once signed up, a reload restores the session.
+  server.post("/auth/refresh", async (_request, reply) => registeredEmail ? reply.send({ user: { id: "user-1", email: registeredEmail }, accessToken: "test-token" }) : reply.code(401).send({ error: { code: "no_session", message: "No session" } }));
   server.get("/", async (_request, reply) => reply.type("text/html").send(readFileSync(join(dist, "index.html"))));
   server.get("/assets/:file", async (request, reply) => {
     const file = request.params.file;
@@ -120,6 +122,11 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
     await waitStatus(/Uploaded asset/);
     assert.deepEqual(errors, [], "no page errors after upload");
 
+    // A reload must bring the person back to the same project and video, not an empty editor.
+    await page.reload();
+    await page.locator(".next-step").filter({ hasText: "Create highlights" }).waitFor({ timeout: 20_000 });
+    assert.ok((await page.getByLabel("Project library").locator("option").allInnerTexts()).some((text) => /talk\.mp4/.test(text)), "the uploaded video is still in the project after a reload");
+
     // The guided path: after upload the next-step bar offers one button that does transcription, layout and selection.
     const nextStep = page.locator(".next-step");
     await nextStep.filter({ hasText: "Create highlights" }).waitFor();
@@ -128,7 +135,7 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
     await page.getByLabel("Target length (seconds)").fill("30");
     await nextStep.getByRole("button", { name: "Create highlights" }).click();
     await waitStatus(/Step 1 of 3: listening/, 10_000);
-    await waitStatus(/Highlights ready: review the \d+ suggested clips/, 180_000);
+    await waitStatus(/Highlights ready: review the \d+ suggested highlights?/, 180_000);
     await page.locator(".highlight-list li").first().waitFor({ timeout: 60_000 });
     const reasons = await page.locator(".highlight-list li").allInnerTexts();
     assert.ok(reasons.length >= 1 && reasons.every((text) => /score \d+/.test(text) && /Highlight \d+\/\d+/.test(text)), "every suggestion explains itself: " + reasons.join(" | "));
@@ -139,6 +146,8 @@ test("real browser: upload a talk, get explained highlights, edit, fix a caption
     await nextStep.getByRole("button", { name: "Accept highlights" }).click();
     await waitStatus(/Proposal accepted/);
     await nextStep.filter({ hasText: "Export your video" }).waitFor();
+    // Accepting fills the timeline with clips and caption cues; the page itself must not start scrolling sideways.
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), "no horizontal page scroll after accepting");
     const clips = page.locator("button.clip");
     await clips.first().waitFor();
     const videoClipCount = await page.locator(".track", { has: page.locator(".track-label", { hasText: /^video$/ }) }).locator("button.clip").count();

@@ -8,13 +8,13 @@ export interface HighlightWeights { relevance: number; hook: number; density: nu
 export type HighlightFeatures = Record<keyof HighlightWeights, number>;
 
 export interface HighlightScore { score: number; features: HighlightFeatures; matchedTerms: string[]; }
-export interface HighlightCandidate { startUs: number; endUs: number; text: string; unitIds: string[]; words: TranscriptWord[]; score: number; features: HighlightFeatures; matchedTerms: string[]; /** Why an AI judge rated this clip as it did, when re-ranking ran. */ judgeReason?: string; }
+export interface HighlightCandidate { /** True when none of the goal's topic words are said, so relevance was not scored. */ goalUnmatched?: boolean; startUs: number; endUs: number; text: string; unitIds: string[]; words: TranscriptWord[]; score: number; features: HighlightFeatures; matchedTerms: string[]; /** Why an AI judge rated this clip as it did, when re-ranking ran. */ judgeReason?: string; }
 
 interface Unit { id: string; startUs: number; endUs: number; text: string; words: TranscriptWord[]; }
 interface Policy { minUs: number; maxUs: number; idealUs: number; defaultTargetUs: number; weights: HighlightWeights; pauseCutUs: number; }
 
 const STOPWORDS = new Set("a an and are as at be been but by can could did do does for from had has have he her his how i if in into is it its just me more most my no not of on one or our out she so some than that the their them then there these they this those to too up us very was we were what when where which who will with would you your about also any because been being both each few get got him how like make makes made much need needs only other over own same should such take than through under until want wants while why".split(" "));
-const GENERIC_GOAL_WORDS = new Set("video videos clip clips short shorts reel reels tiktok instagram youtube linkedin post social platform audience viewers viewer people create creating generate edit editing highlight highlights best moments trailer teaser version cut".split(" "));
+const GENERIC_GOAL_WORDS = new Set("video videos clip clips short shorts reel reels tiktok instagram youtube linkedin post social platform audience viewers viewer people create creating generate edit editing highlight highlights best moments trailer teaser version cut pick choose select find make engaging engage engagement interesting compelling catchy viral good great top key main part parts general media content followers summary summarise summarize recap quick fun attention grabbing strongest memorable shareable punchy minute minutes seconds long length".split(" "));
 const FILLERS = ["um", "uh", "erm", "er", "hmm", "like", "basically", "literally", "actually", "you know", "i mean", "kind of", "sort of"];
 const HOOK_PATTERNS: Array<[RegExp, number]> = [
   [/^(did you know|what if|imagine|picture this|here'?s (the|a|why|how)|let me (show|tell)|stop |never |always |don'?t |the (biggest|best|worst|real|one|secret|truth)|most people|nobody|everyone|if you)/i, 0.9],
@@ -170,6 +170,11 @@ export function findCandidates(transcript: TranscriptSegment[], profile: Tailori
       candidates.push({ startUs: first.startUs, endUs: last.endUs, text, unitIds: slice.map((unit) => unit.id), words, ...result });
     }
   }
+  // A goal whose topic words are never said would score every window 0 on relevance; score on the
+  // other qualities instead (as if no topic was given) and flag it so the proposal can say so.
+  if (goal.size > 0 && candidates.length > 0 && candidates.every((candidate) => candidate.features.relevance < 0.05)) {
+    return findCandidates(transcript, { ...profile, intent: "", audience: "", constraints: [] }, signals, range, learned).map((candidate) => ({ ...candidate, goalUnmatched: true }));
+  }
   return candidates.sort((a, b) => b.score - a.score || a.startUs - b.startUs);
 }
 
@@ -324,7 +329,7 @@ export class HighlightReelStrategy implements EditingStrategy {
     const averageScore = plans.reduce((sum, plan) => sum + plan.candidate.score, 0) / plans.length;
     const coverage = Math.min(1, allWords.length / Math.max(1, sourceDurationUs / 1_000_000 * 1.5));
     return {
-      rationale: "Selected " + plans.length + " highlight" + (plans.length === 1 ? "" : "s") + " (" + (keptUs / 1_000_000).toFixed(1) + "s of " + (sourceDurationUs / 1_000_000).toFixed(1) + "s) that best match \"" + profile.intent.slice(0, 120) + "\" for " + profile.audience.slice(0, 80) + " on " + profile.channel + ". Pauses longer than " + (policy.pauseCutUs / 1_000_000).toFixed(2) + "s are cut and captions follow the spoken words. Review each clip's reason and transcript evidence before accepting." + (learnedNote ? " Adjusted to your past edits: " + learnedNote + "." : ""),
+      rationale: "Selected " + plans.length + " highlight" + (plans.length === 1 ? "" : "s") + " (" + (keptUs / 1_000_000).toFixed(1) + "s of " + (sourceDurationUs / 1_000_000).toFixed(1) + "s; target " + Math.round(targetUs / 1_000_000) + "s) that best match \"" + profile.intent.slice(0, 120) + "\" for " + profile.audience.slice(0, 80) + " on " + profile.channel + ". Pauses longer than " + (policy.pauseCutUs / 1_000_000).toFixed(2) + "s are cut and captions follow the spoken words. Review each clip's reason and transcript evidence before accepting." + (goalTerms(profile).size === 0 ? " Your goal names no topic, so clips were chosen on hooks, delivery and completeness; mention the subject (e.g. \"onboarding mistakes\") to steer the choice." : plans[0]?.candidate.goalUnmatched ? " None of the topic words in your goal are said in the video, so clips were chosen on hooks, delivery and completeness; name the topic in your goal to steer the choice." : "") + (learnedNote ? " Adjusted to your past edits: " + learnedNote + "." : ""),
       confidence: round(Math.max(0.2, Math.min(0.9, averageScore * (0.6 + 0.4 * coverage)))),
       evidence,
       operations,

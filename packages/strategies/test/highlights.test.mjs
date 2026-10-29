@@ -134,3 +134,26 @@ test("the finished cut stays within 10% of the requested length even after paddi
     assert.ok(kept <= seconds * 1_100_000, seconds + "s target kept " + kept / 1e6 + "s");
   }
 });
+
+test("a goal with no topic words said in the video does not zero relevance; the proposal says why", async () => {
+  const { segments, durationUs } = transcript([
+    ["Graduates often discover the job market expects skills they never learned in class.", 0.6],
+    ["We built a programme with real projects and mentors to close that gap.", 0.6],
+    ["Students spend twelve weeks with companies and leave with a portfolio.", 0.6],
+    ["Did you know more than half found jobs within three months last year?", 0.6],
+    ["Employers tell us the portfolios make all the difference for them.", 0.6],
+    ["If you are a graduate start building something you can show today.", 0.6],
+  ]);
+  const rev = { projectId: "p", revision: 1, acceptedProposalIds: [], createdAt: "", createdBy: "u", timeline: { durationUs, tracks: [{ id: "v", kind: "video", clips: [{ id: "src", assetId: "asset", sourceStartUs: 0, sourceEndUs: durationUs, timelineStartUs: 0, timelineEndUs: durationUs }] }] } };
+  const profile = { intent: "Pick the most engaging moments for a short social video", audience: "General social media viewers", channel: "short-form", targetDurationUs: 20_000_000, constraints: [] };
+  const proposal = await new HighlightReelStrategy().propose({ project: { id: "p" }, revision: rev, profile, transcript: segments });
+  const picks = proposal.operations.filter((o) => o.type === "insert-clip");
+  assert.ok(picks.length > 0);
+  assert.ok(picks.every((o) => o.features.relevance === 0.5), "relevance is neutral, not zero: " + picks.map((o) => o.features.relevance));
+  assert.match(proposal.rationale, /target 20s/);
+  assert.match(proposal.rationale, /Your goal names no topic/);
+  const offTopic = await new HighlightReelStrategy().propose({ project: { id: "p" }, revision: rev, profile: { ...profile, intent: "Explain kubernetes autoscaling" }, transcript: segments });
+  assert.match(offTopic.rationale, /None of the topic words in your goal are said/);
+  assert.ok(offTopic.operations.filter((o) => o.type === "insert-clip").every((o) => o.features.relevance === 0.5));
+  assert.ok(goalTerms(profile).size === 0, "generic editing words are not treated as topics: " + [...goalTerms(profile).keys()]);
+});
