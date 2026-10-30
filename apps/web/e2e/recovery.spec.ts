@@ -23,7 +23,7 @@ async function editor(page:Page, screen='export', resume=false) {
     const req=route.request(), path=new URL(req.url()).pathname;
     const headers={'access-control-allow-origin':req.headers()['origin']??'http://127.0.0.1:5173','access-control-allow-credentials':'true','access-control-allow-methods':'GET, POST, OPTIONS','access-control-allow-headers':'authorization, content-type, range'};
     if(req.method()==='OPTIONS'){await route.fulfill({status:204,headers});return;}
-    if(path==='/stock.png'){await route.fulfill({status:200,headers,contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aCZkAAAAASUVORK5CYII=','base64')});return;}
+    if(path==='/stock.png'){await route.fulfill({status:200,headers,contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=','base64')});return;}
     if(path==='/export.mp4'||path==='/fixture.mp4'){
       const range=/^bytes=(\d+)-(\d*)$/.exec(req.headers()['range']??'');
       const start=range?Number(range[1]):0,end=range&&range[2]?Math.min(Number(range[2]),media.length-1):media.length-1;
