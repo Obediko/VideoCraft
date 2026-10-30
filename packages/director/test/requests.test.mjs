@@ -88,3 +88,10 @@ test("asking for a dissolve or push puts it between the parts", async () => {
   assert.deepEqual(ops.map((o) => o.transitionIn ?? "-"), ["dip-black", "dissolve", "dissolve"]);
   assert.equal((await new RuleDirector().ask({ ...input, instruction: "push transitions please" })).suggestions[0].transition, "push");
 });
+
+test('bracketed narration requested after the video becomes an outro suggestion', async () => {
+  const plan = await new RuleDirector().ask({ ...input, instruction: 'Add a voice-over after the video (Jesus truly saves)' });
+  const voice = plan.suggestions.find(s => s.kind === 'voiceover');
+  assert.equal(voice.text, 'Jesus truly saves');
+  assert.equal(voice.afterVideo, true);
+});

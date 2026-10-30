@@ -281,7 +281,11 @@ export class FfmpegCommandPlanner {
         const out = index === clips.length - 1 ? "[vcat]" : "[vj" + index + "]";
         const d = blendIn[index]!;
         if (d > 0) {
-          filters.push(joined + pictures[index] + "xfade=transition=" + XFADE_NAMES[String(clip.transform?.transitionIn)] + ":duration=" + d.toFixed(3) + ":offset=" + (joinedSeconds - d).toFixed(6) + ",setpts=PTS-STARTPTS" + out);
+          // concat emits AVTB while a direct clip commonly uses 1/fps. xfade
+          // requires identical timebases, including after a preceding hard cut.
+          filters.push(joined + "settb=AVTB,setpts=PTS-STARTPTS[blendLeft" + index + "]");
+          filters.push(pictures[index] + "settb=AVTB,setpts=PTS-STARTPTS[blendRight" + index + "]");
+          filters.push("[blendLeft" + index + "][blendRight" + index + "]xfade=transition=" + XFADE_NAMES[String(clip.transform?.transitionIn)] + ":duration=" + d.toFixed(3) + ":offset=" + (joinedSeconds - d).toFixed(6) + ",setpts=PTS-STARTPTS" + out);
           joinedSeconds += length - d;
         } else {
           filters.push(joined + pictures[index] + "concat=n=2:v=1:a=0" + out);

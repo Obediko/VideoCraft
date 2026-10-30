@@ -24,6 +24,7 @@ export function ruleRequests(instruction: string, ctx: RequestContext): Array<Re
   const out: Array<Record<string, unknown>> = [];
   const quoted = /["“”«»]([^"“”«»]{1,300})["“”«»]/.exec(original)?.[1]?.trim()
     ?? /['‘’]([^'‘’]{2,300})['‘’]/.exec(original)?.[1]?.trim();
+  const spoken = quoted ?? /\(([^()]{1,300})\)/.exec(original)?.[1]?.trim() ?? /\[([^\[\]]{1,300})\]/.exec(original)?.[1]?.trim();
   const said = quoted ?? /\b(?:saying|that says|which says|reading|with the words?|with the text|:)\s+(.{2,200}?)\s*(?:$|\b(?:at|on|in|for|near)\s+the\s+(?:start|beginning|end|top|bottom)\b)/i.exec(original)?.[1]?.trim();
   const first = ctx.pieces[0]; const last = ctx.pieces[ctx.pieces.length - 1];
   const inside = (s: number) => ctx.pieces.some((p) => s >= p.startS && s < p.endS);
@@ -99,7 +100,7 @@ export function ruleRequests(instruction: string, ctx: RequestContext): Array<Re
 
   // Voice-over from typed words.
   if (/\b(voice-?over|narrat(?:e|ion|or)|read (?:out|this)|say (?:this|it) for me)\b/.test(t) && !remove && !/\b(loud|quiet|volume|softer|lower)\b/.test(t)) {
-    if (quoted) push({ id: "voiceover", kind: "voiceover", title: "Voice-over: " + quoted.slice(0, 40), text: quoted.slice(0, 1500), atS: at(Math.max(2, quoted.split(/\s+/).length / 2.6)) });
+    if (spoken) push({ id: "voiceover", kind: "voiceover", title: "Voice-over: " + spoken.slice(0, 40), text: spoken.slice(0, 1500), atS: at(Math.max(2, spoken.split(/\s+/).length / 2.6)), afterVideo: /\bafter (?:the |this |my )?(?:video|clip|end|footage)\b|\bon an? (?:end|outro) card\b/.test(t) });
     else push({ id: "advice-voiceover", kind: "advice", title: "What should the voice-over say?", reason: "Put the words in quotes, e.g. add a voice-over \"Welcome to the course\". To use your own voice, record it in Audio → Voice-over." });
   }
   return out;

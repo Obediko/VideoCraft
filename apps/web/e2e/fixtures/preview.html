@@ -1,0 +1,8 @@
+<!doctype html><html><body><div id="root"></div><script type="module">
+import React from 'react';
+import {createRoot} from 'react-dom/client';
+import {LivePreview} from '../../src/LivePreview.tsx';
+const clip = {id:'main',assetId:'main',sourceStartUs:0,sourceEndUs:3000000,timelineStartUs:0,timelineEndUs:3000000,transform:location.search.includes('cutout')?{background:'blur'}:{}};
+const cutaway = {...clip,id:'cutaway',assetId:'cutaway',transform:{role:'broll',mode:'full'}};
+createRoot(document.getElementById('root')).render(React.createElement(LivePreview,{tracks:[{id:'v',kind:'video',clips:[clip]},{id:'o',kind:'overlay',clips:[cutaway]}],durationUs:3000000,urls:{main:'/main.webm',cutaway:'/cutaway.webm'},stills:{main:false,cutaway:false},shape:'wide',fit:'contain'}));
+</script></body></html>
