@@ -1,6 +1,16 @@
 import {test,expect, type Page} from '@playwright/test';
 import {execFileSync} from 'node:child_process';
-const media=execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','testsrc2=s=160x120:r=30:d=3','-c:v','libx264','-pix_fmt','yuv420p','-g','1','-movflags','frag_keyframe+empty_moov','-f','mp4','pipe:1']);
+import {mkdtempSync,readFileSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+// Serve the same seekable H.264/faststart MP4 format as real exports.
+const fixtureDir=mkdtempSync(join(tmpdir(),'videocraft-browser-'));
+let media:Buffer;
+try {
+  const path=join(fixtureDir,'export.mp4');
+  execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','testsrc2=s=160x120:r=30:d=3','-c:v','libx264','-pix_fmt','yuv420p','-g','1','-movflags','+faststart',path]);
+  media=readFileSync(path);
+} finally {rmSync(fixtureDir,{recursive:true,force:true});}
 
 async function editor(page:Page, screen='export', resume=false) {
   const state={revision:2,status:'queued',offline:false,calls:0,links:0,submissions:0,submissionKeys:[] as string[],loseNextSubmission:false,expired:false,uploadCalls:0,uploadExpired:false,uploadTypes:[] as string[]};
@@ -11,9 +21,13 @@ async function editor(page:Page, screen='export', resume=false) {
   },{screen,resume});
   await page.route('http://localhost:8080/**',async route=>{
     const req=route.request(), path=new URL(req.url()).pathname;
-    const headers={'access-control-allow-origin':req.headers()['origin']??'http://127.0.0.1:5173','access-control-allow-credentials':'true','access-control-allow-methods':'GET, POST, OPTIONS','access-control-allow-headers':'authorization, content-type'};
+    const headers={'access-control-allow-origin':req.headers()['origin']??'http://127.0.0.1:5173','access-control-allow-credentials':'true','access-control-allow-methods':'GET, POST, OPTIONS','access-control-allow-headers':'authorization, content-type, range'};
     if(req.method()==='OPTIONS'){await route.fulfill({status:204,headers});return;}
-    if(path==='/export.mp4'||path==='/fixture.mp4'){await route.fulfill({status:200,headers,contentType:'video/mp4',body:media});return;}
+    if(path==='/export.mp4'||path==='/fixture.mp4'){
+      const range=/^bytes=(\d+)-(\d*)$/.exec(req.headers()['range']??'');
+      const start=range?Number(range[1]):0,end=range&&range[2]?Math.min(Number(range[2]),media.length-1):media.length-1;
+      await route.fulfill({status:range?206:200,headers:{...headers,'accept-ranges':'bytes',...(range?{'content-range':`bytes ${start}-${end}/${media.length}`}:{})},contentType:'video/mp4',body:media.subarray(start,end+1)});return;
+    }
     let body:any={}; let status=200;
     if(state.expired){await route.fulfill({status:401,headers,contentType:'application/json',body:JSON.stringify({error:{message:'Session expired'}})});return;}
     if(path==='/auth/refresh')body={accessToken:'test',user:{email:'test@example.com'}};
@@ -100,7 +114,8 @@ test('renewing an expiring export link preserves the playback position',async({p
   const state=await editor(page,'export',true);state.status='succeeded';
   await page.goto('/');
   const player=page.locator('video').first();
-  await expect.poll(()=>player.evaluate((v:HTMLVideoElement)=>v.readyState)).toBeGreaterThan(0);
+  await expect.poll(()=>player.evaluate((v:HTMLVideoElement)=>v.readyState)).toBeGreaterThanOrEqual(3);
+  await expect.poll(()=>player.evaluate((v:HTMLVideoElement)=>v.seekable.length?v.seekable.end(v.seekable.length-1):0)).toBeGreaterThan(1);
   await player.evaluate((v:HTMLVideoElement)=>new Promise<void>(resolve=>{v.pause();v.addEventListener('seeked',()=>resolve(),{once:true});v.currentTime=1;}));
   await expect.poll(()=>player.evaluate((v:HTMLVideoElement)=>v.currentTime)).toBeCloseTo(1,1);
   await page.clock.fastForward(241_000);
