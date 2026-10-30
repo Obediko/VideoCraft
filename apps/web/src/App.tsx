@@ -363,8 +363,8 @@ export function App() {
     const response = await fetch(API + path, {
       ...init,
       credentials: "include",
-      signal: init.signal ?? AbortSignal.timeout(path.includes("/transcript") ? 20 * 60_000 : (!init.method || init.method === "GET") ? 30_000 : 3 * 60_000),
-      headers: { ...(init.body ? { "content-type": "application/json" } : {}), ...(accessToken ? { authorization: "Bearer " + accessToken } : {}), ...init.headers },
+      signal: init.signal ?? AbortSignal.timeout((path.includes("/transcript") || init.body instanceof FormData) ? 20 * 60_000 : (!init.method || init.method === "GET") ? 30_000 : 3 * 60_000),
+      headers: { ...(init.body && !(init.body instanceof FormData) ? { "content-type": "application/json" } : {}), ...(accessToken ? { authorization: "Bearer " + accessToken } : {}), ...init.headers },
     });
     if (response.status === 401 && accessToken && !retried && !path.startsWith("/auth/")) {
       // The 15-minute access token expired: rotate the refresh session once and retry.
@@ -398,6 +398,11 @@ export function App() {
 
   useEffect(() => {
     const before = previousRevision.current;
+    if (revision > 0 && before > 0 && revision !== before) {
+      // Every edit path invalidates the old export, including Director and highlight edits.
+      renderGeneration.current += 1; setRenderPolling(false);
+      setRenderJobId(""); setRenderUrl(""); setRenderJobStatus("");
+    }
     if (revision > 0 && before > 0 && revision !== before && !restoring.current) {
       setUndoHistory((history) => [...history, before].slice(-50)); setRedoHistory([]);
     }
@@ -561,9 +566,7 @@ export function App() {
     setStatus("Uploading " + file.name + "…");
     try {
       const form = new FormData(); form.append("file", file);
-      const response = await fetch(API + "/v1/projects/" + projectId + "/assets/upload?kind=" + encodeURIComponent(kind), { method: "POST", body: form, headers: token ? { authorization: "Bearer " + token } : {} });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(body.error?.message ?? "Upload failed");
+      const body = await request("/v1/projects/" + projectId + "/assets/upload?kind=" + encodeURIComponent(kind), { method: "POST", body: form });
       setAssets((current) => [...current.filter((asset) => asset.id !== body.asset.id), body.asset]);
       setStatus("Uploaded " + file.name);
       if (purpose === "main") void startTranscription(body.asset.id);

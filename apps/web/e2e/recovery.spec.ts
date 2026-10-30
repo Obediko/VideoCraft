@@ -3,7 +3,7 @@ import {execFileSync} from 'node:child_process';
 const media=execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','testsrc2=s=160x120:r=10:d=3','-c:v','libvpx','-f','webm','pipe:1']);
 
 async function editor(page:Page, screen='export', resume=false) {
-  const state={revision:2,status:'queued',offline:false,calls:0,links:0,submissions:0,submissionKeys:[] as string[],loseNextSubmission:false,expired:false};
+  const state={revision:2,status:'queued',offline:false,calls:0,links:0,submissions:0,submissionKeys:[] as string[],loseNextSubmission:false,expired:false,uploadCalls:0,uploadExpired:false,uploadTypes:[] as string[]};
   const timeline=(seconds:number)=>({durationUs:seconds*1e6,tracks:[{id:'v',kind:'video',clips:[{id:'c',assetId:'a',sourceStartUs:0,sourceEndUs:seconds*1e6,timelineStartUs:0,timelineEndUs:seconds*1e6}]}]});
   await page.addInitScript(({screen,resume})=>{
     localStorage.setItem('videocraft.lastProject','p');localStorage.setItem('videocraft.lastScreen',screen);
@@ -19,6 +19,7 @@ async function editor(page:Page, screen='export', resume=false) {
     if(state.expired){await route.fulfill({status:401,headers,contentType:'application/json',body:JSON.stringify({error:{message:'Session expired'}})});return;}
     if(path==='/auth/refresh')body={accessToken:'test',user:{email:'test@example.com'}};
     else if(path==='/v1/projects')body={projects:[{id:'p',name:'Recovery test',revision:state.revision,createdAt:'2026-01-01',updatedAt:'2026-01-01'}]};
+    else if(path.endsWith('/assets/upload')){state.uploadCalls++;state.uploadTypes.push(req.headers()['content-type']??'');if(state.uploadExpired&&state.uploadCalls===1){status=401;body={error:{message:'Access expired'}};}else body={asset:{id:'photo',kind:'image',metadata:{filename:'photo.png'}}};}
     else if(path.endsWith('/assets'))body={assets:[{id:'a',kind:'video',durationUs:2e6,metadata:{filename:'Test.mp4',width:640,height:360}}]};
     else if(path.endsWith('/playback-url'))body={url:'/fixture.webm',expires:Math.floor(Date.now()/1000)+3600};
     else if(path.endsWith('/faces'))body={step:1,boxes:[]};
@@ -115,4 +116,16 @@ test('an expired refresh session returns to sign-in and clears the editing works
   await page.getByRole('button',{name:'Undo',exact:true}).click();
   await expect(page.getByRole('heading',{name:'Sign in',exact:true})).toBeVisible();
   await expect(page.locator('.project-title')).toHaveCount(0);
+});
+
+
+test('an upload refreshes an expired access token and preserves multipart boundaries',async({page})=>{
+  const state=await editor(page,'edit');state.uploadExpired=true;
+  await page.goto('/');
+  await page.getByRole('button',{name:'Cutaway here',exact:true}).click();
+  await page.getByLabel('Upload a photo or clip',{exact:true}).setInputFiles({name:'photo.png',mimeType:'image/png',buffer:Buffer.from('test upload')});
+  await expect.poll(()=>state.uploadCalls).toBe(2);
+  expect(state.uploadTypes).toHaveLength(2);
+  for(const type of state.uploadTypes)expect(type).toMatch(/^multipart\/form-data; boundary=/);
+  await expect(page.getByText('Uploaded photo.png',{exact:true})).toBeVisible();
 });
