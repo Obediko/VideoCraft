@@ -245,12 +245,14 @@ export class FfmpegCommandPlanner {
         // The matte is framed exactly like the picture (same fit, frame rate and zoom), then used as its alpha.
         const zoom = clipZoom(clip, width, height, length);
         const kind = String(clip.transform?.background ?? "none");
-        filters.push("[" + index + ":v]setpts=PTS-STARTPTS," + fits[index] + ",fps=" + fps + zoom + ",setsar=1,format=yuv420p,split=2[fg" + index + "][src" + index + "]");
-        filters.push("[" + matteIndex + ":v]setpts=PTS-STARTPTS," + fits[index] + ",fps=" + fps + zoom + ",setsar=1,format=gray" + (anyBehind ? ",split=2[ma" + index + "][mw" + index + "]" : "[ma" + index + "]"));
+        // Unused split outputs must not feed nullsink: it drains future clips
+        // immediately and queues their scaled frames on the still-needed sibling.
+        const hasBackground = kind === "blur" || kind === "color" || (kind === "media" && Boolean(backgroundInputs[index]));
+        filters.push("[" + index + ":v]setpts=PTS-STARTPTS," + fits[index] + ",fps=" + fps + zoom + ",setsar=1,format=yuv420p" + (kind === "blur" ? ",split=2[fg" + index + "][src" + index + "]" : "[fg" + index + "]"));
+        if (anyBehind || hasBackground) filters.push("[" + matteIndex + ":v]setpts=PTS-STARTPTS," + fits[index] + ",fps=" + fps + zoom + ",setsar=1,format=gray" + (anyBehind && hasBackground ? ",split=2[ma" + index + "][mw" + index + "]" : anyBehind ? "[mw" + index + "]" : "[ma" + index + "]"));
         let base: string | undefined;
         if (kind === "blur") { filters.push("[src" + index + "]boxblur=luma_radius=" + Math.max(8, Math.round(Math.min(width, height) / 40)) + ":luma_power=2[bg" + index + "]"); base = "[bg" + index + "]"; }
         else {
-          filters.push("[src" + index + "]nullsink");
           if (kind === "color") { filters.push("color=c=0x" + hexColour(clip.transform?.backgroundColor) + ":s=" + width + "x" + height + ":r=" + fps + ":d=" + length.toFixed(6) + ",format=yuv420p,setsar=1[bg" + index + "]"); base = "[bg" + index + "]"; }
           else if (kind === "media" && backgroundInputs[index]) {
             filters.push("[" + backgroundInputs[index]!.index + ":v]setpts=PTS-STARTPTS,scale=" + width + ":" + height + ":force_original_aspect_ratio=increase,crop=" + width + ":" + height + ",fps=" + fps + ",trim=duration=" + length.toFixed(6) + ",setsar=1,format=yuv420p[bg" + index + "]");
@@ -263,7 +265,6 @@ export class FfmpegCommandPlanner {
           filters.push(base + "[cut" + index + "]overlay=format=auto:shortest=1" + finish + ",setsar=1,format=yuv420p[v" + index + "]");
         } else {
           // No background change on this clip (the matte is only for a cutaway behind the person).
-          filters.push("[ma" + index + "]nullsink");
           filters.push("[fg" + index + "]null" + finish + ",setsar=1,format=yuv420p[v" + index + "]");
         }
       }
@@ -297,7 +298,7 @@ export class FfmpegCommandPlanner {
           // requires identical timebases, including after a preceding hard cut.
           filters.push(joined + "settb=AVTB,setpts=PTS-STARTPTS[blendLeft" + index + "]");
           filters.push(pictures[index] + "settb=AVTB,setpts=PTS-STARTPTS[blendRight" + index + "]");
-          filters.push("[blendLeft" + index + "][blendRight" + index + "]xfade=transition=" + XFADE_NAMES[String(clip.transform?.transitionIn)] + ":duration=" + d.toFixed(3) + ":offset=" + (joinedSeconds - d).toFixed(6) + ",setpts=PTS-STARTPTS" + out);
+          filters.push("[blendLeft" + index + "][blendRight" + index + "]xfade=transition=" + XFADE_NAMES[String(clip.transform?.transitionIn)] + ":duration=" + d.toFixed(3) + ":offset=" + (joinedSeconds - d).toFixed(6) + ",format=yuv420p,setpts=PTS-STARTPTS" + out);
           joinedSeconds += length - d;
         } else {
           filters.push(joined + pictures[index] + "concat=n=2:v=1:a=0" + out);
@@ -311,7 +312,7 @@ export class FfmpegCommandPlanner {
       filters.push(...matteConcat);
       filters.push(clips.map((_, index) => "[mw" + index + "]").join("") + "concat=n=" + clips.length + ":v=1:a=0[mcat]");
       // The person, cut out of the finished picture, goes back on top of cutaways placed behind them.
-      filters.push("[vcat]split=2[vbase][vperson]", "[vperson][mcat]alphamerge[person]");
+      filters.push("[vcat]format=yuv420p,split=2[vbase][vperson]", "[vperson][mcat]alphamerge,format=yuva420p[person]");
     }
 
     const style = resolveCaptionStyle(settings.captionStyle);
@@ -338,7 +339,7 @@ export class FfmpegCommandPlanner {
     });
     if (anyBehind) {
       const windows = brolls.map((broll, index) => (behind[index] ? "between(t," + (broll.timelineStartUs / 1_000_000).toFixed(6) + "," + (broll.timelineEndUs / 1_000_000).toFixed(6) + ")" : "")).filter(Boolean);
-      filters.push(videoLabel + "[person]overlay=format=auto:enable='" + windows.join("+") + "'[behind]");
+      filters.push(videoLabel + "[person]overlay=format=yuv420:enable='" + windows.join("+") + "'[behind]");
       videoLabel = "[behind]";
     }
     // Motion graphics (title cards, callouts, lower thirds, progress bar): above b-roll, beneath captions.
