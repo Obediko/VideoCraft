@@ -13,7 +13,7 @@ try {
 } finally {rmSync(fixtureDir,{recursive:true,force:true});}
 
 async function editor(page:Page, screen='export', resume=false) {
-  const state={revision:2,status:'queued',offline:false,calls:0,links:0,submissions:0,submissionKeys:[] as string[],loseNextSubmission:false,expired:false,uploadCalls:0,uploadExpired:false,uploadTypes:[] as string[],withTranscript:false,planApplied:false,assetLists:0};
+  const state={revision:2,status:'queued',offline:false,calls:0,links:0,submissions:0,submissionKeys:[] as string[],loseNextSubmission:false,expired:false,uploadCalls:0,uploadExpired:false,uploadTypes:[] as string[],withTranscript:false,planApplied:false,assetLists:0,mediaFails:false,linkFails:false,mediaRequests:0,playbackRequests:0};
   const timeline=(seconds:number):any=>({durationUs:seconds*1e6,tracks:[{id:'v',kind:'video',clips:[{id:'c',assetId:'a',sourceStartUs:0,sourceEndUs:seconds*1e6,timelineStartUs:0,timelineEndUs:seconds*1e6}]}]});
   await page.addInitScript(({screen,resume})=>{
     localStorage.setItem('videocraft.lastProject','p');localStorage.setItem('videocraft.lastScreen',screen);
@@ -25,6 +25,7 @@ async function editor(page:Page, screen='export', resume=false) {
     if(req.method()==='OPTIONS'){await route.fulfill({status:204,headers});return;}
     if(path==='/stock.png'){await route.fulfill({status:200,headers,contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=','base64')});return;}
     if(path==='/export.mp4'||path==='/fixture.mp4'){
+      if(path==='/fixture.mp4'){state.mediaRequests++;if(state.mediaFails){await route.fulfill({status:503,headers:{...headers,'cache-control':'no-store'},body:'Temporary media failure'});return;}}
       const range=/^bytes=(\d+)-(\d*)$/.exec(req.headers()['range']??'');
       const start=range?Number(range[1]):0,end=range&&range[2]?Math.min(Number(range[2]),media.length-1):media.length-1;
       await route.fulfill({status:range?206:200,headers:{...headers,'accept-ranges':'bytes',...(range?{'content-range':`bytes ${start}-${end}/${media.length}`}:{})},contentType:'video/mp4',body:media.subarray(start,end+1)});return;
@@ -35,7 +36,7 @@ async function editor(page:Page, screen='export', resume=false) {
     else if(path==='/v1/projects')body={projects:[{id:'p',name:'Recovery test',revision:state.revision,createdAt:'2026-01-01',updatedAt:'2026-01-01'}]};
     else if(path.endsWith('/assets/upload')){state.uploadCalls++;state.uploadTypes.push(req.headers()['content-type']??'');if(state.uploadExpired&&state.uploadCalls===1){status=401;body={error:{message:'Access expired'}};}else body={asset:{id:'photo',kind:'image',metadata:{filename:'photo.png'}}};}
     else if(path.endsWith('/assets')){state.assetLists++;body={assets:[{id:'a',kind:'video',durationUs:2e6,metadata:{filename:'Test.mp4',width:640,height:360}},...(state.planApplied?[{id:'stock-photo',kind:'image',metadata:{filename:'Approved.png',width:1,height:1}}]:[])]};}
-    else if(path.endsWith('/playback-url'))body={url:path.includes('/stock-photo/')?'/stock.png':'/fixture.mp4',expires:Math.floor(Date.now()/1000)+3600};
+    else if(path.endsWith('/playback-url')){state.playbackRequests++;if(state.linkFails){status=503;body={error:{message:'Temporary link failure'}};}else body={url:path.includes('/stock-photo/')?'/stock.png':'/fixture.mp4',expires:Math.floor(Date.now()/1000)+3600};}
     else if(path.endsWith('/faces'))body={step:1,boxes:[]};
     else if(path.endsWith('/transcript'))body={segments:state.withTranscript?[{id:'s',startUs:0,endUs:1e6,text:'Hello',words:[{text:'Hello',startUs:0,endUs:1e6,confidence:1}]}]:[]};
     else if(path.endsWith('/director/plan'))body={plan:{source:'ai',summary:'Add the approved picture without music',suggestions:[{id:'stock',kind:'stock',title:'Approved picture',query:'freedom',atS:0,durationS:1,mode:'full'}]}};
@@ -160,4 +161,35 @@ test('applying a Director plan without music loads the approved photo into the p
   await expect(page.locator('img.live-broll')).toHaveCount(1);
   await expect(page.locator('img.live-broll')).toHaveJSProperty('naturalWidth',1);
   await expect(page.locator('video.live-broll')).toHaveCount(0);
+});
+
+
+test('reload footage recovers a failed media element even when its renewed URL is identical',async({page})=>{
+  const state=await editor(page,'edit');state.mediaFails=true;
+  await page.goto('/');
+  await expect(page.getByRole('alert')).toContainText('The footage could not be loaded');
+  const player=page.locator('video.live-video');
+  const slider=page.getByRole('slider',{name:'Position in the edit'});
+  await slider.press('ArrowRight');
+  const wanted=Number(await slider.inputValue())/1e6;
+  const requests=state.mediaRequests;
+  state.mediaFails=false;
+  await page.getByRole('button',{name:'Reload footage',exact:true}).click();
+  await expect.poll(()=>state.playbackRequests).toBeGreaterThanOrEqual(2);
+  await expect.poll(()=>state.mediaRequests).toBeGreaterThan(requests);
+  await expect.poll(()=>player.evaluate((v:HTMLVideoElement)=>v.readyState)).toBeGreaterThanOrEqual(2);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await expect.poll(()=>player.evaluate((v:HTMLVideoElement)=>Math.abs(v.currentTime-wanted))).toBeLessThan(0.15);
+  await page.getByRole('button',{name:'Play the edit',exact:true}).click();
+  await expect.poll(()=>player.evaluate((v:HTMLVideoElement)=>v.currentTime)).toBeGreaterThan(wanted+0.05);
+});
+
+test('a failed preview-link request is visible and can be retried',async({page})=>{
+  const state=await editor(page,'edit');state.linkFails=true;
+  await page.goto('/');
+  await expect(page.getByRole('alert')).toContainText('The preview link could not be loaded');
+  state.linkFails=false;
+  await page.getByRole('button',{name:'Reload footage',exact:true}).click();
+  await expect.poll(()=>page.locator('video.live-video').evaluate((v:HTMLVideoElement)=>v.readyState)).toBeGreaterThanOrEqual(2);
+  await expect(page.getByRole('alert')).toHaveCount(0);
 });

@@ -124,6 +124,7 @@ export function App() {
   const lastLiveReport = useRef(0);
   const [liveUs, setLiveUs] = useState(0);
   const [sourceUrls, setSourceUrls] = useState<Record<string, string>>({});
+  const [sourceErrors, setSourceErrors] = useState<Record<string, string>>({});
   const playerRef = useRef<HTMLVideoElement | null>(null);
   const [sourceRetry, setSourceRetry] = useState(0);
   const [faceTracks, setFaceTracks] = useState<Record<string, FaceTrack>>({});
@@ -210,12 +211,13 @@ export function App() {
       request("/v1/projects/" + projectId + "/assets/" + id + "/playback-url")
         .then((result) => {
           if (cancelled) return;
+          setSourceErrors((current) => { const next = { ...current }; delete next[id]; return next; });
           // Formats browsers cannot play get a preview proxy; it is generated after upload.
           if (result.pending) { if (id === sourceAssetId) setSourceNote("Preparing a browser preview of this video…"); timer = setTimeout(() => setSourceRetry((n) => n + 1), (result.retryAfterSeconds ?? 5) * 1000); return; }
           if (id === sourceAssetId) setSourceNote(result.proxy ? "Previewing a 720p copy; exports use the original" : "");
           setSourceUrls((current) => ({ ...current, [id]: /^https?:\/\//.test(result.url) ? result.url : API + result.url }));
         })
-        .catch(() => undefined);
+        .catch((error) => { if (!cancelled) setSourceErrors((current) => ({ ...current, [id]: "The preview link could not be loaded. " + errorMessage(error) })); });
     }
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, [token, projectId, neededAssets.join(","), sourceRetry]);
@@ -472,6 +474,7 @@ export function App() {
   }
 
   function resetProjectState() {
+    setSourceErrors({});
     renderGeneration.current += 1; setRenderPolling(false);
     previousRevision.current = 0; restoring.current = false; setUndoHistory([]); setRedoHistory([]);
     setExportHistory([]); setExportHistoryError("");
@@ -989,7 +992,7 @@ export function App() {
 
   const player = <div className="player">
     <div className="preview-tabs" role="tablist"><button role="tab" aria-selected={previewMode === "edit"} className={previewMode === "edit" ? "on" : ""} onClick={() => setPreviewMode("edit")} disabled={videoClips.length === 0}>Edit</button><button role="tab" aria-selected={previewMode === "source"} className={previewMode === "source" ? "on" : ""} onClick={() => setPreviewMode("source")}>Original</button><button role="tab" aria-selected={previewMode === "render"} className={previewMode === "render" ? "on" : ""} onClick={() => setPreviewMode("render")}>Export</button></div>
-    {previewMode === "edit" && videoClips.length > 0 ? <LivePreview ref={liveRef} tracks={timeline.tracks} durationUs={timeline.durationUs} urls={sourceUrls} shape={(PLATFORMS[platform]?.width ?? 9) < (PLATFORMS[platform]?.height ?? 16) ? "tall" : PLATFORMS[platform]?.width === PLATFORMS[platform]?.height ? "square" : "wide"} fit={PLATFORMS[platform]?.fit ?? "cover"} output={{ width: PLATFORMS[platform]?.width ?? 1080, height: PLATFORMS[platform]?.height ?? 1920 }} captionStyle={PLATFORMS[platform]?.captionStyle ?? "bold-pop"} faces={faceTracks} sizes={assetSizes} mattes={matteUrls} stills={stillAssets} onRetryMedia={() => { setSourceUrls({}); setSourceRetry((n) => n + 1); }} onRetryMatte={() => { setMatteUrls({}); setMatteRetry((n) => n + 1); }} onTime={onLiveTime} />
+    {previewMode === "edit" && videoClips.length > 0 ? <LivePreview ref={liveRef} tracks={timeline.tracks} durationUs={timeline.durationUs} urls={sourceUrls} shape={(PLATFORMS[platform]?.width ?? 9) < (PLATFORMS[platform]?.height ?? 16) ? "tall" : PLATFORMS[platform]?.width === PLATFORMS[platform]?.height ? "square" : "wide"} fit={PLATFORMS[platform]?.fit ?? "cover"} output={{ width: PLATFORMS[platform]?.width ?? 1080, height: PLATFORMS[platform]?.height ?? 1920 }} captionStyle={PLATFORMS[platform]?.captionStyle ?? "bold-pop"} faces={faceTracks} sizes={assetSizes} mattes={matteUrls} stills={stillAssets} mediaErrors={sourceErrors} onRetryMedia={() => { setSourceErrors({}); setSourceUrls({}); setSourceRetry((n) => n + 1); }} onRetryMatte={() => { setMatteUrls({}); setMatteRetry((n) => n + 1); }} onTime={onLiveTime} />
     : <div className={"preview-screen " + ((PLATFORMS[platform]?.width ?? 9) < (PLATFORMS[platform]?.height ?? 16) ? "tall" : "wide")}>{previewMode === "render" ? (renderUrl ? <video ref={exportPlayer} controls playsInline onLoadedMetadata={(event) => {
       const player = event.currentTarget, saved = exportPosition.current;
       if (saved.time > 0 && saved.time < player.duration) player.currentTime = saved.time;
