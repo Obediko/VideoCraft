@@ -13,21 +13,29 @@ export const LOOK_CSS: Record<string, string> = {
 };
 const DIP: Record<string, number> = { "dip-black": 250_000, "dip-white": 250_000, flash: 120_000 };
 
-/** Opacity and colour of the transition veil at a time in the edit. */
+/**
+ * Opacity and colour of the transition veil at a time in the edit, worked out exactly like the export
+ * (packages/rendering clipFinish): each clip fades in from its own transition and out to its explicit ending,
+ * or to the next clip's dip; a fade lasts at most a third of the clip; a flash only fades in, from white.
+ */
 export function veilAt(clips: Clip[], tUs: number, durationUs: number): { opacity: number; color: string } {
+  const i = clips.findIndex((c) => tUs >= c.timelineStartUs && tUs < c.timelineEndUs);
+  const clip = clips[i] ?? (tUs >= durationUs ? clips[clips.length - 1] : undefined);
+  if (!clip) return { opacity: 0, color: "#000" };
+  const index = i >= 0 ? i : clips.length - 1;
+  const lengthUs = Math.max(1, clip.timelineEndUs - clip.timelineStartUs);
+  const incoming = String(clip.transform?.transitionIn ?? "cut");
+  const nextIn = String(clips[index + 1]?.transform?.transitionIn ?? "cut");
+  const explicitOut = String(clip.transform?.transitionOut ?? "cut");
+  const outgoing = explicitOut !== "cut" ? explicitOut : nextIn === "dip-black" || nextIn === "dip-white" ? nextIn : "cut";
+  const colour = (kind: string) => (kind === "dip-black" ? "#000" : "#fff");
   let best = { opacity: 0, color: "#000" };
-  const consider = (opacity: number, color: string) => { if (opacity > best.opacity) best = { opacity: Math.min(1, opacity), color }; };
-  clips.forEach((clip, i) => {
-    const kind = String(clip.transform?.transitionIn ?? "cut");
-    const d = DIP[kind];
-    if (d) {
-      const b = clip.timelineStartUs; const color = kind === "dip-black" ? "#000" : "#fff";
-      if (kind === "flash") { if (tUs >= b && tUs < b + d) consider(1 - (tUs - b) / d, color); }
-      else if (Math.abs(tUs - b) < d && (i > 0 || tUs >= b)) consider(1 - Math.abs(tUs - b) / d, color);
-    }
-    const out = String(clip.transform?.transitionOut ?? "cut");
-    if (i === clips.length - 1 && DIP[out] && out !== "flash") { const end = Math.min(durationUs, clip.timelineEndUs); const d2 = DIP[out]!; if (tUs > end - d2) consider(1 - (end - tUs) / d2, out === "dip-black" ? "#000" : "#fff"); }
-  });
+  const inUs = DIP[incoming] ? Math.min(DIP[incoming]!, lengthUs / 3) : 0;
+  const into = tUs - clip.timelineStartUs;
+  if (inUs && into < inUs) best = { opacity: Math.max(0, 1 - into / inUs), color: colour(incoming) };
+  const outUs = DIP[outgoing] ? Math.min(DIP[outgoing]!, lengthUs / 3) : 0;
+  const left = Math.min(clip.timelineEndUs, Math.max(durationUs, clip.timelineEndUs)) - tUs;
+  if (outUs && left <= outUs) { const opacity = Math.min(1, Math.max(0, 1 - left / outUs)); if (opacity > best.opacity) best = { opacity, color: colour(outgoing) }; }
   return best;
 }
 
