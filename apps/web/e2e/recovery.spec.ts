@@ -1,6 +1,6 @@
 import {test,expect, type Page} from '@playwright/test';
 import {execFileSync} from 'node:child_process';
-const media=execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','testsrc2=s=160x120:r=10:d=3','-c:v','libvpx','-f','webm','pipe:1']);
+const media=execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','testsrc2=s=160x120:r=30:d=3','-c:v','libx264','-pix_fmt','yuv420p','-g','1','-movflags','frag_keyframe+empty_moov','-f','mp4','pipe:1']);
 
 async function editor(page:Page, screen='export', resume=false) {
   const state={revision:2,status:'queued',offline:false,calls:0,links:0,submissions:0,submissionKeys:[] as string[],loseNextSubmission:false,expired:false,uploadCalls:0,uploadExpired:false,uploadTypes:[] as string[]};
@@ -13,14 +13,14 @@ async function editor(page:Page, screen='export', resume=false) {
     const req=route.request(), path=new URL(req.url()).pathname;
     const headers={'access-control-allow-origin':req.headers()['origin']??'http://127.0.0.1:5173','access-control-allow-credentials':'true','access-control-allow-methods':'GET, POST, OPTIONS','access-control-allow-headers':'authorization, content-type'};
     if(req.method()==='OPTIONS'){await route.fulfill({status:204,headers});return;}
-    if(path==='/export.mp4'||path==='/fixture.webm'){await route.fulfill({status:200,headers,contentType:'video/webm',body:media});return;}
+    if(path==='/export.mp4'||path==='/fixture.mp4'){await route.fulfill({status:200,headers,contentType:'video/mp4',body:media});return;}
     let body:any={}; let status=200;
     if(state.expired){await route.fulfill({status:401,headers,contentType:'application/json',body:JSON.stringify({error:{message:'Session expired'}})});return;}
     if(path==='/auth/refresh')body={accessToken:'test',user:{email:'test@example.com'}};
     else if(path==='/v1/projects')body={projects:[{id:'p',name:'Recovery test',revision:state.revision,createdAt:'2026-01-01',updatedAt:'2026-01-01'}]};
     else if(path.endsWith('/assets/upload')){state.uploadCalls++;state.uploadTypes.push(req.headers()['content-type']??'');if(state.uploadExpired&&state.uploadCalls===1){status=401;body={error:{message:'Access expired'}};}else body={asset:{id:'photo',kind:'image',metadata:{filename:'photo.png'}}};}
     else if(path.endsWith('/assets'))body={assets:[{id:'a',kind:'video',durationUs:2e6,metadata:{filename:'Test.mp4',width:640,height:360}}]};
-    else if(path.endsWith('/playback-url'))body={url:'/fixture.webm',expires:Math.floor(Date.now()/1000)+3600};
+    else if(path.endsWith('/playback-url'))body={url:'/fixture.mp4',expires:Math.floor(Date.now()/1000)+3600};
     else if(path.endsWith('/faces'))body={step:1,boxes:[]};
     else if(path.endsWith('/transcript'))body={segments:[]};
     else if(/\/revisions\/\d+\/restore$/.test(path)) {
@@ -37,6 +37,7 @@ async function editor(page:Page, screen='export', resume=false) {
       state.status='queued';body={job:{id:'job',status:'queued',progress:0}};
     }
     else if(path.endsWith('/cancel')){state.status='cancelled';body={job:{id:'job',status:'cancelled',progress:5}};}
+    else if(path.endsWith('/stock/sources'))body={video:[],photo:[],gif:[]};
     else if(path.endsWith('/preferences'))body={samples:0,summary:'',counts:{}};
     await route.fulfill({status,headers,contentType:'application/json',body:JSON.stringify(body)});
   });
@@ -100,7 +101,8 @@ test('renewing an expiring export link preserves the playback position',async({p
   await page.goto('/');
   const player=page.locator('video').first();
   await expect.poll(()=>player.evaluate((v:HTMLVideoElement)=>v.readyState)).toBeGreaterThan(0);
-  await player.evaluate((v:HTMLVideoElement)=>{v.pause();v.currentTime=1;});
+  await player.evaluate((v:HTMLVideoElement)=>new Promise<void>(resolve=>{v.pause();v.addEventListener('seeked',()=>resolve(),{once:true});v.currentTime=1;}));
+  await expect.poll(()=>player.evaluate((v:HTMLVideoElement)=>v.currentTime)).toBeCloseTo(1,1);
   await page.clock.fastForward(241_000);
   await expect.poll(()=>state.links).toBe(2);
   await expect.poll(()=>player.evaluate((v:HTMLVideoElement)=>v.currentTime)).toBeCloseTo(1,1);
