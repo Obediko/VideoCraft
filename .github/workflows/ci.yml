@@ -70,9 +70,14 @@ jobs:
           sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core
           python -m pip install "opencv-python-headless>=4.8,<5" scikit-image numpy
       - run: npm install
+      - name: Build production FFmpeg memory-test runtime
+        run: |
+          docker build --pull -t videocraft-render-memory:ci -f test/render-memory.Dockerfile .
+          docker run --rm --network none videocraft-render-memory:ci ffmpeg -version
       - name: Build, test and typecheck
         env:
           REFRAME_PYTHON: python
+          VIDEOCRAFT_RENDER_MEMORY_IMAGE: videocraft-render-memory:ci
         run: |
           set -o pipefail
           npm run check 2>&1 | tee check.log

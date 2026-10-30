@@ -402,7 +402,15 @@ test(`real ffmpeg: eight 1080p portrait clips with speech, music, a ${cutawayMod
     const plan = await new FfmpegCommandPlanner({ resolve: async () => source, hasAudio: async () => true, ...(cutawayMode === 'behind' ? { matte: async () => source } : {}) }).plan(revision(pieces, [{ id:'audio',kind:'audio',clips:[{ ...clip('bed',0,40_000_000,0),assetId:'music',transform:{role:'music',volumeDb:-18,duck:true} }] }, { id:'overlays',kind:'overlay',clips:[{ ...clip('cutaway',0,4_000_000,12_000_000),assetId:'broll',transform:{role:'broll',mode:cutawayMode} }] }]), { ...settings, width: 1080, height: 1920 }, out);
     // A separate Python process measures just this FFmpeg child's real peak RSS;
     // Node's cumulative child usage and /proc RSS in virtualized runners are unsuitable.
-    const measurement = JSON.parse(execFileSync('python3', ['-c', 'import json,resource,subprocess,sys; subprocess.run(["ffmpeg"]+json.loads(sys.argv[1]),check=True,stdout=subprocess.DEVNULL); print(json.dumps({"peakKiB":resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss}))', JSON.stringify(plan.args)], { timeout: 150_000 }).toString());
+    const measure = 'import json,resource,subprocess,sys; subprocess.run(["ffmpeg"]+json.loads(sys.argv[1]),check=True,stdout=subprocess.DEVNULL); print(json.dumps({"peakKiB":resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss}))';
+    const image = process.env.VIDEOCRAFT_RENDER_MEMORY_IMAGE;
+    // CI's host FFmpeg differs from production. Exercise the worker's Debian
+    // runtime under its actual CPU/memory cap; retain the stricter 1 GiB RSS gate.
+    const command = image ? 'docker' : 'python3';
+    const args = image
+      ? ['run','--rm','--network','none','--memory','1536m','--memory-swap','1536m','--cpus','2','--user',`${process.getuid()}:${process.getgid()}`,'--volume',`${dir}:${dir}`,image,'python3','-c',measure,JSON.stringify(plan.args)]
+      : ['-c',measure,JSON.stringify(plan.args)];
+    const measurement = JSON.parse(execFileSync(command,args,{timeout:150_000}).toString());
     t.diagnostic(`FFmpeg peak RSS: ${(measurement.peakKiB/1024).toFixed(0)} MiB`);
     assert.ok(measurement.peakKiB < 1024*1024, `FFmpeg used ${(measurement.peakKiB/1024).toFixed(0)} MiB; leave headroom within the 1536 MiB worker`);
     const streams = JSON.parse(execFileSync('ffprobe', ['-v','error','-show_streams','-show_format','-of','json',out]).toString());
