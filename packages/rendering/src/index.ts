@@ -245,12 +245,14 @@ export class FfmpegCommandPlanner {
         // The matte is framed exactly like the picture (same fit, frame rate and zoom), then used as its alpha.
         const zoom = clipZoom(clip, width, height, length);
         const kind = String(clip.transform?.background ?? "none");
-        filters.push("[" + index + ":v]setpts=PTS-STARTPTS," + fits[index] + ",fps=" + fps + zoom + ",setsar=1,format=yuv420p,split=2[fg" + index + "][src" + index + "]");
-        filters.push("[" + matteIndex + ":v]setpts=PTS-STARTPTS," + fits[index] + ",fps=" + fps + zoom + ",setsar=1,format=gray" + (anyBehind ? ",split=2[ma" + index + "][mw" + index + "]" : "[ma" + index + "]"));
+        // Unused split outputs must not feed nullsink: it drains future clips
+        // immediately and queues their scaled frames on the still-needed sibling.
+        const hasBackground = kind === "blur" || kind === "color" || (kind === "media" && Boolean(backgroundInputs[index]));
+        filters.push("[" + index + ":v]setpts=PTS-STARTPTS," + fits[index] + ",fps=" + fps + zoom + ",setsar=1,format=yuv420p" + (kind === "blur" ? ",split=2[fg" + index + "][src" + index + "]" : "[fg" + index + "]"));
+        if (anyBehind || hasBackground) filters.push("[" + matteIndex + ":v]setpts=PTS-STARTPTS," + fits[index] + ",fps=" + fps + zoom + ",setsar=1,format=gray" + (anyBehind && hasBackground ? ",split=2[ma" + index + "][mw" + index + "]" : anyBehind ? "[mw" + index + "]" : "[ma" + index + "]"));
         let base: string | undefined;
         if (kind === "blur") { filters.push("[src" + index + "]boxblur=luma_radius=" + Math.max(8, Math.round(Math.min(width, height) / 40)) + ":luma_power=2[bg" + index + "]"); base = "[bg" + index + "]"; }
         else {
-          filters.push("[src" + index + "]nullsink");
           if (kind === "color") { filters.push("color=c=0x" + hexColour(clip.transform?.backgroundColor) + ":s=" + width + "x" + height + ":r=" + fps + ":d=" + length.toFixed(6) + ",format=yuv420p,setsar=1[bg" + index + "]"); base = "[bg" + index + "]"; }
           else if (kind === "media" && backgroundInputs[index]) {
             filters.push("[" + backgroundInputs[index]!.index + ":v]setpts=PTS-STARTPTS,scale=" + width + ":" + height + ":force_original_aspect_ratio=increase,crop=" + width + ":" + height + ",fps=" + fps + ",trim=duration=" + length.toFixed(6) + ",setsar=1,format=yuv420p[bg" + index + "]");
@@ -263,7 +265,6 @@ export class FfmpegCommandPlanner {
           filters.push(base + "[cut" + index + "]overlay=format=auto:shortest=1" + finish + ",setsar=1,format=yuv420p[v" + index + "]");
         } else {
           // No background change on this clip (the matte is only for a cutaway behind the person).
-          filters.push("[ma" + index + "]nullsink");
           filters.push("[fg" + index + "]null" + finish + ",setsar=1,format=yuv420p[v" + index + "]");
         }
       }
