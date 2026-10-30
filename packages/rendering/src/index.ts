@@ -298,7 +298,7 @@ export class FfmpegCommandPlanner {
           // requires identical timebases, including after a preceding hard cut.
           filters.push(joined + "settb=AVTB,setpts=PTS-STARTPTS[blendLeft" + index + "]");
           filters.push(pictures[index] + "settb=AVTB,setpts=PTS-STARTPTS[blendRight" + index + "]");
-          filters.push("[blendLeft" + index + "][blendRight" + index + "]xfade=transition=" + XFADE_NAMES[String(clip.transform?.transitionIn)] + ":duration=" + d.toFixed(3) + ":offset=" + (joinedSeconds - d).toFixed(6) + ",setpts=PTS-STARTPTS" + out);
+          filters.push("[blendLeft" + index + "][blendRight" + index + "]xfade=transition=" + XFADE_NAMES[String(clip.transform?.transitionIn)] + ":duration=" + d.toFixed(3) + ":offset=" + (joinedSeconds - d).toFixed(6) + ",format=yuv420p,setpts=PTS-STARTPTS" + out);
           joinedSeconds += length - d;
         } else {
           filters.push(joined + pictures[index] + "concat=n=2:v=1:a=0" + out);
@@ -312,7 +312,7 @@ export class FfmpegCommandPlanner {
       filters.push(...matteConcat);
       filters.push(clips.map((_, index) => "[mw" + index + "]").join("") + "concat=n=" + clips.length + ":v=1:a=0[mcat]");
       // The person, cut out of the finished picture, goes back on top of cutaways placed behind them.
-      filters.push("[vcat]split=2[vbase][vperson]", "[vperson][mcat]alphamerge[person]");
+      filters.push("[vcat]format=yuv420p,split=2[vbase][vperson]", "[vperson][mcat]alphamerge,format=yuva420p[person]");
     }
 
     const style = resolveCaptionStyle(settings.captionStyle);
@@ -339,7 +339,7 @@ export class FfmpegCommandPlanner {
     });
     if (anyBehind) {
       const windows = brolls.map((broll, index) => (behind[index] ? "between(t," + (broll.timelineStartUs / 1_000_000).toFixed(6) + "," + (broll.timelineEndUs / 1_000_000).toFixed(6) + ")" : "")).filter(Boolean);
-      filters.push(videoLabel + "[person]overlay=format=auto:enable='" + windows.join("+") + "'[behind]");
+      filters.push(videoLabel + "[person]overlay=format=yuv420:enable='" + windows.join("+") + "'[behind]");
       videoLabel = "[behind]";
     }
     // Motion graphics (title cards, callouts, lower thirds, progress bar): above b-roll, beneath captions.
