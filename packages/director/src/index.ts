@@ -452,19 +452,20 @@ export class OpenAiDirector implements Director {
         headers: { authorization: "Bearer " + this.options.apiKey, "content-type": "application/json" },
         body: JSON.stringify({ model: this.options.model, instructions, input: [{ role: "user", content }], text: { format: { type: "json_schema", name, strict: true, schema } } }),
       });
+      // Keep the deadline active while reading the body, not only until headers arrive.
+      if (!response.ok) {
+        const detail = await response.text().catch(() => "");
+        const message = /"message"\s*:\s*"([^"]{1,160})/.exec(detail)?.[1];
+        throw new Error("OpenAI returned " + response.status + (message ? ": " + message : ""));
+      }
+      const payload = (await response.json()) as { output_text?: string; output?: Array<{ type?: string; content?: Array<{ type?: string; text?: string }> }> };
+      const out = payload.output_text ?? payload.output?.flatMap((item) => item.content ?? []).find((part) => part.type === "output_text")?.text;
+      if (typeof out !== "string") throw new Error("no text in the response");
+      try { return JSON.parse(out); } catch { throw new Error("the response was not valid JSON"); }
     } catch (error) {
       if (controller.signal.aborted) throw new Error("timed out");
       throw error;
     } finally { clearTimeout(timer); }
-    if (!response.ok) {
-      const detail = await response.text().catch(() => "");
-      const message = /"message"\s*:\s*"([^"]{1,160})/.exec(detail)?.[1];
-      throw new Error("OpenAI returned " + response.status + (message ? ": " + message : ""));
-    }
-    const payload = (await response.json()) as { output_text?: string; output?: Array<{ type?: string; content?: Array<{ type?: string; text?: string }> }> };
-    const out = payload.output_text ?? payload.output?.flatMap((item) => item.content ?? []).find((part) => part.type === "output_text")?.text;
-    if (typeof out !== "string") throw new Error("no text in the response");
-    try { return JSON.parse(out); } catch { throw new Error("the response was not valid JSON"); }
   }
 }
 

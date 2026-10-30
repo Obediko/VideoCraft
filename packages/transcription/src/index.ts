@@ -58,16 +58,23 @@ export class FasterWhisperWorker implements TranscriptionPort {
       child.stdout.on("data", (chunk) => output.push(Buffer.from(chunk)));
       child.stderr.on("data", (chunk) => errors.push(Buffer.from(chunk)));
 
-      const timer = setTimeout(() => child.kill("SIGTERM"), this.options.timeoutMs);
-      child.stdin.end(JSON.stringify({
-        assetPath,
-        language: this.options.language,
-        assetId: asset.id,
-      }) + "\n");
+      // stdin is a separate stream: an early worker exit can emit EPIPE here,
+      // not on the child process. Consume it and reject the operation after close.
+      let inputError: Error | undefined;
+      child.stdin.on("error", (error: Error) => { inputError = error; });
 
-      const [code] = await once(child, "close") as [number | null];
-      clearTimeout(timer);
-      if (code !== 0) throw new Error("Transcription worker failed: " + Buffer.concat(errors).toString().slice(-4000));
+      const timer = setTimeout(() => child.kill("SIGTERM"), this.options.timeoutMs);
+      let code: number | null;
+      try {
+        const closed = once(child, "close");
+        child.stdin.end(JSON.stringify({
+          assetPath,
+          language: this.options.language,
+          assetId: asset.id,
+        }) + "\n");
+        [code] = await closed as [number | null];
+      } finally { clearTimeout(timer); }
+      if (code !== 0 || inputError) throw new Error("Transcription worker failed: " + (Buffer.concat(errors).toString().slice(-4000) || inputError?.message || "worker exited without a result"));
       let parsed: unknown;
       try { parsed = JSON.parse(Buffer.concat(output).toString()); }
       catch { throw new Error("Transcription worker returned invalid JSON"); }
