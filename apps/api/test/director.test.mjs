@@ -35,7 +35,7 @@ async function setup(director, options = {}) {
   await assets.save({ id: "talk", projectId, kind: "video", storageKey: stored.key, checksumSha256: stored.checksumSha256, durationUs, metadata: { filename: "talk.mp4", width: 640, height: 360 }, createdAt: clock.now() });
   await assets.save({ id: "pic", projectId, kind: "image", storageKey: "projects/" + projectId + "/assets/pic.media", checksumSha256: "b".repeat(64), metadata: { filename: "campus.jpg" }, createdAt: clock.now() });
   await server.inject({ method: "POST", url: "/v1/projects/" + projectId + "/revisions", payload: { timeline: { durationUs, tracks: [{ id: "v", kind: "video", clips: [{ id: "src", assetId: "talk", sourceStartUs: 0, sourceEndUs: durationUs, timelineStartUs: 0, timelineEndUs: durationUs }] }] } } });
-  return { server, projectId, segments, durationUs, close: () => rmSync(dir, { recursive: true, force: true }) };
+  return { server, projectId, segments, durationUs, assets, storage, close: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 test("director (built-in rules): describe → plan → accept → a finished edit with cut, captions, title, music and format", async () => {
@@ -250,9 +250,17 @@ test("stock ideas come with the found picture, and applying adds exactly that on
 });
 
 test('after-video narration appends a real end-card asset and keeps the full audio duration', async () => {
-  const { server, projectId, durationUs, close } = await setup(new RuleDirector(), { extra: {
-    speak: async () => ({ id: 'pic', durationUs: 2_000_000 }),
+  const voiceDir = mkdtempSync(join(tmpdir(), 'vc-outro-audio-'));
+  const state = await setup(new RuleDirector(), { extra: {
+    speak: async (projectId) => {
+      const path = join(voiceDir, 'voice.wav');
+      execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=1100:duration=2', path]);
+      const stored = await state.storage.putFile(path, 'projects/' + projectId + '/assets/narration.media');
+      await state.assets.save({ id: 'narration', projectId, kind: 'audio', durationUs: 2_000_000, storageKey: stored.key, checksumSha256: stored.checksumSha256, metadata: { hasAudio: true }, createdAt: new Date().toISOString() });
+      return { id: 'narration', durationUs: 2_000_000 };
+    },
   } });
+  const { server, projectId, durationUs, close } = state;
   try {
     const root = '/v1/projects/' + projectId + '/director/';
     const asked = await server.inject({ method: 'POST', url: root + 'ask', payload: { revision: 1, instruction: 'Add a voice-over after the video (Jesus truly saves)' } });
@@ -271,5 +279,16 @@ test('after-video narration appends a real end-card asset and keeps the full aud
     assert.equal(vo.timelineStartUs, durationUs);
     assert.equal(vo.timelineEndUs - vo.timelineStartUs, 2_000_000);
     assert.ok(timeline.tracks.flatMap(t => t.clips).some(c => c.transform?.text === 'Jesus truly saves' && c.timelineStartUs === durationUs));
-  } finally { close(); }
+    const { FfmpegCommandPlanner, FfmpegProcess } = await import('@videocraft/rendering');
+    const media = new Map((await state.assets.listForProject(projectId)).map(a => [a.id, a]));
+    const planner = new FfmpegCommandPlanner({ resolve: async id => state.storage.resolve(media.get(id).storageKey), hasAudio: async id => media.get(id).metadata.hasAudio === true });
+    const out = join(voiceDir, 'outro-render.mp4');
+    await new FfmpegProcess().run(await planner.plan(result.revision, { format: 'mp4', videoCodec: 'libx264', audioCodec: 'aac', width: 320, height: 180, frameRate: 30 }, out));
+    execFileSync('ffmpeg', ['-v', 'error', '-i', out, '-f', 'null', '-']);
+    const tail = execFileSync('ffmpeg', ['-v', 'error', '-ss', String(durationUs / 1e6 + 0.2), '-i', out, '-t', '1', '-vn', '-f', 's16le', '-']);
+    assert.ok(tail.length > 1000 && tail.some(byte => byte !== 0), 'narration remains audible AFTER the original video');
+    const outputDuration = Number(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', out]).toString());
+    assert.ok(Math.abs(outputDuration - timeline.durationUs / 1e6) < 0.1);
+
+  } finally { close(); rmSync(voiceDir, { recursive: true, force: true }); }
 });

@@ -17,3 +17,15 @@ test('video cutaways use a video element and initial play is called in the click
   const calls = await page.evaluate(() => (window as any).playCalls);
   expect(calls.some((c:any)=>c.tag === 'VIDEO' && c.active)).toBe(true);
 });
+
+test('a stalled cutout preserves the original and offers a bounded retry', async ({page}) => {
+  await page.route('**/*.webm', () => {});
+  await page.clock.install();
+  await page.goto('/e2e/fixtures/preview.html?cutout');
+  await expect(page.getByText('Cutting you out for the preview…')).toBeVisible();
+  await page.clock.fastForward(61_000);
+  await expect(page.getByText('Cutout preview unavailable. Showing the original footage.', {exact:false})).toBeVisible();
+  await expect(page.locator('video.live-video')).toHaveCSS('opacity','1');
+  await page.getByRole('button',{name:'Retry cutout'}).click();
+  await expect(page.getByText('Cutting you out for the preview…')).toBeVisible();
+});
