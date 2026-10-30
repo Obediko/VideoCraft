@@ -111,34 +111,46 @@ export class FfmpegCommandPlanner {
     const fps = settings.frameRate;
     if (!Number.isFinite(fps) || fps <= 0 || fps > 120) throw new Error("Frame rate is invalid");
 
-    // One input per clip, seeked to the clip start. Opening a clip's own input keeps memory flat
-    // when clips are reordered; sharing one input would force the decoder to buffer every frame
-    // between two out-of-order clips (gigabytes for vertical 1080p).
-    const args: string[] = ["-hide_banner", "-loglevel", "error", "-y"];
+    // Each clip has its own seeked video input. Sharing a decoder would buffer
+    // the frames between out-of-order source ranges (gigabytes for vertical 1080p).
+    const args: string[] = ["-hide_banner", "-loglevel", "error", "-y", "-filter_complex_threads", "1", "-filter_threads", "1"];
+    const addInput = (path: string, options: string[] = []) => args.push(...options, "-threads", "1", "-i", path);
     const audioPresent = new Map<string, boolean>();
     // A clip followed by a blend (dissolve, push…) runs on past its cut for the length of the blend.
     const blendIn = clips.map((_, index) => blendSeconds(clips, index));
     const runOn = clips.map((_, index) => blendIn[index + 1] ?? 0);
+    const splitEmbeddedAudio = blendIn.some((duration) => duration > 0) && replacementClips.length === 0;
     for (const [index, clip] of clips.entries()) {
       const length = (clip.sourceEndUs - clip.sourceStartUs) / 1_000_000;
       if (!(length > 0)) throw new Error("Clip has an invalid source range");
       if (!audioPresent.has(clip.assetId)) audioPresent.set(clip.assetId, this.assets.hasAudio ? await this.assets.hasAudio(clip.assetId) : false);
-      args.push("-ss", seconds(clip.sourceStartUs), "-t", (length + runOn[index]!).toFixed(6), "-i", await this.assets.resolve(clip.assetId));
+      addInput(await this.assets.resolve(clip.assetId), ["-ss", seconds(clip.sourceStartUs), "-t", (length + runOn[index]!).toFixed(6), ...(splitEmbeddedAudio ? ["-an"] : [])]);
     }
 
     let nextInput = clips.length;
+    // Blended pictures and hard-cut speech have independent join graphs. Sharing their
+    // demuxers makes audio read ahead and queue gigabytes of decoded future pictures.
+    // Audio-only inputs keep that read-ahead independent of the video decoders.
+    const embeddedAudioInputs = new Map<number, number>();
+    if (splitEmbeddedAudio) {
+      for (const [index, clip] of clips.entries()) {
+        if (!audioPresent.get(clip.assetId)) continue;
+        embeddedAudioInputs.set(index, nextInput++);
+        addInput(await this.assets.resolve(clip.assetId), ["-ss", seconds(clip.sourceStartUs), "-t", seconds(clip.sourceEndUs - clip.sourceStartUs), "-vn"]);
+      }
+    }
     const externalAudio = replacementClips[0];
     let externalIndex = -1;
     if (externalAudio) {
       externalIndex = nextInput++;
-      args.push("-i", await this.assets.resolve(externalAudio.assetId));
+      addInput(await this.assets.resolve(externalAudio.assetId));
     }
     const music = musicClips[0];
     let musicIndex = -1;
     if (music) {
       musicIndex = nextInput++;
       // Looped so a short track covers a long cut; trimmed to the timeline in the graph.
-      args.push("-stream_loop", "-1", "-ss", seconds(music.sourceStartUs), "-i", await this.assets.resolve(music.assetId));
+      addInput(await this.assets.resolve(music.assetId), ["-stream_loop", "-1", "-ss", seconds(music.sourceStartUs)]);
     }
     // B-roll inputs: stills are looped for their on-screen time, videos are seeked to their start.
     const brolls = tracks.filter((track) => track.kind === "overlay").flatMap((track) => track.clips).filter((clip) => clip.transform?.role === "broll" && clip.timelineEndUs > clip.timelineStartUs).sort((a, b) => a.timelineStartUs - b.timelineStartUs);
@@ -150,8 +162,8 @@ export class FfmpegCommandPlanner {
       const still = this.assets.isStill ? await this.assets.isStill(broll.assetId) : false;
       brollInputs.push(nextInput++);
       brollStill.push(still);
-      if (still) args.push("-loop", "1", "-framerate", String(fps), "-t", length, "-i", await this.assets.resolve(broll.assetId));
-      else args.push("-ss", seconds(broll.sourceStartUs), "-t", length, "-i", await this.assets.resolve(broll.assetId));
+      if (still) addInput(await this.assets.resolve(broll.assetId), ["-loop", "1", "-framerate", String(fps), "-t", length]);
+      else addInput(await this.assets.resolve(broll.assetId), ["-ss", seconds(broll.sourceStartUs), "-t", length]);
     }
     // Generated sound effects: one WAV per kind, one input per use (each is delayed to its moment).
     const files: RenderPlan["files"] = [];
@@ -163,13 +175,13 @@ export class FfmpegCommandPlanner {
       const path = outputPath + ".sfx-" + kind + ".wav";
       if (!sfxKinds.has(kind)) { const fx = generateSoundEffect(kind); files.push({ path, content: encodeWav(fx.left, fx.right, fx.sampleRate) }); sfxKinds.add(kind); }
       sfxInputs.push(nextInput++);
-      args.push("-i", path);
+      addInput(path);
     }
     // Voice-over recordings: one input each, from the start of the recording, delayed to their moment in the mix.
     const voiceoverInputs: number[] = [];
     for (const vo of voiceoverClips) {
       voiceoverInputs.push(nextInput++);
-      args.push("-ss", seconds(vo.sourceStartUs), "-t", ((vo.sourceEndUs - vo.sourceStartUs) / 1_000_000).toFixed(6), "-i", await this.assets.resolve(vo.assetId));
+      addInput(await this.assets.resolve(vo.assetId), ["-ss", seconds(vo.sourceStartUs), "-t", ((vo.sourceEndUs - vo.sourceStartUs) / 1_000_000).toFixed(6)]);
     }
     // Backgrounds behind the person (blur, colour, a photo or clip) and cutaways placed behind them need a matte.
     const behind = brolls.map((broll) => broll.transform?.mode === "behind");
@@ -183,7 +195,7 @@ export class FfmpegCommandPlanner {
       if (wanted && this.assets.matte) {
         const edge = clampNumber(Number(clip.transform?.matteEdge ?? 0), -8, 8); const feather = clampNumber(Number(clip.transform?.matteFeather ?? 2), 0, 12);
         const path = await this.assets.matte(clip.assetId, clip.sourceStartUs, clip.sourceEndUs, { edge: Math.round(edge), feather: Math.round(feather) }).catch(() => null);
-        if (path) { matteIndex = nextInput++; args.push("-t", ((clip.sourceEndUs - clip.sourceStartUs) / 1_000_000).toFixed(6), "-i", path); }
+        if (path) { matteIndex = nextInput++; addInput(path, ["-t", ((clip.sourceEndUs - clip.sourceStartUs) / 1_000_000).toFixed(6)]); }
       }
       matteInputs.push(matteIndex);
       const backgroundAsset = clip.transform?.backgroundAssetId;
@@ -191,8 +203,8 @@ export class FfmpegCommandPlanner {
         const still = this.assets.isStill ? await this.assets.isStill(backgroundAsset) : false;
         const length = ((clip.sourceEndUs - clip.sourceStartUs) / 1_000_000).toFixed(6);
         const index = nextInput++;
-        if (still) args.push("-loop", "1", "-framerate", String(fps), "-t", length, "-i", await this.assets.resolve(backgroundAsset));
-        else args.push("-stream_loop", "-1", "-t", length, "-i", await this.assets.resolve(backgroundAsset));
+        if (still) addInput(await this.assets.resolve(backgroundAsset), ["-loop", "1", "-framerate", String(fps), "-t", length]);
+        else addInput(await this.assets.resolve(backgroundAsset), ["-stream_loop", "-1", "-t", length]);
         backgroundInputs.push({ index, still });
       } else backgroundInputs.push(undefined);
     }
@@ -263,7 +275,7 @@ export class FfmpegCommandPlanner {
       if (useEmbeddedAudio) {
         if (audioPresent.get(clip.assetId)) {
           const fade = Math.min(0.015, length / 4).toFixed(3);
-          filters.push("[" + index + ":a]asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,atrim=duration=" + length.toFixed(6) + ",afade=t=in:d=" + fade + ",afade=t=out:st=" + Math.max(0, length - Number(fade)).toFixed(3) + ":d=" + fade + "[a" + index + "]");
+          filters.push("[" + (embeddedAudioInputs.get(index) ?? index) + ":a]asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,atrim=duration=" + length.toFixed(6) + ",afade=t=in:d=" + fade + ",afade=t=out:st=" + Math.max(0, length - Number(fade)).toFixed(3) + ":d=" + fade + "[a" + index + "]");
         } else {
           filters.push("anullsrc=r=48000:cl=stereo,atrim=duration=" + length.toFixed(6) + ",asetpts=PTS-STARTPTS[a" + index + "]");
         }
@@ -424,7 +436,7 @@ export class FfmpegCommandPlanner {
     } else if (audioLabel) {
       args.push("-map", audioLabel);
     }
-    args.push("-r", String(fps), "-c:v", settings.videoCodec);
+    args.push("-r", String(fps), "-c:v", settings.videoCodec, "-threads:v", "2");
     if (settings.videoCodec === "libx264") args.push("-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p");
     if (externalAudio || audioLabel) args.push("-c:a", settings.audioCodec);
     args.push("-movflags", "+faststart", outputPath);

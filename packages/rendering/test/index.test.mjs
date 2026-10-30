@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -389,4 +389,29 @@ test('real ffmpeg: hard cuts followed by multiple dissolves share a timebase', a
     const duration = Number(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', out]).toString());
     assert.ok(Math.abs(duration - 4) < 0.1, `duration ${duration}`);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('real ffmpeg: eight 1080p portrait clips with speech, music, a cutaway and dissolves stay within the worker memory budget', { skip: process.platform !== 'linux', timeout: 180_000 }, async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'vc-render-memory-'));
+  try {
+    const source = join(dir, 'phone.mp4');
+    execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=s=360x480:r=30:d=48', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=48', '-c:v', 'libx264', '-threads:v', '1', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', source]);
+    const pieces = Array.from({ length: 8 }, (_, i) => ({ ...clip('c'+i, i*6_000_000, i*6_000_000+5_000_000, i*5_000_000), ...([3,4].includes(i) ? { transform: { transitionIn: 'dissolve' } } : {}) }));
+    const out = join(dir, 'portrait.mp4');
+    const plan = await new FfmpegCommandPlanner({ resolve: async () => source, hasAudio: async () => true }).plan(revision(pieces, [{ id:'audio',kind:'audio',clips:[{ ...clip('bed',0,40_000_000,0),assetId:'music',transform:{role:'music',volumeDb:-18,duck:true} }] }, { id:'overlays',kind:'overlay',clips:[{ ...clip('cutaway',0,4_000_000,12_000_000),assetId:'broll',transform:{role:'broll',mode:'full'} }] }]), { ...settings, width: 1080, height: 1920 }, out);
+    // A separate Python process measures just this FFmpeg child's real peak RSS;
+    // Node's cumulative child usage and /proc RSS in virtualized runners are unsuitable.
+    const measurement = JSON.parse(execFileSync('python3', ['-c', 'import json,resource,subprocess,sys; subprocess.run(["ffmpeg"]+json.loads(sys.argv[1]),check=True,stdout=subprocess.DEVNULL); print(json.dumps({"peakKiB":resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss}))', JSON.stringify(plan.args)], { timeout: 150_000 }).toString());
+    t.diagnostic(`FFmpeg peak RSS: ${(measurement.peakKiB/1024).toFixed(0)} MiB`);
+    assert.ok(measurement.peakKiB < 1024*1024, `FFmpeg used ${(measurement.peakKiB/1024).toFixed(0)} MiB; leave headroom within the 1536 MiB worker`);
+    const streams = JSON.parse(execFileSync('ffprobe', ['-v','error','-show_streams','-show_format','-of','json',out]).toString());
+    assert.ok(streams.streams.some(s=>s.codec_type==='video' && s.width===1080 && s.height===1920));
+    assert.ok(streams.streams.some(s=>s.codec_type==='audio'));
+    assert.ok(Math.abs(Number(streams.format.duration)-40)<0.15);
+    // Decode the whole output and check that the split audio path has no lost clip or long silent gap.
+    const decoded = spawnSync('ffmpeg', ['-hide_banner','-nostats','-xerror','-i',out,'-af','silencedetect=noise=-50dB:d=0.1','-f','null','-'], { encoding:'utf8', timeout:30_000 });
+    assert.equal(decoded.status,0,decoded.stderr?.slice(-1500));
+    assert.doesNotMatch(decoded.stderr,/silence_start:/);
+
+  } finally { rmSync(dir, { recursive:true, force:true }); }
 });
