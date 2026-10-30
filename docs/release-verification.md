@@ -9,7 +9,7 @@ The OCI host requires an authenticated operator session. No such session was ava
 1. Wait for CI and all three container images for the exact main commit to succeed.
 2. On the existing OCI installation, run `sudo bash ops/oci-staging/release.sh <commit-sha>` from a checkout of that release. The script requires successful CI for that exact commit, pins all three application images, leaves the database and other services running, checks readiness and API/web version identity, and restores the prior images/configuration on failure. It does not certify queue consumption or real media behavior.
 3. Confirm the public `/api/version` and `/version.json` identify the same release. These routes expose a commit ID only. The loaded browser application also exposes its build ID as the root element’s `data-release` attribute, so a stale browser bundle can be identified.
-4. Run the authenticated media journey and inspect API/render-worker logs. The deployment script has been syntax checked; execution and rollback on the actual host remain unverified until performed there.
+4. Run the authenticated media journey and inspect API/render-worker logs. The deployment script has been syntax checked and its CI guard, app-only upgrade and version-mismatch rollback control flow pass tests with mocked Docker/network commands. Execution and rollback on the actual host remain unverified until performed there.
 
 ## Required media journey
 
