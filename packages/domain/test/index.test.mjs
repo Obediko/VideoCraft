@@ -215,3 +215,15 @@ test("set-volume changes one sound or every sound of a kind", async () => {
   assert.equal(audio().find((c) => c.transform.role === "music").transform.volumeDb, -26);
   assert.throws(() => apply(t, [{ type: "set-volume", role: "voiceover", volumeDb: -3 }]), /no matching/);
 });
+
+test("blend transitions take a length; endings stay colour fades", async () => {
+  const { applyTimelineOperations: apply, parseTimelineOperations: parse } = await import("../dist/index.js");
+  let t = apply({ durationUs: 0, tracks: [] }, [{ type: "insert-clip", assetId: "a", sourceStartUs: 0, sourceEndUs: 2_000_000, reason: "r" }, { type: "insert-clip", assetId: "a", sourceStartUs: 3_000_000, sourceEndUs: 5_000_000, reason: "r" }]);
+  const second = t.tracks[0].clips[1];
+  t = apply(t, parse([{ type: "set-clip-effects", clipId: second.id, transitionIn: "dissolve", transitionSeconds: 0.77 }]));
+  assert.deepEqual(t.tracks[0].clips[1].transform, { transitionIn: "dissolve", transitionSeconds: 0.75 });
+  assert.throws(() => parse([{ type: "set-clip-effects", clipId: second.id, transitionOut: "dissolve" }]), /blends are set on the next clip/);
+  assert.throws(() => parse([{ type: "set-clip-effects", clipId: second.id, transitionSeconds: 5 }]));
+  t = apply(t, parse([{ type: "set-clip-effects", clipId: second.id, transitionIn: "cut" }]));
+  assert.equal(t.tracks[0].clips[1].transform, undefined, "a cut drops the length too");
+});

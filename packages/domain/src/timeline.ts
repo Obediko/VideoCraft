@@ -128,6 +128,8 @@ export function applyTimelineOperations(timeline: Timeline, operations: Timeline
         const transform: Record<string, string | number | boolean> = { ...(found.clip.transform ?? {}) };
         const put = (key: string, value: string | undefined, off: string) => { if (value === undefined) return; if (value === off) delete transform[key]; else transform[key] = value; };
         put("zoom", operation.zoom, "none"); put("look", operation.look, "none"); put("transitionIn", operation.transitionIn, "cut"); put("transitionOut", operation.transitionOut, "cut");
+        if (operation.transitionSeconds !== undefined) transform.transitionSeconds = operation.transitionSeconds;
+        if (!transform.transitionIn) delete transform.transitionSeconds;
         const { transform: _old, ...rest } = found.clip;
         found.track.clips[found.index] = Object.keys(transform).length ? { ...rest, transform } : rest;
         break;
@@ -412,8 +414,11 @@ export function parseTimelineOperations(value: unknown): TimelineOperation[] {
         if (!isId(op.clipId)) return fail("set-clip-effects needs clipId");
         const pick = <T extends string>(key: string, allowed: readonly T[]): T | undefined => { const v = op[key]; if (v === undefined) return undefined; if (typeof v !== "string" || !allowed.includes(v as T)) return fail(key + " must be one of " + allowed.join(", ")); return v as T; };
         const zoom = pick("zoom", CLIP_ZOOMS); const look = pick("look", COLOUR_LOOKS); const transitionIn = pick("transitionIn", TRANSITIONS); const transitionOut = pick("transitionOut", TRANSITIONS);
-        if (zoom === undefined && look === undefined && transitionIn === undefined && transitionOut === undefined) return fail("set-clip-effects needs at least one effect");
-        return { type: "set-clip-effects", clipId: op.clipId, ...(zoom ? { zoom } : {}), ...(look ? { look } : {}), ...(transitionIn ? { transitionIn } : {}), ...(transitionOut ? { transitionOut } : {}) };
+        if (transitionOut !== undefined && !["cut", "dip-black", "dip-white", "flash"].includes(transitionOut)) return fail("transitionOut must be cut, dip-black, dip-white or flash (blends are set on the next clip)");
+        const seconds = op.transitionSeconds;
+        if (seconds !== undefined && !(typeof seconds === "number" && seconds >= 0.1 && seconds <= 2)) return fail("transitionSeconds must be between 0.1 and 2");
+        if (zoom === undefined && look === undefined && transitionIn === undefined && transitionOut === undefined && seconds === undefined) return fail("set-clip-effects needs at least one effect");
+        return { type: "set-clip-effects", clipId: op.clipId, ...(zoom ? { zoom } : {}), ...(look ? { look } : {}), ...(transitionIn ? { transitionIn } : {}), ...(transitionOut ? { transitionOut } : {}), ...(seconds !== undefined ? { transitionSeconds: Math.round((seconds as number) * 20) / 20 } : {}) };
       }
       case "set-volume": {
         if (op.clipId === undefined && op.role !== "music" && op.role !== "sfx" && op.role !== "voiceover") return fail("set-volume needs clipId or role (music, sfx or voiceover)");

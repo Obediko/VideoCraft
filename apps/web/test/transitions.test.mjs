@@ -35,3 +35,14 @@ test("the live preview's transitions match the export, including short clips and
     }
   }
 });
+
+test("blends show over the start of the next clip for exactly as long as the export overlaps them", async () => {
+  const { blendAt } = await import("../test-dist/preview.js");
+  const { blendSeconds } = await import("@videocraft/domain");
+  const clips = [clip("a", 0, 2_000_000, {}), clip("b", 2_000_000, 2_000_000, { transitionIn: "dissolve", transitionSeconds: 0.8 }), clip("c", 4_000_000, 600_000, { transitionIn: "push" })];
+  assert.equal(blendAt(clips, 1_900_000), undefined, "nothing before the cut");
+  assert.deepEqual(blendAt(clips, 2_400_000), { kind: "dissolve", progress: 0.5, index: 1 });
+  assert.equal(blendAt(clips, 2_850_000), undefined, "over after 0.8 s");
+  assert.equal(blendSeconds(clips, 2), 0.3, "a blend is at most half of a short clip");
+  assert.equal(blendAt(clips, 4_250_000).kind, "push");
+});

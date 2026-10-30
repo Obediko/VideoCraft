@@ -78,3 +78,13 @@ test("removals and colours become edits", async () => {
   const capOps = planOperations(captions, new Set(["captions"]), { timeline, assetId: "a", words });
   assert.ok(capOps.some((o) => o.type === "add-caption-cue"));
 });
+
+test("asking for a dissolve or push puts it between the parts", async () => {
+  const plan = await new RuleDirector().ask({ ...input, instruction: "use smooth crossfade transitions" });
+  const t = plan.suggestions.find((s) => s.kind === "transitions");
+  assert.equal(t.transition, "dissolve");
+  const timeline = { durationUs: 6_000_000, tracks: [{ id: "v", kind: "video", clips: [0, 1, 2].map((i) => ({ id: "c" + i, assetId: "a", sourceStartUs: i * 2_000_000, sourceEndUs: i * 2_000_000 + 1_900_000, timelineStartUs: i * 1_900_000, timelineEndUs: (i + 1) * 1_900_000 })) }] };
+  const ops = effectOperations(plan, new Set([t.id]), timeline, "a");
+  assert.deepEqual(ops.map((o) => o.transitionIn ?? "-"), ["dip-black", "dissolve", "dissolve"]);
+  assert.equal((await new RuleDirector().ask({ ...input, instruction: "push transitions please" })).suggestions[0].transition, "push");
+});
