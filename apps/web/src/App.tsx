@@ -27,7 +27,7 @@ const PLATFORMS: Record<string, { label: string; short: string; width: number; h
   square: { label: "Feed · 1:1", short: "Feed 1:1", width: 1080, height: 1080, fit: "cover", captionStyle: "clean" },
   preview: { label: "Quick preview · 720p", short: "Preview 720p", width: 1280, height: 720, fit: "contain", captionStyle: "clean" },
 };
-type Suggestion = { id: string; kind: string; title: string; reason: string; text?: string; subtitle?: string; atS?: number; durationS?: number; segments?: Array<{ startS: number; endS: number }>; mood?: string; platform?: string; assetId?: string; mode?: string; changeDb?: number; target?: string; query?: string; color?: string; pick?: { provider: string; id: string; thumbUrl: string; credit?: string } };
+type Suggestion = { id: string; kind: string; title: string; reason: string; text?: string; subtitle?: string; afterVideo?: boolean; atS?: number; durationS?: number; segments?: Array<{ startS: number; endS: number }>; mood?: string; platform?: string; assetId?: string; mode?: string; changeDb?: number; target?: string; query?: string; color?: string; pick?: { provider: string; id: string; thumbUrl: string; credit?: string } };
 type DirectorPlan = { summary: string; profile: { intent: string; audience: string; channel: string; tone: string; targetSeconds: number }; suggestions: Suggestion[]; source: "ai" | "rules"; model?: string; note?: string };
 const PLAN_GROUPS: Array<{ name: string; kinds: string[] }> = [
   { name: "Story", kinds: ["cut"] },
