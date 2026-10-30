@@ -63,3 +63,13 @@ test("S3 adapter can stage a streamed object for workers", async () => {
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('attachment URLs carry a signed filename and reject header injection', async () => {
+  const {S3Client}=await import('@aws-sdk/client-s3');
+  const client=new S3Client({region:'us-east-1',endpoint:'https://storage.example',credentials:{accessKeyId:'test-key',secretAccessKey:'test-secret'}});
+  const storage=new S3ObjectStorage({bucket:'test',region:'us-east-1',client});
+  const url=new URL(await storage.createDownloadUrl('projects/p/renders/out.mp4',300,{filename:'videocraft-export.mp4'}));
+  assert.equal(url.searchParams.get('response-content-disposition'),'attachment; filename="videocraft-export.mp4"');
+  await assert.rejects(storage.createDownloadUrl('out.mp4',300,{filename:'bad\r\nheader'}),/filename/);
+  client.destroy();
+});

@@ -77,7 +77,7 @@ services:
     networks: [internal]
 
   api:
-    image: ghcr.io/obediko/videocraft-api:staging
+    image: ghcr.io/obediko/videocraft-api:${VIDEOCRAFT_RELEASE_SHA:-staging}
     container_name: videocraft-api
     restart: unless-stopped
     environment:
@@ -121,7 +121,7 @@ services:
     networks: [internal, edge]
 
   render-worker:
-    image: ghcr.io/obediko/videocraft-render-worker:staging
+    image: ghcr.io/obediko/videocraft-render-worker:${VIDEOCRAFT_RELEASE_SHA:-staging}
     container_name: videocraft-render-worker
     restart: unless-stopped
     environment:
@@ -141,7 +141,7 @@ services:
     networks: [internal]
 
   web:
-    image: ghcr.io/obediko/videocraft-web:staging
+    image: ghcr.io/obediko/videocraft-web:${VIDEOCRAFT_RELEASE_SHA:-staging}
     container_name: videocraft-web
     restart: unless-stopped
     ports: ["127.0.0.1:18080:8080"]

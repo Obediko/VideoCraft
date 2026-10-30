@@ -27,6 +27,16 @@ test("PostgreSQL persistence and Redis connectivity are available", { skip }, as
   const secondJob = { ...job, id: job.id + "-second", projectId: secondProjectId };
   await renderJobs.save(secondJob);
   assert.equal((await renderJobs.get(secondJob.id))?.projectId, secondProjectId);
+  await renderJobs.update({ ...job, status: "cancelled", progress: 5 });
+  await renderJobs.update({ ...job, status: "running", progress: 25 });
+  await renderJobs.update({ ...job, status: "succeeded", progress: 100 });
+  assert.equal((await renderJobs.get(job.id)).status, "cancelled", "worker progress cannot undo cancellation");
+  await renderJobs.update({ ...secondJob, status: "succeeded", progress: 100 });
+  await renderJobs.update({ ...secondJob, status: "cancelled", progress: 5 });
+  assert.equal((await renderJobs.get(secondJob.id)).status, "succeeded", "late cancellation cannot undo success");
+  const history = await renderJobs.listForProject(projectId);
+  assert.ok(history.length > 0 && history.every(item => item.projectId === projectId));
+
   const feedback = new PostgresFeedbackRepository(pool);
   await feedback.append({ id: "integration-feedback-" + Date.now(), projectId, revision: 1, type: "accepted", createdAt: new Date().toISOString() });
   const audit = new PostgresAuditRepository(pool);

@@ -16,7 +16,7 @@ export interface ObjectStorage {
   remove(key: string): Promise<void>;
   downloadToFile?(key: string, destinationPath: string): Promise<void>;
   list?(prefix?: string): Promise<ListedObject[]>;
-  createDownloadUrl?(key: string, expiresInSeconds: number): Promise<string>;
+  createDownloadUrl?(key: string, expiresInSeconds: number, options?: { filename?: string }): Promise<string>;
 }
 
 export class LocalObjectStorage implements ObjectStorage {
