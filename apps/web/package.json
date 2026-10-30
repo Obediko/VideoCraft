@@ -24,6 +24,7 @@
     "typescript": "^5.7.2",
     "vite": "^6.0.5",
     "@videocraft/captions": "0.1.0",
+    "@videocraft/rendering": "0.1.0",
     "@videocraft/domain": "0.1.0"
   }
 }
