@@ -36,3 +36,28 @@ test("render downloads reject output keys outside the project scope", async () =
   assert.equal(response.statusCode, 404);
   await app.close();
 });
+
+test('export history requires access and excludes storage credentials and foreign jobs', async () => {
+  const app=Fastify(); let authenticated=true,allowed=true;
+  const base={id:'job',projectId:'p',revision:2,status:'failed',progress:5,settings:{format:'mp4'},idempotencyKey:'private-key',output:{storageKey:'private-object'},errorMessage:'Transition failed'};
+  registerRenderRoutes(app,{jobs:{get:async()=>undefined,save:async()=>{},update:async()=>{},listForProject:async()=>[base,{...base,id:'foreign',projectId:'other'}]},storage:{resolve:()=>'',putFile:async()=>{throw Error('unused')},remove:async()=>{}},signingSecret:'secret',authenticate:async()=>authenticated?{userId:'u'}:null,authorize:{canAccess:async()=>allowed}});
+  const list=()=>app.inject({method:'GET',url:'/v1/projects/p/renders'});
+  const response=await list(); assert.equal(response.statusCode,200);
+  assert.equal(response.json().jobs.length,1);
+  assert.equal(response.json().jobs[0].errorMessage,'Transition failed');
+  assert.equal(response.json().jobs[0].output,undefined);
+  assert.equal(response.json().jobs[0].idempotencyKey,undefined);
+  allowed=false; assert.equal((await list()).statusCode,403);
+  authenticated=false; assert.equal((await list()).statusCode,401);
+  await app.close();
+});
+
+test('late cancellation reports a completed export instead of claiming it was cancelled', async () => {
+  const app=Fastify();
+  let job={id:'race',projectId:'p',revision:1,settings:{format:'mp4'},idempotencyKey:'key',status:'running',progress:25};
+  registerRenderRoutes(app,{jobs:{get:async()=>job,save:async()=>{},update:async()=>{job={...job,status:'succeeded',progress:100};}},storage:{resolve:()=>'',putFile:async()=>{throw Error('unused')},remove:async()=>{}},signingSecret:'secret',authenticate:async()=>({userId:'u'}),authorize:{canAccess:async()=>true}});
+  const response=await app.inject({method:'POST',url:'/v1/projects/p/renders/race/cancel'});
+  assert.equal(response.statusCode,409);
+  assert.equal(job.status,'succeeded');
+  await app.close();
+});

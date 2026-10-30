@@ -10,6 +10,16 @@ export interface RenderRouteDependencies {
   authorize: { canAccess(principal: { userId: UUID }, projectId: UUID, role: "viewer" | "editor"): Promise<boolean> };
 }
 export function registerRenderRoutes(server: FastifyInstance, dependencies: RenderRouteDependencies): void {
+  server.get("/v1/projects/:projectId/renders", async (request, reply) => {
+    const principal = await dependencies.authenticate(request);
+    if (!principal) return error(reply, 401, "unauthorized", "Authentication required");
+    const { projectId } = request.params as { projectId: string };
+    if (!(await dependencies.authorize.canAccess(principal, projectId, "viewer"))) return error(reply, 403, "forbidden", "Project access denied");
+    if (!dependencies.jobs.listForProject) return error(reply, 503, "history_unavailable", "Export history is not available");
+    const jobs = await dependencies.jobs.listForProject(projectId, 25);
+    // History never exposes object keys, checksums or idempotency tokens.
+    return { jobs: jobs.filter((j) => j.projectId === projectId).map((j) => ({ id: j.id, revision: j.revision, status: j.status, progress: j.progress, settings: j.settings, ...(j.createdAt ? { createdAt: j.createdAt } : {}), ...(j.errorMessage ? { errorMessage: j.errorMessage.slice(0, 300) } : {}) })) };
+  });
   server.get("/v1/projects/:projectId/renders/:renderId", async (request, reply) => {
     const principal = await dependencies.authenticate(request);
     if (!principal) return error(reply, 401, "unauthorized", "Authentication required");
@@ -29,10 +39,12 @@ export function registerRenderRoutes(server: FastifyInstance, dependencies: Rend
     const job = await dependencies.jobs.get(params.renderId);
     const output = job ? projectOutput(job, params.projectId) : undefined;
     if (!job || !output || job.status !== "succeeded") return error(reply, 404, "not_found", "Completed render output not found");
-    if (dependencies.storage.createDownloadUrl) return { url: await dependencies.storage.createDownloadUrl(output.storageKey, 300), expires: Math.floor(Date.now() / 1000) + 300, providerNative: true };
+    const attachment = (request.query as { attachment?: string }).attachment === "1";
+    const filename = "videocraft-export." + (output.mimeType === "video/webm" ? "webm" : "mp4");
+    if (dependencies.storage.createDownloadUrl) return { url: await dependencies.storage.createDownloadUrl(output.storageKey, 300, attachment ? { filename } : {}), expires: Math.floor(Date.now() / 1000) + 300, providerNative: true };
     const expires = Math.floor(Date.now() / 1000) + 300;
     const signature = sign(params.projectId + ":" + params.renderId + ":" + output.storageKey + ":" + expires, dependencies.signingSecret);
-    return { url: "/v1/projects/" + params.projectId + "/renders/" + params.renderId + "/download?expires=" + expires + "&signature=" + signature, expires, providerNative: false };
+    return { url: "/v1/projects/" + params.projectId + "/renders/" + params.renderId + "/download?expires=" + expires + "&signature=" + signature + (attachment ? "&attachment=1" : ""), expires, providerNative: false };
   });
   server.get("/v1/projects/:projectId/renders/:renderId/download", async (request, reply) => {
     const params = request.params as { projectId?: string; renderId?: string };
@@ -43,6 +55,7 @@ export function registerRenderRoutes(server: FastifyInstance, dependencies: Rend
     const query = request.query as { expires?: string; signature?: string };
     const signed = typeof query.expires === "string" && typeof query.signature === "string" && Number.isSafeInteger(Number(query.expires)) && Number(query.expires) >= Math.floor(Date.now() / 1000) && verify(params.projectId + ":" + params.renderId + ":" + output.storageKey + ":" + query.expires, query.signature, dependencies.signingSecret);
     if (!signed) return error(reply, 401, "invalid_download_signature", "Download URL is missing or expired");
+    if ((request.query as { attachment?: string }).attachment === "1") reply.header("content-disposition", 'attachment; filename="videocraft-export.' + (output.mimeType === "video/webm" ? "webm" : "mp4") + '"');
     return sendRanged(request, reply, dependencies.storage.resolve(output.storageKey), output.mimeType);
   });
   server.post("/v1/projects/:projectId/renders/:renderId/cancel", async (request, reply) => {
@@ -56,7 +69,9 @@ export function registerRenderRoutes(server: FastifyInstance, dependencies: Rend
     if (job.status === "succeeded" || job.status === "failed" || job.status === "cancelled") return error(reply, 409, "render_state", "Render job is already terminal");
     const cancelled = { ...job, status: "cancelled" as const, progress: Math.min(job.progress, 99) };
     await dependencies.jobs.update(cancelled);
-    return { job: cancelled };
+    const actual = await dependencies.jobs.get(params.renderId);
+    if (actual && actual.status !== "cancelled") return error(reply, 409, "render_state", "Export finished before it could be cancelled");
+    return { job: actual ?? cancelled };
   });
 }
 function sign(value: string, secret: string): string { return createHmac("sha256", secret).update(value).digest("base64url"); }

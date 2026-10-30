@@ -15,6 +15,22 @@ export interface TimelineRouteDependencies {
   saveRevision(input: { projectId: UUID; createdBy: UUID; timeline: ProjectRevision["timeline"]; acceptedProposalIds: UUID[]; tailoring?: NonNullable<ProjectRevision["tailoring"]> }): Promise<ProjectRevision>;
 }
 export function registerTimelineRoutes(server: FastifyInstance, dependencies: TimelineRouteDependencies): void {
+  // Restore by creating a new revision. History is immutable; a stale tab cannot overwrite newer work.
+  server.post("/v1/projects/:projectId/revisions/:revision/restore", async (request, reply) => {
+    const principal = await dependencies.authenticate(request);
+    if (!principal) return error(reply, 401, "unauthorized", "Authentication required");
+    const params = request.params as { projectId: string; revision: string };
+    if (!(await dependencies.authorize.canAccess(principal, params.projectId, "editor"))) return error(reply, 403, "forbidden", "Project access denied");
+    const body = request.body as { expectedRevision?: unknown } | undefined;
+    if (!/^\d+$/.test(params.revision) || Number(params.revision) < 1 || !Number.isSafeInteger(body?.expectedRevision)) return error(reply, 400, "invalid_request", "A target revision and expectedRevision are required");
+    const project = await dependencies.projects.get(params.projectId);
+    if (!project) return error(reply, 404, "not_found", "Project not found");
+    if (project.revision !== body!.expectedRevision) return error(reply, 409, "revision_conflict", "A newer edit exists; reload before restoring");
+    const target = await dependencies.revisions.get(params.projectId, Number(params.revision));
+    if (!target) return error(reply, 404, "not_found", "Revision not found");
+    const revision = await dependencies.saveRevision({ projectId: params.projectId, createdBy: principal.userId, timeline: target.timeline, acceptedProposalIds: target.acceptedProposalIds, ...(target.tailoring ? { tailoring: target.tailoring } : {}) });
+    return reply.code(201).send({ revision });
+  });
   server.post("/v1/projects/:projectId/timeline/export", async (request, reply) => {
     const principal = await dependencies.authenticate(request);
     if (!principal) return error(reply, 401, "unauthorized", "Authentication required");

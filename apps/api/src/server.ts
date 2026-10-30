@@ -69,6 +69,7 @@ export function buildServer(dependencies: ApiDependencies): FastifyInstance {
     }
   });
 
+  server.get("/version", async () => ({ sha: /^[a-f0-9]{40}$/.test(process.env.VIDEOCRAFT_RELEASE_SHA ?? "") ? process.env.VIDEOCRAFT_RELEASE_SHA : "unknown" }));
   server.get("/healthz", async () => ({ status: "ok" }));
   server.get("/readyz", async (_request, reply) => {
     for (const dependency of dependencies.readiness ?? []) {

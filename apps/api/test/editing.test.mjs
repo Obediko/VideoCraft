@@ -136,3 +136,28 @@ test("edits may only reference this project's assets, of the right kind; music i
   const cleared = await edit(3, [{ type: "clear-music" }]);
   assert.equal(cleared.json().revision.timeline.tracks.some((t) => t.kind === "audio"), false);
 });
+
+test('restoring a revision creates a new revision and rejects stale or foreign restores', async () => {
+  const projects = new InMemoryProjectRepository(), assets = new InMemoryAssetRepository(), revisions = new InMemoryRevisionRepository();
+  let n = 0;
+  const ids = { next: () => 'restore-' + ++n }, clock = { now: () => new Date().toISOString() };
+  const service = new ProjectService(projects, assets, revisions, ids, clock);
+  let allowed = true;
+  const server = buildServer({ projects, assets, revisions, members: new InMemoryProjectMemberRepository(), scenes: new InMemorySceneRepository(), authenticate: { authenticate: async () => ({userId:'u'}) }, authorize: {canAccess:async()=>allowed}, strategies:new StaticStrategyRegistry(), clock, ids });
+  registerTimelineRoutes(server, { projects, assets, revisions, authenticate:async()=>({userId:'u'}), authorize:{canAccess:async()=>allowed}, saveRevision:i=>service.saveRevision(i) });
+  const project = await service.createProject({name:'Restore',ownerId:'u'});
+  const timeline = {durationUs:1_000_000,tracks:[{id:'v',kind:'video',clips:[{id:'c',assetId:'generated:test',sourceStartUs:0,sourceEndUs:1_000_000,timelineStartUs:0,timelineEndUs:1_000_000}]}]};
+  await service.saveRevision({projectId:project.id,createdBy:'u',timeline});
+  await service.saveRevision({projectId:project.id,createdBy:'u',timeline:{...timeline,durationUs:0,tracks:[]}});
+  const restore = (target, expectedRevision) => server.inject({method:'POST',url:`/v1/projects/${project.id}/revisions/${target}/restore`,payload:{expectedRevision}});
+  const restored = await restore(1,2);
+  assert.equal(restored.statusCode,201,restored.body);
+  assert.equal(restored.json().revision.revision,3);
+  assert.deepEqual(restored.json().revision.timeline,timeline);
+  assert.equal((await revisions.get(project.id,2)).timeline.durationUs,0,'the edited revision remains immutable');
+  assert.equal((await restore(1,2)).statusCode,409,'stale tab cannot overwrite');
+  assert.equal((await restore(999,3)).statusCode,404);
+  allowed=false;
+  assert.equal((await restore(1,3)).statusCode,403);
+  await server.close();
+});

@@ -1,5 +1,9 @@
 FROM node:22-bookworm-slim
 
+ARG RELEASE_SHA=unknown
+ENV VIDEOCRAFT_RELEASE_SHA=$RELEASE_SHA
+LABEL org.opencontainers.image.revision=$RELEASE_SHA
+
 ENV NODE_ENV=production
 ENV PORT=8080
 

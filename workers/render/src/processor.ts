@@ -153,6 +153,8 @@ export class RenderTaskProcessor {
         },
       };
       const plan = await new FfmpegCommandPlanner(assetResolver).plan(task.revision, task.settings, outputPath);
+      const beforeRender = await this.renderJobs.get(jobId);
+      if (beforeRender?.status === "cancelled") return beforeRender;
       await progress.update(25);
       await this.renderJobs.update({ ...running, progress: 25 });
 
@@ -194,6 +196,11 @@ export class RenderTaskProcessor {
         },
       };
       await this.renderJobs.update(succeeded);
+      const finalState = await this.renderJobs.get(jobId);
+      if (finalState?.status === "cancelled") {
+        await this.storage.remove(stored.key).catch(() => undefined);
+        return finalState;
+      }
       await progress.update(100);
       return succeeded;
     } catch (error) {
@@ -202,7 +209,7 @@ export class RenderTaskProcessor {
       const failed: RenderJob = {
         ...running,
         status: "failed",
-        progress: running.progress,
+        progress: latest?.progress ?? running.progress,
         errorMessage: error instanceof Error ? error.message : "Render failed",
       };
       await this.renderJobs.update(failed);

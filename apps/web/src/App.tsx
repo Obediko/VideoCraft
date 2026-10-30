@@ -67,6 +67,7 @@ type Segment = { id: string; startUs: number; endUs: number; text: string; words
 const API = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
 const LAST_PROJECT_KEY = "videocraft.lastProject";
 const LAST_SCREEN_KEY = "videocraft.lastScreen";
+const renderKey = (id: string) => "videocraft.render.v1." + id;
 // One refresh at a time per tab: the server rotates the session on every refresh, so parallel refreshes would race.
 let refreshInFlight: Promise<{ accessToken: string; user: { email: string } }> | null = null;
 function refreshSession(): Promise<{ accessToken: string; user: { email: string } }> {
@@ -81,6 +82,7 @@ function kindOfFile(file: File): string { return file.type.startsWith("audio/") 
 
 export function App() {
   const [token, setToken] = useState("");
+  const tokenRef = useRef(token); tokenRef.current = token;
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
@@ -99,6 +101,18 @@ export function App() {
   const [renderJobId, setRenderJobId] = useState("");
   const [renderJobStatus, setRenderJobStatus] = useState("");
   const [renderUrl, setRenderUrl] = useState("");
+  const [renderPolling, setRenderPolling] = useState(false);
+  const [exportHistory, setExportHistory] = useState<Array<{ id: string; revision: number; status: string; progress: number; createdAt?: string; errorMessage?: string }>>([]);
+  const [exportHistoryError, setExportHistoryError] = useState("");
+  const [exportHistoryRetry, setExportHistoryRetry] = useState(0);
+  const exportPlayer = useRef<HTMLVideoElement | null>(null);
+  const exportPosition = useRef({ time: 0, playing: false });
+  const renderGeneration = useRef(0);
+  const currentProjectRef = useRef(projectId); currentProjectRef.current = projectId;
+  const [undoHistory, setUndoHistory] = useState<number[]>([]);
+  const [redoHistory, setRedoHistory] = useState<number[]>([]);
+  const previousRevision = useRef(0);
+  const restoring = useRef(false);
   const [busy, setBusy] = useState(false);
   const [selectedClipId, setSelectedClipId] = useState("");
   const [platform, setPlatform] = useState("tiktok");
@@ -345,16 +359,21 @@ export function App() {
     } catch (error) { setStatus(errorMessage(error)); setBusy(false); }
   }
 
-  async function request(path: string, init: RequestInit = {}, accessToken = token, retried = false): Promise<any> {
+  async function request(path: string, init: RequestInit = {}, accessToken = tokenRef.current, retried = false): Promise<any> {
     const response = await fetch(API + path, {
       ...init,
       credentials: "include",
+      signal: init.signal ?? AbortSignal.timeout(path.includes("/transcript") ? 20 * 60_000 : (!init.method || init.method === "GET") ? 30_000 : 3 * 60_000),
       headers: { ...(init.body ? { "content-type": "application/json" } : {}), ...(accessToken ? { authorization: "Bearer " + accessToken } : {}), ...init.headers },
     });
     if (response.status === 401 && accessToken && !retried && !path.startsWith("/auth/")) {
       // The 15-minute access token expired: rotate the refresh session once and retry.
       const session = await refreshSession().catch(() => null);
-      if (session) { setToken(session.accessToken); return request(path, init, session.accessToken, true); }
+      if (session) { tokenRef.current = session.accessToken; setToken(session.accessToken); return request(path, init, session.accessToken, true); }
+    }
+    if (response.status === 401 && accessToken && !path.startsWith("/auth/")) {
+      tokenRef.current = ""; setToken(""); setUserEmail(""); resetProjectState(); setProjectId(""); setScreen("projects");
+      setStatus("Your session expired. Sign in again to continue.");
     }
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.error?.message ?? "Request failed");
@@ -377,6 +396,52 @@ export function App() {
     refreshSession().then((result) => { setToken(result.accessToken); setUserEmail(result.user.email); }).catch(() => undefined).finally(() => setSessionChecked(true));
   }, []);
 
+  useEffect(() => {
+    const before = previousRevision.current;
+    if (revision > 0 && before > 0 && revision !== before && !restoring.current) {
+      setUndoHistory((history) => [...history, before].slice(-50)); setRedoHistory([]);
+    }
+    previousRevision.current = revision; restoring.current = false;
+  }, [revision]);
+
+  useEffect(() => {
+    if (!projectId || screen !== "export") return;
+    let cancelled = false;
+    request("/v1/projects/" + projectId + "/renders").then((result) => {
+      if (!cancelled) { setExportHistory(result.jobs ?? []); setExportHistoryError(""); }
+    }).catch(() => { if (!cancelled) setExportHistoryError("Export history could not be loaded. Refresh to try again."); });
+    return () => { cancelled = true; };
+  }, [projectId, screen, exportHistoryRetry, renderJobStatus]);
+
+  function renewRenderUrl(url: string) {
+    const player = exportPlayer.current;
+    if (player) exportPosition.current = { time: player.currentTime, playing: !player.paused };
+    setRenderUrl(url);
+  }
+
+  // Refresh completed export links while the tab remains open; clicking download also renews the link.
+  useEffect(() => {
+    if (!projectId || !renderJobId || !renderUrl) return;
+    let cancelled = false;
+    const refresh = () => request("/v1/projects/" + projectId + "/renders/" + renderJobId + "/download-url")
+      .then((download) => { if (!cancelled) renewRenderUrl(/^https?:\/\//.test(download.url) ? download.url : API + download.url); })
+      .catch(() => { if (!cancelled) setStatus("The export link could not be renewed. Use Refresh export status to try again."); });
+    const timer = setInterval(refresh, 240_000);
+    const visible = () => { if (document.visibilityState === "visible") void refresh(); };
+    document.addEventListener("visibilitychange", visible);
+    return () => { cancelled = true; clearInterval(timer); document.removeEventListener("visibilitychange", visible); };
+  }, [projectId, renderJobId, Boolean(renderUrl)]);
+
+  // Playback and matte links last an hour. Renew before expiry, and renew on return from a suspended tab.
+  useEffect(() => {
+    if (!projectId) return;
+    const renew = () => { setSourceUrls({}); setSourceRetry((n) => n + 1); setMatteUrls({}); setMatteRetry((n) => n + 1); };
+    const timer = setInterval(renew, 50 * 60_000);
+    const visible = () => { if (document.visibilityState === "visible") renew(); };
+    document.addEventListener("visibilitychange", visible);
+    return () => { clearInterval(timer); document.removeEventListener("visibilitychange", visible); };
+  }, [projectId]);
+
   // After signing in (or a reload), come back to the project and step the person was on.
   const [projectsLoaded, setProjectsLoaded] = useState(false);
   useEffect(() => {
@@ -397,10 +462,14 @@ export function App() {
   async function signOut() {
     await request("/auth/logout", { method: "POST" }).catch(() => undefined);
     setToken(""); setUserEmail(""); setProjects([]); setProjectId(""); setScreen("projects");
+    resetProjectState(); setSourceUrls({}); setMatteUrls({}); setFaceTracks({});
     setStatus("Signed out");
   }
 
   function resetProjectState() {
+    renderGeneration.current += 1; setRenderPolling(false);
+    previousRevision.current = 0; restoring.current = false; setUndoHistory([]); setRedoHistory([]);
+    setExportHistory([]); setExportHistoryError("");
     setAssets([]); setTimeline({ durationUs: 0, tracks: [] }); setRevision(0); setProposal(null);
     setPlan(null); setPlanApplied(false); setCheck(null); setSegments([]); setSegmentsFor(""); setSelection(null); setSelectedClipId("");
     setRenderJobId(""); setRenderJobStatus(""); setRenderUrl(""); setBrief("");
@@ -449,6 +518,15 @@ export function App() {
       setAssets(assetResult.assets);
       const opened: Timeline = revisionResult ? revisionResult.revision.timeline : { durationUs: 0, tracks: [] };
       setTimeline(opened);
+      previousRevision.current = project.revision;
+      setUndoHistory(Array.from({ length: Math.min(50, Math.max(0, project.revision - 1)) }, (_, i) => Math.max(1, project.revision - 50) + i));
+      try {
+        const saved = JSON.parse(recall(renderKey(project.id)) || "null");
+        if (saved?.revision === project.revision && typeof saved.id === "string" && PLATFORMS[saved.platform]) {
+          setRenderJobId(saved.id); setPlatform(saved.platform); setRenderJobStatus("Checking export status");
+          void pollRender(saved.id, project.id);
+        }
+      } catch { /* Ignore invalid local cache, never trust it as export authorization. */ }
       if (revisionResult?.revision.tailoring?.intent) setBrief(revisionResult.revision.tailoring.intent);
       const hasCut = (opened.tracks.find((track) => track.kind === "video")?.clips.length ?? 0) > 0;
       const target: Screen = preferred && (hasCut || preferred === "describe") ? preferred : hasCut ? "edit" : "describe";
@@ -465,6 +543,7 @@ export function App() {
       const existing = await request(base).catch(() => ({ segments: [] }));
       const result = existing.segments?.length ? existing : await request(base, { method: "POST" });
       if (!result.segments?.length) throw new Error("No speech was found in this video");
+      if (currentProjectRef.current !== pid) return;
       setSegments(result.segments); setSegmentsFor(assetId);
     })();
     const tracked = promise.finally(() => setTranscribing((current) => (current?.promise === tracked ? null : current)));
@@ -492,19 +571,72 @@ export function App() {
     finally { setBusy(false); input.value = ""; }
   }
 
-  async function pollRender(id: string) {
-    // Renders of long videos take minutes: poll for up to 20 minutes, easing off after the first minute.
-    const started = Date.now();
-    while (Date.now() - started < 20 * 60_000) {
-      await new Promise((resolve) => setTimeout(resolve, Date.now() - started < 60_000 ? 2000 : 5000));
-      try {
-        const result = await request("/v1/projects/" + projectId + "/renders/" + id);
-        setRenderJobStatus(result.job.status + " " + result.job.progress + "%");
-        if (result.job.status === "succeeded") { const download = await request("/v1/projects/" + projectId + "/renders/" + id + "/download-url"); setRenderUrl(/^https?:\/\//.test(download.url) ? download.url : API + download.url); setStatus("Render succeeded"); setPreviewMode("render"); return; }
-        if (["failed", "cancelled"].includes(result.job.status)) { setStatus("Render " + result.job.status + (result.job.errorMessage ? ": " + String(result.job.errorMessage).slice(0, 200) : "")); return; }
-      } catch (error) { setStatus(errorMessage(error)); return; }
-    }
-    setStatus("Render is still running; check back in a moment");
+  async function pollRender(id: string, pid = projectId) {
+    const generation = ++renderGeneration.current;
+    const active = () => generation === renderGeneration.current;
+    const started = Date.now(); let failures = 0;
+    setRenderPolling(true);
+    try {
+      while (active() && Date.now() - started < 20 * 60_000) {
+        try {
+          const result = await request("/v1/projects/" + pid + "/renders/" + id);
+          if (!active()) return;
+          failures = 0;
+          setRenderJobStatus(result.job.status + " " + result.job.progress + "%");
+          if (result.job.status === "succeeded") {
+            const download = await request("/v1/projects/" + pid + "/renders/" + id + "/download-url");
+            if (!active()) return;
+            setRenderUrl(/^https?:\/\//.test(download.url) ? download.url : API + download.url);
+            setStatus("Render succeeded"); setPreviewMode("render"); return;
+          }
+          if (["failed", "cancelled"].includes(result.job.status)) { setStatus("Render " + result.job.status + (result.job.errorMessage ? ": " + String(result.job.errorMessage).slice(0, 200) : "")); return; }
+        } catch (error) {
+          if (!active()) return;
+          failures += 1;
+          if (failures >= 3) { setStatus("Cannot check this export right now. It may still be running. Use Refresh export status to reconnect."); return; }
+        }
+        await new Promise((resolve) => setTimeout(resolve, Date.now() - started < 60_000 ? 2000 : 5000));
+      }
+      if (active()) setStatus("Export is still running. Use Refresh export status to check again.");
+    } finally { if (active()) setRenderPolling(false); }
+  }
+
+  async function cancelExport() {
+    if (!renderJobId || busy) return;
+    setBusy(true);
+    try {
+      await request("/v1/projects/" + projectId + "/renders/" + renderJobId + "/cancel", { method: "POST" });
+      renderGeneration.current += 1; setRenderPolling(false);
+      setRenderJobStatus("cancelled"); setStatus("Export cancelled. Your edit is saved.");
+    } catch (error) { setStatus(errorMessage(error)); }
+    finally { setBusy(false); }
+  }
+
+  async function downloadExport(event: React.MouseEvent<HTMLAnchorElement>) {
+    event.preventDefault();
+    if (!projectId || !renderJobId) return;
+    try {
+      const download = await request("/v1/projects/" + projectId + "/renders/" + renderJobId + "/download-url?attachment=1");
+      const url = /^https?:\/\//.test(download.url) ? download.url : API + download.url;
+      const link = document.createElement("a"); link.href = url; link.download = "videocraft-export.mp4"; link.rel = "noopener"; link.click();
+    } catch (error) { setStatus("Download could not start. " + errorMessage(error)); }
+  }
+
+  async function restoreEdit(direction: "undo" | "redo") {
+    const history = direction === "undo" ? undoHistory : redoHistory;
+    const target = history.at(-1); if (!target || busy) return;
+    setBusy(true);
+    try {
+      const result = await request("/v1/projects/" + projectId + "/revisions/" + target + "/restore", { method: "POST", body: JSON.stringify({ expectedRevision: revision }) });
+      restoring.current = true;
+      if (direction === "undo") { setUndoHistory((h) => h.slice(0, -1)); setRedoHistory((h) => [...h, revision]); }
+      else { setRedoHistory((h) => h.slice(0, -1)); setUndoHistory((h) => [...h, revision]); }
+      renderGeneration.current += 1; setRenderPolling(false);
+      setRenderJobId(""); setRenderUrl(""); setRenderJobStatus("");
+      setRevision(result.revision.revision); setTimeline(result.revision.timeline); setCheck(null); setSelectedClipId("");
+      setStatus(direction === "undo" ? "Last edit undone" : "Edit redone");
+    } catch (error) { restoring.current = false; setStatus(errorMessage(error)); }
+    finally { setBusy(false); }
   }
 
   async function applyEdit(operations: Array<Record<string, unknown>>, message: string) {
@@ -514,6 +646,7 @@ export function App() {
       const result = await request("/v1/projects/" + projectId + "/revisions/" + revision + "/edit", { method: "POST", body: JSON.stringify({ operations }) });
       setRevision(result.revision.revision);
       setTimeline(result.revision.timeline);
+      renderGeneration.current += 1; setRenderPolling(false);
       setRenderUrl(""); setRenderJobId(""); setRenderJobStatus("");
       setStatus(message + " (revision " + result.revision.revision + ")");
       return true;
@@ -744,10 +877,17 @@ export function App() {
     setBusy(true);
     try {
       const preset = PLATFORMS[platform]!;
+      const attemptStorageKey = "videocraft.renderAttempt.v1." + projectId + ":" + revision + ":" + platform;
+      // A terminal job requires a fresh attempt. A lost POST response reuses the
+      // saved attempt key, so retrying a connection failure cannot create duplicates.
+      const idempotencyKey = recall(attemptStorageKey) || projectId + ":" + revision + ":" + platform + ":" + crypto.randomUUID();
+      remember(attemptStorageKey, idempotencyKey);
       const result = await request("/v1/projects/" + projectId + "/renders", {
         method: "POST",
-        body: JSON.stringify({ revision, idempotencyKey: projectId + ":" + revision + ":" + platform, settings: { format: "mp4", videoCodec: "libx264", audioCodec: "aac", width: preset.width, height: preset.height, frameRate: 30, fit: preset.fit, captionStyle: preset.captionStyle } }),
+        body: JSON.stringify({ revision, idempotencyKey, settings: { format: "mp4", videoCodec: "libx264", audioCodec: "aac", width: preset.width, height: preset.height, frameRate: 30, fit: preset.fit, captionStyle: preset.captionStyle } }),
       });
+      remember(attemptStorageKey, "");
+      remember(renderKey(projectId), JSON.stringify({ id: result.job.id, revision, platform }));
       setRenderJobId(result.job.id); setRenderUrl(""); setRenderJobStatus("queued 0%"); setStatus("Export started (" + preset.label + ")…"); void pollRender(result.job.id);
     } catch (error) { setStatus(errorMessage(error)); }
     finally { setBusy(false); }
@@ -786,9 +926,10 @@ export function App() {
 
   // ── Sign in ────────────────────────────────────────────────────────────────────────────────
   if (!userEmail) {
-    return <div className="app-shell">
+    return <div className="app-shell" data-release={import.meta.env.VITE_RELEASE_SHA ?? "development"}>
       <header className="topbar"><span className="brand">VideoCraft</span><div className="spacer" />{statusPill}</header>
-      <main className="center-page">
+
+    <main className="center-page">
         <section className="card auth-card" aria-label="Sign in">
           <h1>{authMode === "login" ? "Sign in" : "Create your account"}</h1>
           <p className="muted">Describe your video in your own words; VideoCraft makes the first cut and you approve every part.</p>
@@ -805,7 +946,7 @@ export function App() {
   // ── Videos (projects) ─────────────────────────────────────────────────────────────────────
   if (screen === "projects" || !projectId) {
     const sorted = [...projects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-    return <div className="app-shell">
+    return <div className="app-shell" data-release={import.meta.env.VITE_RELEASE_SHA ?? "development"}>
       <header className="topbar"><span className="brand">VideoCraft</span><div className="spacer" />{statusPill}<details className="menu"><summary className="btn">{userEmail}</summary><div className="menu-body"><button className="btn" onClick={signOut} disabled={busy}>Sign out</button></div></details></header>
       <main className="page">
         <div className="page-head">
@@ -830,6 +971,7 @@ export function App() {
     <button className="btn icon" aria-label="Back to your videos" onClick={() => setScreen("projects")} disabled={busy}>‹</button>
     <div className="title-block"><span className="project-title">{currentProject?.name ?? projectName}</span><span className="muted small">{revision > 0 ? "Saved · revision " + revision : "Not edited yet"}</span></div>
     {stepBar}
+    {projectId && revision > 0 && <div className="edit-history" aria-label="Edit history"><button className="btn" onClick={() => void restoreEdit("undo")} disabled={busy || undoHistory.length === 0}>Undo</button><button className="btn" onClick={() => void restoreEdit("redo")} disabled={busy || redoHistory.length === 0}>Redo</button></div>}
     {statusPill}
     <details className="menu" onToggle={() => setDeleteConfirm("")}><summary className="btn" aria-label="Project menu">⋯</summary><div className="menu-body danger-zone">
       <p className="small">Signed in as {userEmail}</p>
@@ -843,15 +985,20 @@ export function App() {
 
   const player = <div className="player">
     <div className="preview-tabs" role="tablist"><button role="tab" aria-selected={previewMode === "edit"} className={previewMode === "edit" ? "on" : ""} onClick={() => setPreviewMode("edit")} disabled={videoClips.length === 0}>Edit</button><button role="tab" aria-selected={previewMode === "source"} className={previewMode === "source" ? "on" : ""} onClick={() => setPreviewMode("source")}>Original</button><button role="tab" aria-selected={previewMode === "render"} className={previewMode === "render" ? "on" : ""} onClick={() => setPreviewMode("render")}>Export</button></div>
-    {previewMode === "edit" && videoClips.length > 0 ? <LivePreview ref={liveRef} tracks={timeline.tracks} durationUs={timeline.durationUs} urls={sourceUrls} shape={(PLATFORMS[platform]?.width ?? 9) < (PLATFORMS[platform]?.height ?? 16) ? "tall" : PLATFORMS[platform]?.width === PLATFORMS[platform]?.height ? "square" : "wide"} fit={PLATFORMS[platform]?.fit ?? "cover"} output={{ width: PLATFORMS[platform]?.width ?? 1080, height: PLATFORMS[platform]?.height ?? 1920 }} captionStyle={PLATFORMS[platform]?.captionStyle ?? "bold-pop"} faces={faceTracks} sizes={assetSizes} mattes={matteUrls} stills={stillAssets} onRetryMatte={() => { setMatteUrls({}); setMatteRetry((n) => n + 1); }} onTime={onLiveTime} />
-    : <div className={"preview-screen " + ((PLATFORMS[platform]?.width ?? 9) < (PLATFORMS[platform]?.height ?? 16) ? "tall" : "wide")}>{previewMode === "render" ? (renderUrl ? <video controls src={renderUrl} /> : <span>{renderJobId ? "Exporting " + renderJobStatus : "Your exported video will play here"}</span>) : (sourceUrl ? <video ref={playerRef} controls src={sourceUrl} onTimeUpdate={stopAtClipEnd} /> : <span>{sourceNote || "Preparing the preview…"}</span>)}</div>}
+    {previewMode === "edit" && videoClips.length > 0 ? <LivePreview ref={liveRef} tracks={timeline.tracks} durationUs={timeline.durationUs} urls={sourceUrls} shape={(PLATFORMS[platform]?.width ?? 9) < (PLATFORMS[platform]?.height ?? 16) ? "tall" : PLATFORMS[platform]?.width === PLATFORMS[platform]?.height ? "square" : "wide"} fit={PLATFORMS[platform]?.fit ?? "cover"} output={{ width: PLATFORMS[platform]?.width ?? 1080, height: PLATFORMS[platform]?.height ?? 1920 }} captionStyle={PLATFORMS[platform]?.captionStyle ?? "bold-pop"} faces={faceTracks} sizes={assetSizes} mattes={matteUrls} stills={stillAssets} onRetryMedia={() => { setSourceUrls({}); setSourceRetry((n) => n + 1); }} onRetryMatte={() => { setMatteUrls({}); setMatteRetry((n) => n + 1); }} onTime={onLiveTime} />
+    : <div className={"preview-screen " + ((PLATFORMS[platform]?.width ?? 9) < (PLATFORMS[platform]?.height ?? 16) ? "tall" : "wide")}>{previewMode === "render" ? (renderUrl ? <video ref={exportPlayer} controls playsInline onLoadedMetadata={(event) => {
+      const player = event.currentTarget, saved = exportPosition.current;
+      if (saved.time > 0 && saved.time < player.duration) player.currentTime = saved.time;
+      if (saved.playing) void player.play().catch(() => setStatus("Tap Play to resume the refreshed export."));
+      exportPosition.current = { time: 0, playing: false };
+    }} src={renderUrl} onError={() => { setStatus("Export playback failed. Refresh the export link or download the file to try your device player."); }} /> : <span>{renderJobId ? "Exporting " + renderJobStatus : "Your exported video will play here"}</span>) : (sourceUrl ? <video ref={playerRef} controls playsInline src={sourceUrl} onTimeUpdate={stopAtClipEnd} /> : <span>{sourceNote || "Preparing the preview…"}</span>)}</div>}
     {previewMode === "source" && sourceNote && sourceUrl && <p className="muted small">{sourceNote}</p>}
   </div>;
 
   // ── Upload & describe ────────────────────────────────────────────────────────────────────
   if (screen === "describe") {
     const transcribed = Boolean(mainVideo && segmentsFor === mainVideo.id);
-    return <div className="app-shell">{projectHeader}
+    return <div className="app-shell" data-release={import.meta.env.VITE_RELEASE_SHA ?? "development"}>{projectHeader}
       <main className="page two-col">
         <section className="col narrow" aria-label="Your video">
           {mainVideo ? <div className="card video-card">
@@ -891,7 +1038,7 @@ export function App() {
   if (screen === "plan") {
     const proposalHighlights = proposal ? groupHighlights(proposal.operations) : [];
     const count = plan ? plan.suggestions.filter((item) => picked[item.id]).length : 0;
-    return <div className="app-shell">{projectHeader}
+    return <div className="app-shell" data-release={import.meta.env.VITE_RELEASE_SHA ?? "development"}>{projectHeader}
       <main className="page two-col">
         {plan ? <section className="col wide director-panel" aria-label="The first cut">
           <div className="row-between"><h1>The first cut</h1><span className="tag" title={plan.note ?? ""}>{plan.source === "ai" ? "AI director" + (plan.model ? " · " + plan.model : "") : "Built-in director"}</span></div>
@@ -931,7 +1078,7 @@ export function App() {
   // ── Check ───────────────────────────────────────────────────────────────────────────────
   if (screen === "check") {
     const toFix = check?.issues.filter((issue) => issue.severity === "fix").length ?? 0;
-    return <div className="app-shell">{projectHeader}
+    return <div className="app-shell" data-release={import.meta.env.VITE_RELEASE_SHA ?? "development"}>{projectHeader}
       <main className="page two-col">
         <section className="col wide check-panel" aria-label="Edit check" data-checked-revision={check?.revision ?? 0}>
           <div className="row-between"><h1>Check your edit</h1>{check && <span className="tag">{check.ai ? "Built-in checks + AI look" : "Built-in checks"}{check.revision !== revision ? " · edited since" : ""}</span>}</div>
@@ -960,7 +1107,7 @@ export function App() {
 
   // ── Export ──────────────────────────────────────────────────────────────────────────────
   if (screen === "export") {
-    return <div className="app-shell">{projectHeader}
+    return <div className="app-shell" data-release={import.meta.env.VITE_RELEASE_SHA ?? "development"}>{projectHeader}
       <main className="page two-col">
         <section className="col wide" aria-label="Export">
           <h1>Export</h1>
@@ -968,9 +1115,20 @@ export function App() {
           <fieldset className="format-list"><legend className="sr-only">Format</legend>{Object.entries(PLATFORMS).map(([key, preset]) => <label key={key} className={"card format" + (platform === key ? " on" : "")}><input type="radio" name="format" checked={platform === key} onChange={() => setPlatform(key)} /><span className={"frame " + (preset.width < preset.height ? "tall" : preset.width === preset.height ? "square" : "wide")} aria-hidden="true" /><span><strong>{preset.label}</strong><span className="mono small muted">{preset.width} × {preset.height}</span></span></label>)}</fieldset>
           <div className="actions">
             <button className="primary" onClick={submitRender} disabled={busy || !revision || Boolean(renderJobId && !renderUrl && !/^(failed|cancelled)/.test(renderJobStatus))}>Export video</button>
-            {renderUrl && <a className="btn" href={renderUrl} download="videocraft-export.mp4">Download video</a>}
+            {renderJobId && !renderUrl && !/^(failed|cancelled)/.test(renderJobStatus) && <button className="btn" disabled={busy} onClick={() => void cancelExport()}>Cancel export</button>}
+            {renderJobId && <button className="btn" onClick={() => void pollRender(renderJobId)} disabled={busy || renderPolling}>Refresh export status</button>}
+            {renderUrl && <a className="btn" href={renderUrl} download="videocraft-export.mp4" onClick={(event) => void downloadExport(event)}>Download video</a>}
           </div>
           {renderJobId && !renderUrl && <p className="muted">{/^(failed|cancelled)/.test(renderJobStatus) ? "Export " + renderJobStatus + ". Try exporting again after resolving the error above." : "Exporting… " + renderJobStatus + ". This takes roughly as long as the video itself."}</p>}
+          <details className="card"><summary>Export history</summary>
+            <button className="btn" onClick={() => setExportHistoryRetry((n) => n + 1)}>Refresh history</button>
+            {exportHistoryError && <p role="alert">{exportHistoryError}</p>}
+            {!exportHistory.length && !exportHistoryError && <p>No previous exports yet.</p>}
+            <ul className="item-list export-history">{exportHistory.map((job) => <li key={job.id}>
+              <span>Revision {job.revision} · {job.status} {job.progress}%{job.createdAt ? " · " + new Date(job.createdAt).toLocaleString() : ""}{job.errorMessage ? " · " + job.errorMessage : ""}<small className="mono"> Job: {job.id}</small></span>
+              <button className="btn" disabled={renderPolling} onClick={() => { setRenderJobId(job.id); setRenderUrl(""); setRenderJobStatus("Checking revision " + job.revision); void pollRender(job.id); }}>Open export</button>
+            </li>)}</ul>
+          </details>
           {learned && <details className="card learned-panel"><summary>Learned from your edits</summary>
             <p className="small">{learned.summary}</p>
             <p className="small muted">{learned.samples} signals: {learned.counts.removed ?? 0} removed, {learned.counts.exported ?? 0} exported, {learned.counts.rejected ?? 0} from rejected proposals.</p>
@@ -1119,7 +1277,7 @@ export function App() {
     </>}
   </aside> : null;
 
-  return <div className="app-shell">{projectHeader}
+  return <div className="app-shell" data-release={import.meta.env.VITE_RELEASE_SHA ?? "development"}>{projectHeader}
     <main className="editor">
       <nav aria-label="Editing modes" className="mode-rail">{MODES.map((item) => <button key={item.id} type="button" className={"mode" + (mode === item.id ? " on" : "")} aria-pressed={mode === item.id} onClick={() => { if (item.id === "review") { setScreen("check"); if (!check || check.revision !== revision) void runCheck(); } else setMode(item.id); }}><ModeIcon id={item.id} />{item.label}{item.id === "review" && check && check.revision === revision && check.issues.some((issue) => issue.severity === "fix") ? <span className="badge-dot" aria-label="has findings" /> : null}</button>)}</nav>
       <div className="work">

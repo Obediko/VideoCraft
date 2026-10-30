@@ -29,9 +29,10 @@ type Props = {
   stills?: Record<string, boolean>;
   onTime?(timelineUs: number): void;
   onRetryMatte?(): void;
+  onRetryMedia?(): void;
 };
 
-export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePreview({ tracks, durationUs, urls, shape, fit, output, captionStyle = "bold-pop", faces, sizes, mattes, stills, onTime, onRetryMatte }, ref) {
+export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePreview({ tracks, durationUs, urls, shape, fit, output, captionStyle = "bold-pop", faces, sizes, mattes, stills, onTime, onRetryMatte, onRetryMedia }, ref) {
   const video = useRef<HTMLVideoElement | null>(null);
   const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
   const snapRef = useRef<HTMLCanvasElement | null>(null);
@@ -39,6 +40,7 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
   const music = useRef<HTMLAudioElement | null>(null);
   const [tUs, setT] = useState(0);
   const [playing, setPlaying] = useState(false);
+  const [playbackError, setPlaybackError] = useState("");
   const clips = useMemo(() => [...(tracks.find((t) => t.kind === "video")?.clips ?? [])].sort((a, b) => a.timelineStartUs - b.timelineStartUs), [tracks]);
   const overlays = tracks.filter((t) => t.kind === "overlay").flatMap((t) => t.clips);
   const cues = tracks.filter((t) => t.kind === "caption").flatMap((t) => t.clips);
@@ -64,7 +66,7 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
     const go = () => { el.currentTime = at; };
     if (el.readyState >= 1) go(); else el.addEventListener("loadedmetadata", go, { once: true });
     // Invoke play in the click gesture, even while metadata is loading (iOS activation).
-    if (thenPlay) void el.play().catch(() => { setPlaying(false); music.current?.pause(); });
+    if (thenPlay) void el.play().catch(() => { setPlaying(false); music.current?.pause(); setPlaybackError("The footage could not start. Reload it, then tap Play again."); });
   }
   function seek(t: number) {
     const clamped = Math.max(0, Math.min(durationUs, t));
@@ -76,7 +78,7 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
   useImperativeHandle(ref, () => ({ seek, pause: () => { video.current?.pause(); music.current?.pause(); setPlaying(false); }, play: () => { if (!playing) toggle(); }, setMuted: (muted: boolean) => { if (video.current) video.current.muted = muted; if (music.current) music.current.muted = muted; } }));
 
   // Keep the picture on the right frame when the edit changes.
-  useEffect(() => { if (!playing) seek(tRef.current); }, [clips, urls]);
+  useEffect(() => { seek(tRef.current); }, [clips, urls]);
 
   // Sound effects play when the playhead reaches them, at their own volume (made in the browser, like the export's).
   useEffect(() => {
@@ -149,6 +151,7 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
     const start = tRef.current >= durationUs - 50_000 ? 0 : tRef.current;
     const i = clipAt(start); const clip = clips[i];
     if (!clip) return;
+    setPlaybackError("");
     setPlaying(true);
     // Unlock each narration element during the same user gesture. Later starts
     // are synchronized by the playhead effect; future narration stays silent now.
@@ -239,7 +242,7 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
 
   return <div className="live">
     <div className={"live-frame " + shape} aria-label="Live preview of the edit">
-      <video ref={(el) => { video.current = el; if (el !== videoEl) setVideoEl(el); }} className="live-video" muted={false} playsInline preload="auto" style={{ objectFit: fit, ...(currentFocus ? { objectPosition: (currentFocus.x * 100).toFixed(1) + "% " + (currentFocus.y * 100).toFixed(1) + "%" } : {}), transform: zoom !== 1 ? "scale(" + zoom.toFixed(4) + ")" : undefined, transformOrigin: "50% 40%", filter: look, ...(compositing ? { opacity: 0 } : {}) }} />
+      <video ref={(el) => { video.current = el; if (el !== videoEl) setVideoEl(el); }} className="live-video" onError={() => { setPlaying(false); music.current?.pause(); setPlaybackError("The footage could not be loaded. Reload it to renew the playback link."); }} muted={false} playsInline preload="auto" style={{ objectFit: fit, ...(currentFocus ? { objectPosition: (currentFocus.x * 100).toFixed(1) + "% " + (currentFocus.y * 100).toFixed(1) + "%" } : {}), transform: zoom !== 1 ? "scale(" + zoom.toFixed(4) + ")" : undefined, transformOrigin: "50% 40%", filter: look, ...(compositing ? { opacity: 0 } : {}) }} />
       {compositing && <BackgroundLayer video={videoEl} matteUrl={matteUrl!} spec={background!} fit={fit} focus={currentFocus} zoom={zoom} filter={look} onError={() => setCutoutFailed(true)} />}
       <canvas ref={snapRef} className="live-snap" aria-hidden="true" style={blendStyle ?? { display: "none" }} />
       {background && (!matteUrl || cutoutFailed) && <span className="live-note">{cutoutExpired || cutoutFailed ? <>Cutout preview unavailable. Showing the original footage. <button type="button" onClick={() => { setCutoutFailed(false); setCutoutExpired(false); setCutoutAttempt((n) => n + 1); onRetryMatte?.(); }}>Retry cutout</button></> : "Cutting you out for the preview…"}</span>}
@@ -262,6 +265,7 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
     </div>
     {musicUrl && <audio ref={music} src={musicUrl} loop preload="auto" />}
     {voiceovers.map((vo) => urls[vo.assetId] ? <audio key={vo.id} ref={(el) => { voiceEls.current[vo.id] = el; }} src={urls[vo.assetId]} preload="auto" /> : null)}
+    {playbackError && <p role="alert">{playbackError} <button type="button" className="btn" onClick={() => { setPlaybackError(""); onRetryMedia?.(); }}>Reload footage</button></p>}
     <div className="live-controls">
       <button type="button" className="btn icon" aria-label={playing ? "Pause" : "Play the edit"} onClick={toggle} disabled={clips.length === 0}>{playing ? "❚❚" : "▶"}</button>
       <input type="range" aria-label="Position in the edit" min={0} max={Math.max(1, Math.round(durationUs / 1000))} step={50} value={Math.round(tUs / 1000)} onChange={(event) => seek(Number(event.target.value) * 1000)} />

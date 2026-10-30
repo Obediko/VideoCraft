@@ -71,9 +71,10 @@ export class S3ObjectStorage implements ObjectStorage {
     await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }));
   }
 
-  async createDownloadUrl(key: string, expiresInSeconds: number): Promise<string> {
+  async createDownloadUrl(key: string, expiresInSeconds: number, options: { filename?: string } = {}): Promise<string> {
     if (!Number.isInteger(expiresInSeconds) || expiresInSeconds < 1 || expiresInSeconds > 604800) throw new Error("Invalid download URL lifetime");
-    return getSignedUrl(this.client, new GetObjectCommand({ Bucket: this.bucket, Key: key }), { expiresIn: expiresInSeconds });
+    if (options.filename && !/^[a-zA-Z0-9._-]{1,128}$/.test(options.filename)) throw new Error("Invalid download filename");
+    return getSignedUrl(this.client, new GetObjectCommand({ Bucket: this.bucket, Key: key, ...(options.filename ? { ResponseContentDisposition: 'attachment; filename="' + options.filename + '"' } : {}) }), { expiresIn: expiresInSeconds });
   }
 }
 
