@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { captionBand, captionBandAt, captionMarginFor, faceDuring, faceInOutput, focusFromTrack, renderAss, renderGraphicsAss, resolveCaptionStyle, type CaptionStyle, type FaceTrack, type GraphicItem, type PixelBox, type TimedCue } from "@videocraft/captions";
-import type { ProjectRevision, RenderSettings, TimelineClip, TimelineTrack } from "@videocraft/domain";
+import { blendSeconds, dipFades, XFADE_NAMES, type ProjectRevision, type RenderSettings, type TimelineClip, type TimelineTrack } from "@videocraft/domain";
 import { encodeWav, generateSoundEffect, type SoundEffectKind } from "@videocraft/music";
 
 export interface AssetPathResolver {
@@ -36,7 +36,6 @@ export const LOOK_FILTERS: Record<string, string> = {
   soft: "eq=contrast=0.93:saturation=0.94:brightness=0.025",
   mono: "hue=s=0,eq=contrast=1.12",
 };
-const TRANSITION_SECONDS: Record<string, number> = { "dip-black": 0.25, "dip-white": 0.25, flash: 0.12 };
 
 export interface PlatformPreset { id: string; label: string; settings: RenderSettings; }
 
@@ -117,11 +116,14 @@ export class FfmpegCommandPlanner {
     // between two out-of-order clips (gigabytes for vertical 1080p).
     const args: string[] = ["-hide_banner", "-loglevel", "error", "-y"];
     const audioPresent = new Map<string, boolean>();
-    for (const clip of clips) {
+    // A clip followed by a blend (dissolve, push…) runs on past its cut for the length of the blend.
+    const blendIn = clips.map((_, index) => blendSeconds(clips, index));
+    const runOn = clips.map((_, index) => blendIn[index + 1] ?? 0);
+    for (const [index, clip] of clips.entries()) {
       const length = (clip.sourceEndUs - clip.sourceStartUs) / 1_000_000;
       if (!(length > 0)) throw new Error("Clip has an invalid source range");
       if (!audioPresent.has(clip.assetId)) audioPresent.set(clip.assetId, this.assets.hasAudio ? await this.assets.hasAudio(clip.assetId) : false);
-      args.push("-ss", seconds(clip.sourceStartUs), "-t", length.toFixed(6), "-i", await this.assets.resolve(clip.assetId));
+      args.push("-ss", seconds(clip.sourceStartUs), "-t", (length + runOn[index]!).toFixed(6), "-i", await this.assets.resolve(clip.assetId));
     }
 
     let nextInput = clips.length;
@@ -253,7 +255,11 @@ export class FfmpegCommandPlanner {
           filters.push("[fg" + index + "]null" + finish + ",setsar=1,format=yuv420p[v" + index + "]");
         }
       }
-      concatInputs.push("[v" + index + "]");
+      if (runOn[index]! > 0) {
+        // Footage past the cut feeds the blend; where the recording ends, its last frame is held.
+        filters.push("[v" + index + "]tpad=stop_mode=clone:stop_duration=" + runOn[index]!.toFixed(3) + ",trim=duration=" + (length + runOn[index]!).toFixed(6) + ",setpts=PTS-STARTPTS[vx" + index + "]");
+        concatInputs.push("[vx" + index + "]");
+      } else concatInputs.push("[v" + index + "]");
       if (useEmbeddedAudio) {
         if (audioPresent.get(clip.assetId)) {
           const fade = Math.min(0.015, length / 4).toFixed(3);
@@ -264,7 +270,27 @@ export class FfmpegCommandPlanner {
         concatInputs.push("[a" + index + "]");
       }
     });
-    filters.push(concatInputs.join("") + "concat=n=" + clips.length + ":v=1:a=" + (useEmbeddedAudio ? 1 : 0) + "[vcat]" + (useEmbeddedAudio ? "[acat]" : ""));
+    if (!blendIn.some((d) => d > 0)) {
+      filters.push(concatInputs.join("") + "concat=n=" + clips.length + ":v=1:a=" + (useEmbeddedAudio ? 1 : 0) + "[vcat]" + (useEmbeddedAudio ? "[acat]" : ""));
+    } else {
+      // Pictures are joined one by one: a blend overlaps the run-on of the clip before; anything else is a straight join.
+      const pictures = concatInputs.filter((label) => label.startsWith("[v"));
+      let joined = pictures[0]!; let joinedSeconds = (clips[0]!.sourceEndUs - clips[0]!.sourceStartUs) / 1e6 + runOn[0]!;
+      clips.slice(1).forEach((clip, k) => {
+        const index = k + 1; const length = (clip.sourceEndUs - clip.sourceStartUs) / 1e6 + runOn[index]!;
+        const out = index === clips.length - 1 ? "[vcat]" : "[vj" + index + "]";
+        const d = blendIn[index]!;
+        if (d > 0) {
+          filters.push(joined + pictures[index] + "xfade=transition=" + XFADE_NAMES[String(clip.transform?.transitionIn)] + ":duration=" + d.toFixed(3) + ":offset=" + (joinedSeconds - d).toFixed(6) + ",setpts=PTS-STARTPTS" + out);
+          joinedSeconds += length - d;
+        } else {
+          filters.push(joined + pictures[index] + "concat=n=2:v=1:a=0" + out);
+          joinedSeconds += length;
+        }
+        joined = out;
+      });
+      if (useEmbeddedAudio) filters.push(concatInputs.filter((label) => label.startsWith("[a")).join("") + "concat=n=" + clips.length + ":v=0:a=1[acat]");
+    }
     if (anyBehind) {
       filters.push(...matteConcat);
       filters.push(clips.map((_, index) => "[mw" + index + "]").join("") + "concat=n=" + clips.length + ":v=1:a=0[mcat]");
@@ -475,13 +501,10 @@ export function clipFinish(clips: TimelineClip[], index: number, lengthS: number
   const parts: string[] = [];
   const look = typeof t.look === "string" ? LOOK_FILTERS[t.look] : undefined;
   if (look) parts.push(look);
-  // A transition at a cut is shared: the outgoing clip fades out, the incoming one fades in (no overlap, so timing is unchanged).
-  const incoming = typeof t.transitionIn === "string" ? t.transitionIn : "cut";
-  const next = clips[index + 1]; const nextIn = typeof next?.transform?.transitionIn === "string" ? next.transform.transitionIn : "cut";
-  const outgoing = typeof t.transitionOut === "string" && t.transitionOut !== "cut" ? t.transitionOut : nextIn === "dip-black" || nextIn === "dip-white" ? nextIn : "cut";
-  const fadeIn = TRANSITION_SECONDS[incoming]; const fadeOut = TRANSITION_SECONDS[outgoing];
-  if (fadeIn) parts.push("fade=t=in:st=0:d=" + Math.min(fadeIn, lengthS / 3).toFixed(3) + ":color=" + (incoming === "dip-black" ? "black" : "white"));
-  if (fadeOut) { const d = Math.min(fadeOut, lengthS / 3); parts.push("fade=t=out:st=" + Math.max(0, lengthS - d).toFixed(3) + ":d=" + d.toFixed(3) + ":color=" + (outgoing === "dip-black" ? "black" : "white")); }
+  // Colour dips and the flash fade inside the clip (shared with the live preview, so both match); blends are joined later.
+  const fades = dipFades(clips, index);
+  if (fades.in) parts.push("fade=t=in:st=0:d=" + fades.in.seconds.toFixed(3) + ":color=" + fades.in.color);
+  if (fades.out) parts.push("fade=t=out:st=" + Math.max(0, lengthS - fades.out.seconds).toFixed(3) + ":d=" + fades.out.seconds.toFixed(3) + ":color=" + fades.out.color);
   return parts.length ? "," + parts.join(",") : "";
 }
 

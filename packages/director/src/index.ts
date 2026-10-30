@@ -14,6 +14,7 @@ export const MOODS = ["upbeat", "calm", "inspiring", "serious", "playful"] as co
 export const PLATFORMS = ["tiktok", "youtube", "square"] as const;
 export const LOOKS = ["warm", "clean", "cinematic", "vivid", "soft", "mono"] as const;
 /** What a "remove" suggestion can take out of the edit. */
+export const DIRECTOR_TRANSITIONS = ["dip-black", "dip-white", "flash", "dissolve", "push", "slide-up", "wipe", "circle", "blur"] as const;
 export const REMOVABLE = ["music", "sfx", "progress", "graphics", "cutaways", "voiceovers", "captions", "background", "look", "zooms", "transitions"] as const;
 
 export interface DirectorInput {
@@ -40,7 +41,7 @@ export type Suggestion =
   /** "punch" = alternate tighter framings between pieces (jump-cut energy); "push" = a slow push-in on every piece. */
   | { id: string; kind: "zooms"; title: string; reason: string; style: "punch" | "push" }
   /** Fade in from and out to black, plus this transition where the edit jumps to a new part of the talk. */
-  | { id: string; kind: "transitions"; title: string; reason: string; transition: "dip-black" | "dip-white" | "flash" }
+  | { id: string; kind: "transitions"; title: string; reason: string; transition: (typeof DIRECTOR_TRANSITIONS)[number] }
   /** A whoosh on transitions and a pop when on-screen text appears. */
   | { id: string; kind: "sfx"; title: string; reason: string }
   /** Take a whole kind of thing out of the edit (all music, all effects, the progress bar, all titles…). */
@@ -187,7 +188,7 @@ export function sanitizePlan(raw: unknown, input: DirectorInput, source: Directo
     } else if (kind === "zooms") {
       if ((s.style === "punch" || s.style === "push") && !suggestions.some((e) => e.kind === "zooms")) suggestions.push({ ...base(s, index), kind: "zooms", style: s.style });
     } else if (kind === "transitions") {
-      const transition = s.transition === "dip-white" || s.transition === "flash" ? s.transition : "dip-black";
+      const transition = DIRECTOR_TRANSITIONS.includes(s.transition as never) ? (s.transition as (typeof DIRECTOR_TRANSITIONS)[number]) : "dip-black";
       if (!suggestions.some((e) => e.kind === "transitions")) suggestions.push({ ...base(s, index), kind: "transitions", transition });
     } else if (kind === "sfx") {
       if (!suggestions.some((e) => e.kind === "sfx")) suggestions.push({ ...base(s, index), kind: "sfx" });
@@ -247,7 +248,9 @@ export class RuleDirector implements Director {
     if (/background|backdrop|green ?screen/.test(t) && !soundy && !removing && /blur|soft|out of focus|bokeh/.test(t)) raw.push({ id: "background", kind: "background", title: "Blur the background", reason: "As you asked: you stay sharp, what is behind you is blurred.", background: "blur" });
     else if (!soundy && !/background (change|blur|effect|replacement)|original background/.test(t) && /(remove|replace|change|plain|clean|get rid of).{0,20}(background|backdrop)|green ?screen/.test(t)) raw.push({ id: "background", kind: "background", title: "Plain background", reason: "As you asked: you are cut out and placed on a plain colour. Pick a photo or clip in Visuals → Background to use that instead.", background: "color", color: "#1F2A24" });
     if (!removing && /zoom|punch/.test(t)) raw.push({ id: "zooms", kind: "zooms", title: /slow|push|gentle/.test(t) ? "Slow push-ins" : "Punch in on alternate parts", reason: "As you asked.", style: /slow|push|gentle/.test(t) ? "push" : "punch" });
-    if (!removing && /transition|fade|dip|flash/.test(t)) raw.push({ id: "transitions", kind: "transitions", title: /flash/.test(t) ? "Flash between topics" : /white/.test(t) ? "Dip to white between topics" : "Fade in and out, dip to black between topics", reason: "As you asked.", transition: /flash/.test(t) ? "flash" : /white/.test(t) ? "dip-white" : "dip-black" });
+    const blendWanted = /cross-?fade|dissolve|smooth (transition|cut)|blend/.test(t) ? "dissolve" : /\bpush\b|\bslide (left|across|sideways)/.test(t) ? "push" : /slide ?up/.test(t) ? "slide-up" : /\bwipe/.test(t) ? "wipe" : /circle|iris/.test(t) ? "circle" : /blur (transition|between)|blurry transition/.test(t) ? "blur" : undefined;
+    if (!removing && blendWanted) raw.push({ id: "transitions", kind: "transitions", title: (blendWanted === "dissolve" ? "Dissolve" : blendWanted === "push" ? "Push" : blendWanted === "slide-up" ? "Slide up" : blendWanted === "wipe" ? "Wipe" : blendWanted === "circle" ? "Circle reveal" : "Blur") + " between parts, fade at the ends", reason: "As you asked.", transition: blendWanted });
+    else if (!removing && /transition|fade|dip|flash/.test(t)) raw.push({ id: "transitions", kind: "transitions", title: /flash/.test(t) ? "Flash between topics" : /white/.test(t) ? "Dip to white between topics" : "Fade in and out, dip to black between topics", reason: "As you asked.", transition: /flash/.test(t) ? "flash" : /white/.test(t) ? "dip-white" : "dip-black" });
     if (/youtube|16:9|landscape|square|1:1|vertical|9:16|reel|tiktok|short/.test(t) && !shorter) raw.push({ id: "platform", kind: "platform", title: "Export for " + hints.platform, reason: "As you asked.", platform: hints.platform });
     // Everything else the editor can add, change or take out.
     for (const r of ruleRequests(input.instruction, { pieces: input.current.pieces, assets: input.assets, ...(input.playheadS !== undefined ? { playheadS: input.playheadS } : {}) })) if (!raw.some((x) => x.id === r.id)) raw.push(r);
@@ -319,7 +322,7 @@ Rules:
 - "platform": tiktok (9:16), youtube (16:9) or square (1:1).
 - "look": one colour look for the whole video: warm, clean, cinematic, vivid, soft or mono (field look). Choose from the mood and what the frames look like.
 - "zooms": style "punch" (alternate tighter framings at cuts; energetic short-form) or "push" (slow push-in; calm or long-form).
-- "transitions": fades at the start and end plus transition "dip-black", "dip-white" or "flash" where the edit jumps to a new part. Do not add transitions inside a continuous thought.
+- "transitions": fades at the start and end plus one transition where the edit jumps to a new part: "dissolve" (calm, smooth), "push" or "slide-up" (energetic), "wipe", "circle", "blur", or "dip-black", "dip-white", "flash". Do not add transitions inside a continuous thought.
 - "remove": take a whole kind out, target one of music, sfx, progress, graphics (all on-screen text), cutaways, voiceovers, captions, background (back to the original), look, zooms, transitions.
 - "captions": captions for every spoken word (when the creator asks for captions or subtitles).
 - "color": the accent colour (#RRGGBB in field color) of titles, callouts, name captions and the progress bar.
@@ -345,7 +348,7 @@ const SCHEMA = {
         text: { type: "string" }, subtitle: { type: "string" }, atS: { type: "number" }, durationS: { type: "number" },
         position: { type: "string", enum: ["top", "center", "bottom", ""] }, mood: { type: "string", enum: [...MOODS, ""] }, assetId: { type: "string" },
         mode: { type: "string", enum: ["full", "pip", "behind", ""] }, platform: { type: "string", enum: [...PLATFORMS, ""] },
-        look: { type: "string", enum: [...LOOKS, ""] }, style: { type: "string", enum: ["punch", "push", ""] }, transition: { type: "string", enum: ["dip-black", "dip-white", "flash", ""] },
+        look: { type: "string", enum: [...LOOKS, ""] }, style: { type: "string", enum: ["punch", "push", ""] }, transition: { type: "string", enum: [...DIRECTOR_TRANSITIONS, ""] },
         background: { type: "string", enum: ["blur", "color", ""] }, color: { type: "string" },
         target: { type: "string", enum: ["music", "sfx", "voiceover", ...REMOVABLE, ""] }, changeDb: { type: "number" },
         query: { type: "string" }, assetKind: { type: "string", enum: ["video", "photo", "gif", ""] },
@@ -534,7 +537,8 @@ export function effectOperations(plan: DirectorPlan, accepted: Set<string>, time
     }
     if (transitions) {
       if (i === 0) effect.transitionIn = "dip-black";
-      else if (jumps.has(i)) effect.transitionIn = transitions.transition;
+      // At each jump to a new part; when every cut is a small one (no jumps), at every cut.
+      else if (jumps.has(i) || jumps.size === 0) effect.transitionIn = transitions.transition;
       if (i === pieces.length - 1) effect.transitionOut = "dip-black";
     }
     if (Object.keys(effect).length > 2) ops.push(effect);

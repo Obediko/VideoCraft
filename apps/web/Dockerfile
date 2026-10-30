@@ -5,7 +5,7 @@ ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 
 WORKDIR /app
 COPY . .
-RUN npm install --ignore-scripts && npm run build --workspace=@videocraft/web
+RUN npm install --ignore-scripts && npm run build --workspace=@videocraft/domain && npm run build --workspace=@videocraft/web
 
 FROM nginx:1.27-alpine
 COPY apps/web/nginx.conf /etc/nginx/conf.d/default.conf

@@ -43,7 +43,7 @@ export type TimelineOperation =
    * punch-in; "push" = a slow push-in), a colour look, and how it enters / leaves (a transition at the cut).
    * Fields left out are unchanged; "none" / "cut" clears.
    */
-  | { type: "set-clip-effects"; clipId: UUID; zoom?: ClipZoom; look?: ColourLook; transitionIn?: Transition; transitionOut?: Transition }
+  | { type: "set-clip-effects"; clipId: UUID; zoom?: ClipZoom; look?: ColourLook; transitionIn?: Transition; transitionOut?: Transition; transitionSeconds?: number }
   /** One colour look on every video clip ("none" clears). */
   | { type: "set-look"; look: ColourLook }
   /** A short generated sound effect anchored to a moment of a source video, like graphics. */
@@ -79,7 +79,13 @@ export const CLIP_ZOOMS = ["none", "punch", "push"] as const;
 export type ClipZoom = (typeof CLIP_ZOOMS)[number];
 export const COLOUR_LOOKS = ["none", "warm", "clean", "cinematic", "vivid", "soft", "mono"] as const;
 export type ColourLook = (typeof COLOUR_LOOKS)[number];
-export const TRANSITIONS = ["cut", "dip-black", "dip-white", "flash"] as const;
+/**
+ * How a clip comes in. Dips and the flash fade through a colour; the others blend the two clips over each other
+ * (dissolve, push, slide-up, wipe, circle, blur), using a little footage past the cut so the timing never shifts.
+ */
+export const TRANSITIONS = ["cut", "dip-black", "dip-white", "flash", "dissolve", "push", "slide-up", "wipe", "circle", "blur"] as const;
+/** Transitions that overlap the two clips (the rest fade through a colour). */
+export const BLEND_TRANSITIONS = ["dissolve", "push", "slide-up", "wipe", "circle", "blur"] as const;
 export type Transition = (typeof TRANSITIONS)[number];
 export const SOUND_EFFECTS = ["whoosh", "pop", "hit", "riser"] as const;
 export type SoundEffect = (typeof SOUND_EFFECTS)[number];
@@ -102,3 +108,4 @@ export function validateProposal(proposal: EditingProposal): void { if (proposal
 
 export * from "./timeline.js";
 export * from "./learning.js";
+export * from "./transitions.js";

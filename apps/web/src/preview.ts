@@ -1,4 +1,5 @@
 /** Pure helpers for the live preview (unit-tested). */
+import { blendSeconds, dipFades } from "@videocraft/domain";
 export type PreviewClip = { id: string; assetId: string; sourceStartUs: number; sourceEndUs: number; timelineStartUs: number; timelineEndUs: number; transform?: Record<string, string | number | boolean> };
 type Clip = PreviewClip;
 
@@ -11,7 +12,6 @@ export const LOOK_CSS: Record<string, string> = {
   soft: "contrast(0.93) saturate(0.94) brightness(1.03)",
   mono: "grayscale(1) contrast(1.12)",
 };
-const DIP: Record<string, number> = { "dip-black": 250_000, "dip-white": 250_000, flash: 120_000 };
 
 /**
  * Opacity and colour of the transition veil at a time in the edit, worked out exactly like the export
@@ -20,23 +20,27 @@ const DIP: Record<string, number> = { "dip-black": 250_000, "dip-white": 250_000
  */
 export function veilAt(clips: Clip[], tUs: number, durationUs: number): { opacity: number; color: string } {
   const i = clips.findIndex((c) => tUs >= c.timelineStartUs && tUs < c.timelineEndUs);
-  const clip = clips[i] ?? (tUs >= durationUs ? clips[clips.length - 1] : undefined);
+  const index = i >= 0 ? i : tUs >= durationUs ? clips.length - 1 : -1;
+  const clip = clips[index];
   if (!clip) return { opacity: 0, color: "#000" };
-  const index = i >= 0 ? i : clips.length - 1;
-  const lengthUs = Math.max(1, clip.timelineEndUs - clip.timelineStartUs);
-  const incoming = String(clip.transform?.transitionIn ?? "cut");
-  const nextIn = String(clips[index + 1]?.transform?.transitionIn ?? "cut");
-  const explicitOut = String(clip.transform?.transitionOut ?? "cut");
-  const outgoing = explicitOut !== "cut" ? explicitOut : nextIn === "dip-black" || nextIn === "dip-white" ? nextIn : "cut";
-  const colour = (kind: string) => (kind === "dip-black" ? "#000" : "#fff");
+  // The same fades the export renders (packages/domain transitions.ts is shared by both).
+  const fades = dipFades(clips, index);
+  const hex = (c: "black" | "white") => (c === "black" ? "#000" : "#fff");
   let best = { opacity: 0, color: "#000" };
-  const inUs = DIP[incoming] ? Math.min(DIP[incoming]!, lengthUs / 3) : 0;
-  const into = tUs - clip.timelineStartUs;
-  if (inUs && into < inUs) best = { opacity: Math.max(0, 1 - into / inUs), color: colour(incoming) };
-  const outUs = DIP[outgoing] ? Math.min(DIP[outgoing]!, lengthUs / 3) : 0;
-  const left = Math.min(clip.timelineEndUs, Math.max(durationUs, clip.timelineEndUs)) - tUs;
-  if (outUs && left <= outUs) { const opacity = Math.min(1, Math.max(0, 1 - left / outUs)); if (opacity > best.opacity) best = { opacity, color: colour(outgoing) }; }
+  const into = (tUs - clip.timelineStartUs) / 1e6;
+  if (fades.in && into < fades.in.seconds) best = { opacity: Math.max(0, 1 - into / fades.in.seconds), color: hex(fades.in.color) };
+  const left = (clip.timelineEndUs - tUs) / 1e6;
+  if (fades.out && left <= fades.out.seconds) { const opacity = Math.min(1, Math.max(0, 1 - left / fades.out.seconds)); if (opacity > best.opacity) best = { opacity, color: hex(fades.out.color) }; }
   return best;
+}
+
+/** The blend into the clip playing at tUs (dissolve, push…): its kind and progress 0..1, or undefined outside one. */
+export function blendAt(clips: Clip[], tUs: number): { kind: string; progress: number; index: number } | undefined {
+  const index = clips.findIndex((c) => tUs >= c.timelineStartUs && tUs < c.timelineEndUs);
+  if (index < 1) return undefined;
+  const d = blendSeconds(clips, index);
+  const into = (tUs - clips[index]!.timelineStartUs) / 1e6;
+  return d > 0 && into < d ? { kind: String(clips[index]!.transform?.transitionIn), progress: into / d, index } : undefined;
 }
 
 /** Zoom factor of a clip at a time inside it. */

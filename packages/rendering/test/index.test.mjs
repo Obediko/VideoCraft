@@ -353,3 +353,25 @@ test("real ffmpeg: a voice-over plays at its moment and the original sound dips 
     assert.ok(Math.abs(rms(3.62, 440, 0.3) - rms(0.5, 440, 0.3)) < 3, "and comes back after it: " + rms(3.62, 440, 0.3));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("real ffmpeg: blends (dissolve, push, wipe) overlap the clips without moving them, using footage past the cut", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vc-blend-"));
+  try {
+    // One recording: 3 s red then 3 s blue. Clip A = red 0-2 s (runs on into more red), clip B = blue 4-6 s.
+    const src = join(dir, "src.mp4");
+    execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=red:s=320x240:r=25:d=3", "-f", "lavfi", "-i", "color=c=blue:s=320x240:r=25:d=3", "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0,format=yuv420p", src]);
+    const planner = new FfmpegCommandPlanner({ resolve: async () => src });
+    const at = (path, s) => [...execFileSync("ffmpeg", ["-v", "error", "-ss", String(s), "-i", path, "-frames:v", "1", "-vf", "crop=8:8:156:116,scale=1:1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"])];
+    const length = (path) => Number(execFileSync("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path]).toString());
+    for (const kind of ["dissolve", "push", "wipe"]) {
+      const out = join(dir, kind + ".mp4");
+      const clips = [clip("a", 0, 2_000_000, 0), { ...clip("b", 4_000_000, 6_000_000, 2_000_000), transform: { transitionIn: kind, transitionSeconds: 0.8 } }];
+      await new FfmpegProcess().run(await planner.plan(revision(clips), { ...settings, width: 320, height: 240, frameRate: 25 }, out));
+      assert.ok(Math.abs(length(out) - 4) < 0.1, kind + ": the edit keeps its length: " + length(out));
+      const before = at(out, 1.0); const after = at(out, 3.5);
+      assert.ok(before[0] > 200 && before[2] < 60, kind + ": red before the cut " + before);
+      assert.ok(after[2] > 200 && after[0] < 60, kind + ": blue after the blend " + after);
+      if (kind === "dissolve") { const mid = at(out, 2.4); assert.ok(mid[0] > 70 && mid[2] > 70, "dissolve mixes the two at the middle: " + mid); }
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

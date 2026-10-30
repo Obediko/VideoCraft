@@ -1,7 +1,8 @@
+import type React from "react";
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { generateSoundEffect, type SoundEffectKind } from "../../../packages/music/src/index.js";
 import { BackgroundLayer, type BackgroundSpec } from "./BackgroundLayer.js";
-import { LOOK_CSS, captionBottomFor, faceDuring, faceInFrame, focusDuring, titleTopFor, veilAt, zoomAt, type FaceTrack, type FrameBox, type PreviewClip as Clip } from "./preview.js";
+import { LOOK_CSS, blendAt, captionBottomFor, faceDuring, faceInFrame, focusDuring, titleTopFor, veilAt, zoomAt, type FaceTrack, type FrameBox, type PreviewClip as Clip } from "./preview.js";
 
 /**
  * Live preview of the edit in the browser: plays the cut clip by clip and draws captions, titles, cutaways,
@@ -32,6 +33,8 @@ type Props = {
 export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePreview({ tracks, durationUs, urls, shape, fit, output, captionStyle = "bold-pop", faces, sizes, mattes, stills, onTime }, ref) {
   const video = useRef<HTMLVideoElement | null>(null);
   const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
+  const snapRef = useRef<HTMLCanvasElement | null>(null);
+  const snapFor = useRef(-1);
   const music = useRef<HTMLAudioElement | null>(null);
   const [tUs, setT] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -119,6 +122,12 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
         if (sourceUs >= clip.sourceEndUs - 20_000 || el.ended) {
           const next = indexRef.current + 1;
           if (next >= clips.length) { el.pause(); music.current?.pause(); setPlaying(false); report(durationUs); return; }
+          // A blend into the next clip shows this clip's last frame over the start of the next, as the export overlaps them.
+          const snap = snapRef.current;
+          if (snap && el.videoWidth && blendAt(clips, clips[next]!.timelineStartUs + 1)) {
+            snap.width = el.videoWidth; snap.height = el.videoHeight;
+            try { snap.getContext("2d")?.drawImage(el, 0, 0, snap.width, snap.height); snapFor.current = next; } catch { snapFor.current = -1; }
+          }
           load(next, 0, true);
           report(clips[next]!.timelineStartUs);
         } else if (sourceUs >= clip.sourceStartUs - 50_000) {
@@ -147,6 +156,19 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
   const look = current ? LOOK_CSS[String(current.transform?.look ?? "")] : undefined;
   const zoom = zoomAt(current, tUs);
   const veil = veilAt(clips, tUs, durationUs);
+  const blend = blendAt(clips, tUs);
+  const blendStyle = ((): React.CSSProperties | undefined => {
+    if (!blend || blend.index !== snapFor.current) return undefined;
+    const p = Math.min(1, Math.max(0, blend.progress));
+    const base: React.CSSProperties = { objectFit: fit, ...(look ? { filter: look } : {}) };
+    if (blend.kind === "dissolve") return { ...base, opacity: 1 - p };
+    if (blend.kind === "push") return { ...base, transform: "translateX(" + (-p * 100).toFixed(2) + "%)" };
+    if (blend.kind === "slide-up") return { ...base, transform: "translateY(" + (-p * 100).toFixed(2) + "%)" };
+    if (blend.kind === "wipe") return { ...base, clipPath: "inset(0 " + (p * 100).toFixed(2) + "% 0 0)" };
+    if (blend.kind === "circle") { const mask = "radial-gradient(circle at 50% 50%, transparent " + (p * 75).toFixed(1) + "%, #000 " + (p * 75 + 1).toFixed(1) + "%)"; return { ...base, maskImage: mask, WebkitMaskImage: mask }; }
+    if (blend.kind === "blur") return { ...base, opacity: 1 - p, filter: (look ? look + " " : "") + "blur(" + (p * 16).toFixed(1) + "px)" };
+    return undefined;
+  })();
   const cue = cues.find((c) => tUs >= c.timelineStartUs && tUs < c.timelineEndUs);
   const cueWords = cue ? String(cue.transform?.text ?? "").split(/\s+/).filter(Boolean) : [];
   const timings = typeof cue?.transform?.wordDurationsCs === "string" ? cue.transform.wordDurationsCs.split(",").map(Number) : [];
@@ -194,6 +216,7 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
     <div className={"live-frame " + shape} aria-label="Live preview of the edit">
       <video ref={(el) => { video.current = el; if (el !== videoEl) setVideoEl(el); }} className="live-video" muted={false} playsInline preload="auto" style={{ objectFit: fit, ...(currentFocus ? { objectPosition: (currentFocus.x * 100).toFixed(1) + "% " + (currentFocus.y * 100).toFixed(1) + "%" } : {}), transform: zoom !== 1 ? "scale(" + zoom.toFixed(4) + ")" : undefined, transformOrigin: "50% 40%", filter: look, ...(compositing ? { opacity: 0 } : {}) }} />
       {compositing && <BackgroundLayer video={videoEl} matteUrl={matteUrl!} spec={background!} fit={fit} focus={currentFocus} zoom={zoom} filter={look} />}
+      <canvas ref={snapRef} className="live-snap" aria-hidden="true" style={blendStyle ?? { display: "none" }} />
       {background && !matteUrl && <span className="live-note">Cutting you out for the preview…</span>}
       {!urls[current?.assetId ?? ""] && <span className="live-empty">Preparing the footage…</span>}
       {broll.filter((c) => !(c.transform?.mode === "behind" && compositing)).map((c) => { const url = urls[c.assetId]; const pip = c.transform?.mode === "pip"; return url ? <img key={c.id} className={"live-broll" + (pip ? " pip" : "")} src={url} alt="" /> : <span key={c.id} className={"live-broll placeholder" + (pip ? " pip" : "")}>Cutaway</span>; })}
