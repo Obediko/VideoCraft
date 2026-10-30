@@ -180,7 +180,7 @@ test('reload footage recovers a failed media element even when its renewed URL i
   await expect.poll(()=>state.mediaRequests).toBeGreaterThan(requests);
   await expect.poll(()=>player.evaluate((v:HTMLVideoElement)=>v.readyState)).toBeGreaterThanOrEqual(2);
   await expect(page.getByRole('alert')).toHaveCount(0);
-  await expect.poll(()=>player.evaluate((v:HTMLVideoElement)=>Math.abs(v.currentTime-wanted))).toBeLessThan(0.15);
+  await expect.poll(()=>player.evaluate((v:HTMLVideoElement,target:number)=>Math.abs(v.currentTime-target),wanted)).toBeLessThan(0.15);
   await page.getByRole('button',{name:'Play the edit',exact:true}).click();
   await expect.poll(()=>player.evaluate((v:HTMLVideoElement)=>v.currentTime)).toBeGreaterThan(wanted+0.05);
 });
