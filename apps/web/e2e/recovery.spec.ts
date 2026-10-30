@@ -171,6 +171,7 @@ test('reload footage recovers a failed media element even when its renewed URL i
   const player=page.locator('video.live-video');
   const slider=page.getByRole('slider',{name:'Position in the edit'});
   await slider.press('ArrowRight');
+  await expect.poll(()=>player.evaluate((v:HTMLVideoElement)=>v.error?.code??0)).toBeGreaterThan(0);
   const wanted=Number(await slider.inputValue())/1e6;
   const requests=state.mediaRequests;
   state.mediaFails=false;
