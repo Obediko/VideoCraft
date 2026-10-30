@@ -30,9 +30,16 @@ type Props = {
   onTime?(timelineUs: number): void;
   onRetryMatte?(): void;
   onRetryMedia?(): void;
+  mediaErrors?: Record<string, string>;
 };
 
-export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePreview({ tracks, durationUs, urls, shape, fit, output, captionStyle = "bold-pop", faces, sizes, mattes, stills, onTime, onRetryMatte, onRetryMedia }, ref) {
+function mediaFailure(code: number): string {
+  return code === 3
+    ? "Your browser could not decode this footage (media error 3). Reload to retry; if it repeats, the preview format needs checking."
+    : "The footage could not be loaded (media error " + code + "). Reload to retry; if it repeats, the media link or video format needs checking.";
+}
+
+export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePreview({ tracks, durationUs, urls, shape, fit, output, captionStyle = "bold-pop", faces, sizes, mattes, stills, onTime, onRetryMatte, onRetryMedia, mediaErrors }, ref) {
   const video = useRef<HTMLVideoElement | null>(null);
   const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
   const snapRef = useRef<HTMLCanvasElement | null>(null);
@@ -41,6 +48,8 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
   const [tUs, setT] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [playbackError, setPlaybackError] = useState("");
+  const loadGeneration = useRef(0);
+  const pendingMetadata = useRef<(() => void) | null>(null);
   const clips = useMemo(() => [...(tracks.find((t) => t.kind === "video")?.clips ?? [])].sort((a, b) => a.timelineStartUs - b.timelineStartUs), [tracks]);
   const overlays = tracks.filter((t) => t.kind === "overlay").flatMap((t) => t.clips);
   const cues = tracks.filter((t) => t.kind === "caption").flatMap((t) => t.clips);
@@ -60,14 +69,36 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
     const clip = clips[index]; const el = video.current;
     if (!clip || !el) return;
     indexRef.current = index;
+    const generation = ++loadGeneration.current;
+    if (pendingMetadata.current) el.removeEventListener("loadedmetadata", pendingMetadata.current);
+    pendingMetadata.current = null;
     const url = urls[clip.assetId];
-    if (url && el.dataset.src !== url) { el.dataset.src = url; el.src = url; }
+    if (!url) return;
+    if (el.dataset.src !== url || el.error) { el.dataset.src = url; el.src = url; el.load(); }
     const at = (clip.sourceStartUs + localUs) / 1e6;
-    const go = () => { el.currentTime = at; };
-    if (el.readyState >= 1) go(); else el.addEventListener("loadedmetadata", go, { once: true });
+    const go = () => { if (generation === loadGeneration.current) el.currentTime = at; };
+    if (el.readyState >= 1) go(); else { pendingMetadata.current = go; el.addEventListener("loadedmetadata", go, { once: true }); }
     // Invoke play in the click gesture, even while metadata is loading (iOS activation).
-    if (thenPlay) void el.play().catch(() => { setPlaying(false); music.current?.pause(); setPlaybackError("The footage could not start. Reload it, then tap Play again."); });
+    if (thenPlay) void el.play().catch((error) => {
+      if (generation !== loadGeneration.current || error?.name === "AbortError") return;
+      setPlaying(false); music.current?.pause();
+      setPlaybackError(el.error ? mediaFailure(el.error.code) : error?.name === "NotAllowedError" ? "Your browser blocked playback. Tap Play again to start the footage and sound." : "The footage could not start. Reload it, then tap Play again.");
+    });
   }
+
+  function retryMedia() {
+    loadGeneration.current += 1;
+    setPlaying(false); music.current?.pause(); setPlaybackError("");
+    const el = video.current;
+    if (el) {
+      if (pendingMetadata.current) el.removeEventListener("loadedmetadata", pendingMetadata.current);
+      pendingMetadata.current = null;
+      el.pause(); el.removeAttribute("src"); delete el.dataset.src; el.load();
+    }
+    if (onRetryMedia) onRetryMedia();
+    else { const i = clipAt(tRef.current), clip = clips[i]; if (clip) load(i, Math.max(0, tRef.current - clip.timelineStartUs), false); }
+  }
+
   function seek(t: number) {
     const clamped = Math.max(0, Math.min(durationUs, t));
     const i = clipAt(clamped); const clip = clips[i];
@@ -151,6 +182,7 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
     const start = tRef.current >= durationUs - 50_000 ? 0 : tRef.current;
     const i = clipAt(start); const clip = clips[i];
     if (!clip) return;
+    if (!urls[clip.assetId]) { setPlaybackError(mediaErrors?.[clip.assetId] ?? "The preview link is still loading. Reload footage to retry."); return; }
     setPlaybackError("");
     setPlaying(true);
     // Unlock each narration element during the same user gesture. Later starts
@@ -242,7 +274,13 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
 
   return <div className="live">
     <div className={"live-frame " + shape} aria-label="Live preview of the edit">
-      <video ref={(el) => { video.current = el; if (el !== videoEl) setVideoEl(el); }} className="live-video" onError={() => { setPlaying(false); music.current?.pause(); setPlaybackError("The footage could not be loaded. Reload it to renew the playback link."); }} muted={false} playsInline preload="auto" style={{ objectFit: fit, ...(currentFocus ? { objectPosition: (currentFocus.x * 100).toFixed(1) + "% " + (currentFocus.y * 100).toFixed(1) + "%" } : {}), transform: zoom !== 1 ? "scale(" + zoom.toFixed(4) + ")" : undefined, transformOrigin: "50% 40%", filter: look, ...(compositing ? { opacity: 0 } : {}) }} />
+      <video ref={(el) => { video.current = el; if (el !== videoEl) setVideoEl(el); }} className="live-video" onLoadedData={() => setPlaybackError("")} onError={(event) => {
+        const el = event.currentTarget;
+        if (!el.getAttribute("src") || !el.error) return;
+        setPlaying(false); music.current?.pause();
+        const code = el.error.code;
+        setPlaybackError(mediaFailure(code));
+      }} muted={false} playsInline preload="auto" style={{ objectFit: fit, ...(currentFocus ? { objectPosition: (currentFocus.x * 100).toFixed(1) + "% " + (currentFocus.y * 100).toFixed(1) + "%" } : {}), transform: zoom !== 1 ? "scale(" + zoom.toFixed(4) + ")" : undefined, transformOrigin: "50% 40%", filter: look, ...(compositing ? { opacity: 0 } : {}) }} />
       {compositing && <BackgroundLayer video={videoEl} matteUrl={matteUrl!} spec={background!} fit={fit} focus={currentFocus} zoom={zoom} filter={look} onError={() => setCutoutFailed(true)} />}
       <canvas ref={snapRef} className="live-snap" aria-hidden="true" style={blendStyle ?? { display: "none" }} />
       {background && (!matteUrl || cutoutFailed) && <span className="live-note">{cutoutExpired || cutoutFailed ? <>Cutout preview unavailable. Showing the original footage. <button type="button" onClick={() => { setCutoutFailed(false); setCutoutExpired(false); setCutoutAttempt((n) => n + 1); onRetryMatte?.(); }}>Retry cutout</button></> : "Cutting you out for the preview…"}</span>}
@@ -265,7 +303,7 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
     </div>
     {musicUrl && <audio ref={music} src={musicUrl} loop preload="auto" />}
     {voiceovers.map((vo) => urls[vo.assetId] ? <audio key={vo.id} ref={(el) => { voiceEls.current[vo.id] = el; }} src={urls[vo.assetId]} preload="auto" /> : null)}
-    {playbackError && <p role="alert">{playbackError} <button type="button" className="btn" onClick={() => { setPlaybackError(""); onRetryMedia?.(); }}>Reload footage</button></p>}
+    {(playbackError || mediaErrors?.[current?.assetId ?? ""]) && <p role="alert">{playbackError || mediaErrors?.[current?.assetId ?? ""]} <button type="button" className="btn" onClick={retryMedia}>Reload footage</button></p>}
     <div className="live-controls">
       <button type="button" className="btn icon" aria-label={playing ? "Pause" : "Play the edit"} onClick={toggle} disabled={clips.length === 0}>{playing ? "❚❚" : "▶"}</button>
       <input type="range" aria-label="Position in the edit" min={0} max={Math.max(1, Math.round(durationUs / 1000))} step={50} value={Math.round(tUs / 1000)} onChange={(event) => seek(Number(event.target.value) * 1000)} />
