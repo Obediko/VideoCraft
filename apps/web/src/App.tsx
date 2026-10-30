@@ -843,7 +843,7 @@ export function App() {
 
   const player = <div className="player">
     <div className="preview-tabs" role="tablist"><button role="tab" aria-selected={previewMode === "edit"} className={previewMode === "edit" ? "on" : ""} onClick={() => setPreviewMode("edit")} disabled={videoClips.length === 0}>Edit</button><button role="tab" aria-selected={previewMode === "source"} className={previewMode === "source" ? "on" : ""} onClick={() => setPreviewMode("source")}>Original</button><button role="tab" aria-selected={previewMode === "render"} className={previewMode === "render" ? "on" : ""} onClick={() => setPreviewMode("render")}>Export</button></div>
-    {previewMode === "edit" && videoClips.length > 0 ? <LivePreview ref={liveRef} tracks={timeline.tracks} durationUs={timeline.durationUs} urls={sourceUrls} shape={(PLATFORMS[platform]?.width ?? 9) < (PLATFORMS[platform]?.height ?? 16) ? "tall" : PLATFORMS[platform]?.width === PLATFORMS[platform]?.height ? "square" : "wide"} fit={PLATFORMS[platform]?.fit ?? "cover"} output={{ width: PLATFORMS[platform]?.width ?? 1080, height: PLATFORMS[platform]?.height ?? 1920 }} captionStyle={PLATFORMS[platform]?.captionStyle ?? "bold-pop"} faces={faceTracks} sizes={assetSizes} mattes={matteUrls} stills={stillAssets} onTime={onLiveTime} />
+    {previewMode === "edit" && videoClips.length > 0 ? <LivePreview ref={liveRef} tracks={timeline.tracks} durationUs={timeline.durationUs} urls={sourceUrls} shape={(PLATFORMS[platform]?.width ?? 9) < (PLATFORMS[platform]?.height ?? 16) ? "tall" : PLATFORMS[platform]?.width === PLATFORMS[platform]?.height ? "square" : "wide"} fit={PLATFORMS[platform]?.fit ?? "cover"} output={{ width: PLATFORMS[platform]?.width ?? 1080, height: PLATFORMS[platform]?.height ?? 1920 }} captionStyle={PLATFORMS[platform]?.captionStyle ?? "bold-pop"} faces={faceTracks} sizes={assetSizes} mattes={matteUrls} stills={stillAssets} onRetryMatte={() => { setMatteUrls({}); setMatteRetry((n) => n + 1); }} onTime={onLiveTime} />
     : <div className={"preview-screen " + ((PLATFORMS[platform]?.width ?? 9) < (PLATFORMS[platform]?.height ?? 16) ? "tall" : "wide")}>{previewMode === "render" ? (renderUrl ? <video controls src={renderUrl} /> : <span>{renderJobId ? "Exporting " + renderJobStatus : "Your exported video will play here"}</span>) : (sourceUrl ? <video ref={playerRef} controls src={sourceUrl} onTimeUpdate={stopAtClipEnd} /> : <span>{sourceNote || "Preparing the preview…"}</span>)}</div>}
     {previewMode === "source" && sourceNote && sourceUrl && <p className="muted small">{sourceNote}</p>}
   </div>;
@@ -970,7 +970,7 @@ export function App() {
             <button className="primary" onClick={submitRender} disabled={busy || !revision || Boolean(renderJobId && !renderUrl && !/^(failed|cancelled)/.test(renderJobStatus))}>Export video</button>
             {renderUrl && <a className="btn" href={renderUrl} download="videocraft-export.mp4">Download video</a>}
           </div>
-          {renderJobId && !renderUrl && <p className="muted">Exporting… {renderJobStatus}. This takes roughly as long as the video itself.</p>}
+          {renderJobId && !renderUrl && <p className="muted">{/^(failed|cancelled)/.test(renderJobStatus) ? "Export " + renderJobStatus + ". Try exporting again after resolving the error above." : "Exporting… " + renderJobStatus + ". This takes roughly as long as the video itself."}</p>}
           {learned && <details className="card learned-panel"><summary>Learned from your edits</summary>
             <p className="small">{learned.summary}</p>
             <p className="small muted">{learned.samples} signals: {learned.counts.removed ?? 0} removed, {learned.counts.exported ?? 0} exported, {learned.counts.rejected ?? 0} from rejected proposals.</p>
@@ -1178,7 +1178,7 @@ function describeSuggestion(item: Suggestion): string {
   if (item.kind === "look" || item.kind === "background" || item.kind === "remove" || item.kind === "color" || item.kind === "captions") return "Whole video";
   if (item.kind === "volume" && typeof item.changeDb === "number") return (item.changeDb > 0 ? "+" : "") + item.changeDb + " dB from where it is now";
   if (item.kind === "stock") return "Free stock · " + (item.mode === "behind" ? "behind you" : item.mode === "pip" ? "corner" : "full screen") + (typeof item.atS === "number" ? " · at " + formatClock(item.atS * 1e6) + " of the original" : "");
-  if (item.kind === "voiceover" && item.text) return "“" + item.text.slice(0, 120) + (item.text.length > 120 ? "…" : "") + "”";
+  if (item.kind === "voiceover" && item.text) return (item.afterVideo ? "After the video, on an end card: " : "") + "“" + item.text.slice(0, 120) + (item.text.length > 120 ? "…" : "") + "”";
   if (typeof item.atS === "number" && item.kind !== "advice") return "At " + formatClock(item.atS * 1e6) + " of the original" + (item.durationS ? ", for " + item.durationS.toFixed(1) + " s" : "");
   return item.kind === "advice" ? item.reason : "";
 }

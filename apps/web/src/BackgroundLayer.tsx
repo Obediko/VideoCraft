@@ -15,6 +15,7 @@ type Props = {
   focus: { x: number; y: number } | null;
   zoom: number;
   filter?: string | undefined;
+  onError?(): void;
 };
 
 /** Where a source of size sw×sh lands in a W×H frame (object-fit plus object-position, then the zoom). */
@@ -29,7 +30,7 @@ export function fitted(sw: number, sh: number, W: number, H: number, fit: "cover
   return { x, y, w: w * zoom, h: h * zoom };
 }
 
-export function BackgroundLayer({ video, matteUrl, spec, fit, focus, zoom, filter }: Props) {
+export function BackgroundLayer({ video, matteUrl, spec, fit, focus, zoom, filter, onError }: Props) {
   const canvas = useRef<HTMLCanvasElement | null>(null);
   const matte = useRef<HTMLVideoElement | null>(null);
   const backdrop = useRef<HTMLVideoElement | null>(null);
@@ -86,7 +87,7 @@ export function BackgroundLayer({ video, matteUrl, spec, fit, focus, zoom, filte
   return <>
     <svg width="0" height="0" style={{ position: "absolute" }} aria-hidden="true"><filter id="vc-luma-alpha" colorInterpolationFilters="sRGB"><feColorMatrix type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  1 0 0 0 0" /></filter></svg>
     <canvas ref={canvas} className="live-composite" style={filter ? { filter } : undefined} aria-hidden="true" />
-    <video ref={matte} src={matteUrl} muted playsInline preload="auto" style={{ display: "none" }} />
+    <video ref={matte} src={matteUrl} onError={onError} muted playsInline preload="auto" style={{ display: "none" }} />
     {spec.kind === "media" && spec.url && !spec.still && <video ref={backdrop} src={spec.url} muted playsInline loop autoPlay preload="auto" style={{ display: "none" }} />}
   </>;
 }

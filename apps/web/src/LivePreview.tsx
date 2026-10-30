@@ -28,9 +28,10 @@ type Props = {
   mattes?: Record<string, string>;
   stills?: Record<string, boolean>;
   onTime?(timelineUs: number): void;
+  onRetryMatte?(): void;
 };
 
-export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePreview({ tracks, durationUs, urls, shape, fit, output, captionStyle = "bold-pop", faces, sizes, mattes, stills, onTime }, ref) {
+export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePreview({ tracks, durationUs, urls, shape, fit, output, captionStyle = "bold-pop", faces, sizes, mattes, stills, onTime, onRetryMatte }, ref) {
   const video = useRef<HTMLVideoElement | null>(null);
   const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
   const snapRef = useRef<HTMLCanvasElement | null>(null);
@@ -60,8 +61,10 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
     const url = urls[clip.assetId];
     if (url && el.dataset.src !== url) { el.dataset.src = url; el.src = url; }
     const at = (clip.sourceStartUs + localUs) / 1e6;
-    const go = () => { el.currentTime = at; if (thenPlay) void el.play().catch(() => setPlaying(false)); };
+    const go = () => { el.currentTime = at; };
     if (el.readyState >= 1) go(); else el.addEventListener("loadedmetadata", go, { once: true });
+    // Invoke play in the click gesture, even while metadata is loading (iOS activation).
+    if (thenPlay) void el.play().catch(() => { setPlaying(false); music.current?.pause(); });
   }
   function seek(t: number) {
     const clamped = Math.max(0, Math.min(durationUs, t));
@@ -147,6 +150,19 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
     const i = clipAt(start); const clip = clips[i];
     if (!clip) return;
     setPlaying(true);
+    // Unlock each narration element during the same user gesture. Later starts
+    // are synchronized by the playhead effect; future narration stays silent now.
+    for (const vo of voiceovers) {
+      const voice = voiceEls.current[vo.id]; if (!voice) continue;
+      const inside = start >= vo.timelineStartUs && start < vo.timelineEndUs;
+      voice.muted = !inside;
+      if (inside) voice.currentTime = (vo.sourceStartUs + start - vo.timelineStartUs) / 1e6;
+      void voice.play().then(() => {
+        if (!(tRef.current >= vo.timelineStartUs && tRef.current < vo.timelineEndUs)) voice.pause();
+        voice.muted = false;
+      }).catch(() => { voice.muted = false; });
+    }
+    if (audioCtx.current?.state === "suspended") void audioCtx.current.resume();
     load(i, Math.max(0, start - clip.timelineStartUs), true);
     if (music.current && musicClip) { music.current.volume = Math.min(1, Math.pow(10, Number(musicClip.transform?.volumeDb ?? -16) / 20) * 1.6); void music.current.play().catch(() => undefined); }
     report(start);
@@ -209,17 +225,26 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
     : bgKind === "blur" ? { kind: "blur" } : bgKind === "color" ? { kind: "color", color: String(current?.transform?.backgroundColor ?? "#1F2A24") }
     : bgKind === "media" && typeof current?.transform?.backgroundAssetId === "string" ? { kind: "media", ...(urls[current.transform.backgroundAssetId] ? { url: urls[current.transform.backgroundAssetId]! } : {}), still: stills?.[current.transform.backgroundAssetId] ?? true } : undefined;
   const matteUrl = current ? mattes?.[current.assetId] : undefined;
-  const compositing = Boolean(background && matteUrl && videoEl);
+  const [cutoutExpired, setCutoutExpired] = useState(false);
+  const [cutoutAttempt, setCutoutAttempt] = useState(0);
+  const [cutoutFailed, setCutoutFailed] = useState(false);
+  useEffect(() => {
+    setCutoutExpired(false); setCutoutFailed(false);
+    if (!background || matteUrl) return;
+    const timer = setTimeout(() => setCutoutExpired(true), 60_000);
+    return () => clearTimeout(timer);
+  }, [current?.assetId, matteUrl, Boolean(background), cutoutAttempt]);
+  const compositing = Boolean(background && matteUrl && videoEl && !cutoutFailed);
   const fmt = (us: number) => { const s = us / 1e6; return Math.floor(s / 60) + ":" + (s % 60).toFixed(1).padStart(4, "0"); };
 
   return <div className="live">
     <div className={"live-frame " + shape} aria-label="Live preview of the edit">
       <video ref={(el) => { video.current = el; if (el !== videoEl) setVideoEl(el); }} className="live-video" muted={false} playsInline preload="auto" style={{ objectFit: fit, ...(currentFocus ? { objectPosition: (currentFocus.x * 100).toFixed(1) + "% " + (currentFocus.y * 100).toFixed(1) + "%" } : {}), transform: zoom !== 1 ? "scale(" + zoom.toFixed(4) + ")" : undefined, transformOrigin: "50% 40%", filter: look, ...(compositing ? { opacity: 0 } : {}) }} />
-      {compositing && <BackgroundLayer video={videoEl} matteUrl={matteUrl!} spec={background!} fit={fit} focus={currentFocus} zoom={zoom} filter={look} />}
+      {compositing && <BackgroundLayer video={videoEl} matteUrl={matteUrl!} spec={background!} fit={fit} focus={currentFocus} zoom={zoom} filter={look} onError={() => setCutoutFailed(true)} />}
       <canvas ref={snapRef} className="live-snap" aria-hidden="true" style={blendStyle ?? { display: "none" }} />
-      {background && !matteUrl && <span className="live-note">Cutting you out for the preview…</span>}
+      {background && (!matteUrl || cutoutFailed) && <span className="live-note">{cutoutExpired || cutoutFailed ? <>Cutout preview unavailable. Showing the original footage. <button type="button" onClick={() => { setCutoutFailed(false); setCutoutExpired(false); setCutoutAttempt((n) => n + 1); onRetryMatte?.(); }}>Retry cutout</button></> : "Cutting you out for the preview…"}</span>}
       {!urls[current?.assetId ?? ""] && <span className="live-empty">Preparing the footage…</span>}
-      {broll.filter((c) => !(c.transform?.mode === "behind" && compositing)).map((c) => { const url = urls[c.assetId]; const pip = c.transform?.mode === "pip"; return url ? <img key={c.id} className={"live-broll" + (pip ? " pip" : "")} src={url} alt="" /> : <span key={c.id} className={"live-broll placeholder" + (pip ? " pip" : "")}>Cutaway</span>; })}
+      {broll.filter((c) => c.transform?.mode !== "behind").map((c) => { const url = urls[c.assetId]; const pip = c.transform?.mode === "pip"; return url ? <Cutaway key={c.id} clip={c} url={url} still={stills?.[c.assetId] === true} tUs={tUs} playing={playing} pip={pip} /> : <span key={c.id} className={"live-broll placeholder" + (pip ? " pip" : "")}>Cutaway</span>; })}
       {progress && <span className="live-progress" style={{ width: (100 * tUs) / Math.max(1, durationUs) + "%", background: String(progress.transform?.color ?? "#A8C49A") }} />}
       {graphics.map((g) => { const kind = String(g.transform?.kind ?? "title"); const pos = String(g.transform?.position ?? (kind === "lower-third" ? "bottom" : "center")); const color = String(g.transform?.color ?? "#A8C49A");
         const face = faceOver(g.timelineStartUs, g.timelineEndUs);
@@ -245,3 +270,23 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
     <p className="muted small">Live preview: close to the export; the export renders every frame exactly.</p>
   </div>;
 });
+
+/** Cutaways use their actual media type and source-relative playback time. */
+function Cutaway({ clip, url, still, tUs, playing, pip }: { clip: Clip; url: string; still: boolean; tUs: number; playing: boolean; pip: boolean }) {
+  const el = useRef<HTMLVideoElement | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    const video = el.current;
+    if (!video || still) return;
+    const sync = () => {
+      const at = (clip.sourceStartUs + Math.max(0, tUs - clip.timelineStartUs)) / 1e6;
+      if (Math.abs(video.currentTime - at) > 0.2) video.currentTime = at;
+      if (playing) void video.play().catch(() => setFailed(true)); else video.pause();
+    };
+    if (video.readyState >= 1) sync(); else video.addEventListener("loadedmetadata", sync, { once: true });
+    return () => video.removeEventListener("loadedmetadata", sync);
+  }, [url, still, tUs, playing, clip.sourceStartUs, clip.timelineStartUs]);
+  const className = "live-broll" + (pip ? " pip" : "");
+  if (failed) return <span className={className + " placeholder"}>Cutaway unavailable in preview</span>;
+  return still ? <img className={className} src={url} alt="Cutaway" onError={() => setFailed(true)} /> : <video ref={el} className={className} src={url} muted playsInline preload="auto" onError={() => setFailed(true)} />;
+}

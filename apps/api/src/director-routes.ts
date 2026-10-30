@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -120,7 +121,17 @@ export function registerDirectorRoutes(server: FastifyInstance, dependencies: Di
         } else if (s.kind === "voiceover") {
           if (!dependencies.speak) { notes.push("Typed voice-overs need the OpenAI key; record yours in Audio → Voice-over."); continue; }
           const asset = await dependencies.speak(ctx.projectId, s.text);
-          timeline = applyTimelineOperations(timeline, [{ type: "add-voiceover", assetId: asset.id, anchorAssetId: ctx.main.id, anchorSourceUs: anchorAt(s.atS), durationUs: Math.max(200_000, asset.durationUs ?? 3_000_000) }]);
+          if (s.afterVideo) {
+            if (!asset.durationUs || asset.durationUs < 200_000) throw new Error("Narration duration is unavailable; the end card was not added");
+            const card = await createNarrationCard(dependencies, ctx.projectId, asset.durationUs);
+            timeline = applyTimelineOperations(timeline, [
+              { type: "insert-clip", assetId: card.id, sourceStartUs: 0, sourceEndUs: asset.durationUs, reason: "End card for narration after the video" },
+              { type: "add-voiceover", assetId: asset.id, anchorAssetId: card.id, anchorSourceUs: 0, durationUs: asset.durationUs },
+              { type: "add-graphic", kind: "title", text: s.text.slice(0, 120), anchorAssetId: card.id, anchorSourceUs: 0, durationUs: Math.max(300_000, asset.durationUs), position: "center" },
+            ]);
+          } else {
+            timeline = applyTimelineOperations(timeline, [{ type: "add-voiceover", assetId: asset.id, anchorAssetId: ctx.main.id, anchorSourceUs: anchorAt(s.atS), durationUs: Math.max(200_000, asset.durationUs ?? 3_000_000) }]);
+          }
         }
       } catch (caught) { notes.push((s.kind === "stock" ? "Stock \"" + s.query + "\"" : "The voice-over") + " could not be added: " + (caught instanceof Error ? caught.message : "error").slice(0, 120)); }
     }
@@ -330,6 +341,22 @@ async function scanPicture(dependencies: DirectorRouteDependencies, input: strin
     out.black.push(...found.black); out.frozen.push(...found.frozen);
   }
   return out;
+}
+
+/** An ordinary video asset keeps preview, renderer and audio duration on the same timeline. */
+async function createNarrationCard(dependencies: DirectorRouteDependencies, projectId: string, durationUs: number): Promise<{ id: string }> {
+  const directory = await mkdtemp(join(tmpdir(), "videocraft-outro-"));
+  const id = randomUUID();
+  try {
+    const path = join(directory, "outro.mp4");
+    await run(dependencies.ffmpeg ?? "ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=0x1F2A24:s=640x360:r=30", "-t", (durationUs / 1e6).toFixed(6), "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", path]);
+    const key = "projects/" + projectId + "/assets/" + id + ".media";
+    const stored = await dependencies.storage.putFile(path, key);
+    try {
+      await dependencies.assets.save({ id, projectId, kind: "video", storageKey: stored.key, checksumSha256: stored.checksumSha256, durationUs, metadata: { filename: "Narrated end card.mp4", mimeType: "video/mp4", width: 640, height: 360, hasAudio: false, endCard: true }, createdAt: dependencies.clock() });
+    } catch (caught) { await dependencies.storage.remove(key).catch(() => undefined); throw caught; }
+    return { id };
+  } finally { await rm(directory, { recursive: true, force: true }).catch(() => undefined); }
 }
 
 function run(cmd: string, args: string[]): Promise<string> {

@@ -375,3 +375,18 @@ test("real ffmpeg: blends (dissolve, push, wipe) overlap the clips without movin
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('real ffmpeg: hard cuts followed by multiple dissolves share a timebase', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'vc-mixed-blends-'));
+  try {
+    const source = join(dir, 'source.mp4');
+    execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=s=320x240:r=30:d=6', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=6', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', source]);
+    const pieces = [clip('a', 0, 1_000_000, 0), clip('b', 1_000_000, 2_000_000, 1_000_000), { ...clip('c', 2_000_000, 3_000_000, 2_000_000), transform: { transitionIn: 'dissolve' } }, { ...clip('d', 3_000_000, 4_000_000, 3_000_000), transform: { transitionIn: 'dissolve' } }];
+    const out = join(dir, 'mixed.mp4');
+    const planner = new FfmpegCommandPlanner({ resolve: async () => source, hasAudio: async () => true });
+    await new FfmpegProcess().run(await planner.plan(revision(pieces), { ...settings, width: 320, height: 240 }, out));
+    execFileSync('ffmpeg', ['-v', 'error', '-i', out, '-f', 'null', '-']);
+    const duration = Number(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', out]).toString());
+    assert.ok(Math.abs(duration - 4) < 0.1, `duration ${duration}`);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

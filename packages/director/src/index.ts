@@ -53,7 +53,7 @@ export type Suggestion =
   /** A free stock video, photo or GIF found by `query` and placed as a cutaway (full, corner or behind the person). */
   | { id: string; kind: "stock"; title: string; reason: string; query: string; assetKind: "video" | "photo" | "gif"; atS: number; durationS: number; mode: "full" | "pip" | "behind"; pick?: StockPick }
   /** Narration read by a voice from `text`, starting at atS. */
-  | { id: string; kind: "voiceover"; title: string; reason: string; text: string; atS: number }
+  | { id: string; kind: "voiceover"; title: string; reason: string; text: string; atS: number; afterVideo?: boolean }
   /** Make a kind of sound louder or quieter by changeDb (negative = quieter): the music, sound effects or voice-overs. */
   | { id: string; kind: "volume"; title: string; reason: string; target: "music" | "sfx" | "voiceover"; changeDb: number }
   /** What is behind the person in the whole video: blurred, or a plain colour (the person is cut out and kept). */
@@ -174,9 +174,9 @@ export function sanitizePlan(raw: unknown, input: DirectorInput, source: Directo
       if (suggestions.filter((e) => e.kind === "stock").length >= 5) return;
       suggestions.push({ ...base(s, index), kind: "stock", query, assetKind, atS, durationS: clamp(num(s.durationS) || 3, 0.5, 10), mode: s.mode === "pip" ? "pip" : s.mode === "behind" ? "behind" : "full", ...(pick ? { pick } : {}) });
     } else if (kind === "voiceover") {
-      const t = text(s.text, 1500); const atS = num(s.atS);
+      const t = text(s.text, 1500); const atS = s.afterVideo === true ? 0 : num(s.atS);
       if (!t || !(atS >= 0 && atS < input.durationS)) return;
-      suggestions.push({ ...base(s, index), kind: "voiceover", text: t, atS });
+      suggestions.push({ ...base(s, index), kind: "voiceover", text: t, atS, ...(s.afterVideo === true ? { afterVideo: true } : {}) });
     } else if (kind === "volume") {
       const target = s.target === "sfx" || s.target === "voiceover" ? s.target : s.target === "music" ? "music" : undefined;
       const changeDb = Math.round(clamp(num(s.changeDb), -20, 12));
@@ -327,6 +327,7 @@ Rules:
 - "captions": captions for every spoken word (when the creator asks for captions or subtitles).
 - "color": the accent colour (#RRGGBB in field color) of titles, callouts, name captions and the progress bar.
 - "stock": a free stock cutaway: query (2-5 plain English words for a stock library), assetKind video, photo or gif, atS (source seconds inside a kept piece; use the creator's playhead when they say "here"), durationS, mode full, pip (corner) or behind (behind the person).
+- For narration explicitly requested AFTER the video, set afterVideo true; the server appends an end card for the full narration. Otherwise afterVideo false.
 - "voiceover": narration read by a voice: text (the exact words) and atS.
 - "volume": when the creator says something is too loud or quiet: target "music" (also called the background sound or background volume), "sfx" or "voiceover", and changeDb (negative = quieter; about -6 to -10 when music competes with the voice). Current levels are in the edit summary.
 - "background": only when the creator asks: "blur" (keep the person sharp, blur what is behind) or "color" with a calm #RRGGBB colour (field color).
@@ -340,7 +341,7 @@ const SCHEMA = {
     summary: { type: "string" },
     profile: { type: "object", additionalProperties: false, required: ["intent", "audience", "channel", "tone", "targetSeconds"], properties: { intent: { type: "string" }, audience: { type: "string" }, channel: { type: "string" }, tone: { type: "string" }, targetSeconds: { type: "number" } } },
     suggestions: { type: "array", items: { type: "object", additionalProperties: false,
-      required: ["id", "kind", "title", "reason", "segments", "text", "subtitle", "atS", "durationS", "position", "mood", "assetId", "mode", "platform", "look", "style", "transition", "background", "color", "target", "changeDb", "query", "assetKind"],
+      required: ["id", "kind", "title", "reason", "segments", "text", "subtitle", "atS", "durationS", "position", "mood", "assetId", "mode", "platform", "look", "style", "transition", "background", "color", "target", "changeDb", "query", "assetKind", "afterVideo"],
       properties: {
         id: { type: "string" }, kind: { type: "string", enum: ["cut", "title", "callout", "lower-third", "music", "broll", "progress", "platform", "look", "zooms", "transitions", "sfx", "background", "volume", "remove", "captions", "color", "stock", "voiceover", "advice"] },
         title: { type: "string" }, reason: { type: "string" },
@@ -351,7 +352,7 @@ const SCHEMA = {
         look: { type: "string", enum: [...LOOKS, ""] }, style: { type: "string", enum: ["punch", "push", ""] }, transition: { type: "string", enum: [...DIRECTOR_TRANSITIONS, ""] },
         background: { type: "string", enum: ["blur", "color", ""] }, color: { type: "string" },
         target: { type: "string", enum: ["music", "sfx", "voiceover", ...REMOVABLE, ""] }, changeDb: { type: "number" },
-        query: { type: "string" }, assetKind: { type: "string", enum: ["video", "photo", "gif", ""] },
+        afterVideo: { type: "boolean" }, query: { type: "string" }, assetKind: { type: "string", enum: ["video", "photo", "gif", ""] },
       } } },
   },
 };

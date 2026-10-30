@@ -248,3 +248,28 @@ test("stock ideas come with the found picture, and applying adds exactly that on
     assert.ok(applied.json().revision.timeline.tracks.find((t) => t.kind === "overlay").clips.some((c) => c.assetId === "pic"));
   } finally { close(); }
 });
+
+test('after-video narration appends a real end-card asset and keeps the full audio duration', async () => {
+  const { server, projectId, durationUs, close } = await setup(new RuleDirector(), { extra: {
+    speak: async () => ({ id: 'pic', durationUs: 2_000_000 }),
+  } });
+  try {
+    const root = '/v1/projects/' + projectId + '/director/';
+    const asked = await server.inject({ method: 'POST', url: root + 'ask', payload: { revision: 1, instruction: 'Add a voice-over after the video (Jesus truly saves)' } });
+    const plan = asked.json().plan;
+    const voice = plan.suggestions.find(s => s.kind === 'voiceover');
+    assert.equal(voice.afterVideo, true);
+    const applied = await server.inject({ method: 'POST', url: root + 'apply', payload: { revision: 1, plan, accepted: [voice.id], keepTailoring: true } });
+    assert.equal(applied.statusCode, 201, applied.body);
+    const result = applied.json();
+    assert.equal(result.notes, undefined, applied.body);
+    const timeline = result.revision.timeline;
+    assert.equal(timeline.durationUs, durationUs + 2_000_000);
+    const card = timeline.tracks.find(t => t.kind === 'video').clips.at(-1);
+    assert.equal(card.timelineStartUs, durationUs);
+    const vo = timeline.tracks.flatMap(t => t.clips).find(c => c.transform?.role === 'voiceover');
+    assert.equal(vo.timelineStartUs, durationUs);
+    assert.equal(vo.timelineEndUs - vo.timelineStartUs, 2_000_000);
+    assert.ok(timeline.tracks.flatMap(t => t.clips).some(c => c.transform?.text === 'Jesus truly saves' && c.timelineStartUs === durationUs));
+  } finally { close(); }
+});
