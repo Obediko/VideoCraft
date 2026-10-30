@@ -50,13 +50,16 @@ export type Suggestion =
   /** The accent colour of titles, callouts, name captions and the progress bar. */
   | { id: string; kind: "color"; title: string; reason: string; color: string }
   /** A free stock video, photo or GIF found by `query` and placed as a cutaway (full, corner or behind the person). */
-  | { id: string; kind: "stock"; title: string; reason: string; query: string; assetKind: "video" | "photo" | "gif"; atS: number; durationS: number; mode: "full" | "pip" | "behind" }
+  | { id: string; kind: "stock"; title: string; reason: string; query: string; assetKind: "video" | "photo" | "gif"; atS: number; durationS: number; mode: "full" | "pip" | "behind"; pick?: StockPick }
   /** Narration read by a voice from `text`, starting at atS. */
   | { id: string; kind: "voiceover"; title: string; reason: string; text: string; atS: number }
   /** Make a kind of sound louder or quieter by changeDb (negative = quieter): the music, sound effects or voice-overs. */
   | { id: string; kind: "volume"; title: string; reason: string; target: "music" | "sfx" | "voiceover"; changeDb: number }
   /** What is behind the person in the whole video: blurred, or a plain colour (the person is cut out and kept). */
   | { id: string; kind: "background"; title: string; reason: string; background: "blur" | "color"; color?: string };
+
+/** The stock item found for a suggestion, shown before applying so the creator sees what they get. */
+export interface StockPick { provider: "pexels" | "pixabay" | "giphy"; id: string; thumbUrl: string; credit?: string }
 
 export interface DirectorPlan {
   summary: string;
@@ -164,7 +167,11 @@ export function sanitizePlan(raw: unknown, input: DirectorInput, source: Directo
       const query = text(s.query, 80); const atS = num(s.atS);
       if (!query || !(atS >= 0 && atS < input.durationS)) return;
       const assetKind = s.assetKind === "photo" || s.assetKind === "gif" ? s.assetKind : "video";
-      suggestions.push({ ...base(s, index), kind: "stock", query, assetKind, atS, durationS: clamp(num(s.durationS) || 3, 0.5, 10), mode: s.mode === "pip" ? "pip" : s.mode === "behind" ? "behind" : "full" });
+      const p = (s.pick ?? {}) as Record<string, unknown>;
+      const pick = (p.provider === "pexels" || p.provider === "pixabay" || p.provider === "giphy") && typeof p.id === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(p.id) && typeof p.thumbUrl === "string" && /^https:\/\/[^\s"'<>]{8,500}$/.test(p.thumbUrl)
+        ? { provider: p.provider, id: p.id, thumbUrl: p.thumbUrl, ...(text(p.credit, 80) ? { credit: text(p.credit, 80) } : {}) } as StockPick : undefined;
+      if (suggestions.filter((e) => e.kind === "stock").length >= 5) return;
+      suggestions.push({ ...base(s, index), kind: "stock", query, assetKind, atS, durationS: clamp(num(s.durationS) || 3, 0.5, 10), mode: s.mode === "pip" ? "pip" : s.mode === "behind" ? "behind" : "full", ...(pick ? { pick } : {}) });
     } else if (kind === "voiceover") {
       const t = text(s.text, 1500); const atS = num(s.atS);
       if (!t || !(atS >= 0 && atS < input.durationS)) return;
@@ -307,6 +314,7 @@ Rules:
 - "title", "callout", "lower-third": text on screen at a source time (atS) INSIDE a kept segment. Titles max ~6 words. Lower thirds name a person (text) and role (subtitle) only if the transcript or brief makes them clear.
 - "music": one mood from: upbeat, calm, inspiring, serious, playful.
 - "broll": only with assetId values from the project media list; place at a source time inside a kept segment where the words describe it.
+- "stock": up to 3 free stock cutaways where the words describe something concrete and visual that the footage does not show (a place, an object, an activity), and no project media fits: query is 2-5 plain English words a stock library would match (e.g. "students studying library", "city skyline night"), assetKind "video" (or "photo"; "gif" only for playful reactions), atS inside a kept segment, durationS 2-4, mode "full" (or "behind" to put it behind the person). Not over the hook, not over a face-to-camera key point.
 - "progress": a progress bar (good for short-form).
 - "platform": tiktok (9:16), youtube (16:9) or square (1:1).
 - "look": one colour look for the whole video: warm, clean, cinematic, vivid, soft or mono (field look). Choose from the mood and what the frames look like.

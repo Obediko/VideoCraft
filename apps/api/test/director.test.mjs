@@ -224,3 +224,27 @@ test("ask → apply: free stock behind you and a typed voice-over are made on th
     assert.match(applied.notes[0], /not set up/);
   } finally { bare.close(); }
 });
+
+test("stock ideas come with the found picture, and applying adds exactly that one", async () => {
+  const imported = [];
+  const plan = { summary: "x", profile: { intent: "x", audience: "", channel: "short-form", tone: "", targetSeconds: 20 }, source: "ai", suggestions: [
+    { id: "s1", kind: "stock", title: "Students", reason: "Words describe students", query: "students studying", assetKind: "video", atS: 3, durationS: 3, mode: "full" },
+    { id: "s2", kind: "stock", title: "Nothing", reason: "x", query: "zzz unmatched", assetKind: "photo", atS: 4, durationS: 3, mode: "full" },
+  ] };
+  const director = { plan: async () => plan, ask: async () => plan };
+  const { server, projectId, close } = await setup(director, { extra: {
+    previewStock: async (query) => (query.startsWith("students") ? { provider: "pexels", id: "123", thumbUrl: "https://images.pexels.com/123.jpg", credit: "Ana on Pexels" } : undefined),
+    importStock: async (_p, provider, kind, id) => { imported.push(provider + ":" + kind + ":" + id); return { id: "pic" }; },
+    findStock: async () => { throw new Error("should use the shown pick"); },
+  } });
+  try {
+    const url = (p) => "/v1/projects/" + projectId + "/director/" + p;
+    const got = (await server.inject({ method: "POST", url: url("plan"), payload: { revision: 1, brief: "A reel for graduates" } })).json().plan;
+    assert.deepEqual(got.suggestions.map((s) => s.id), ["s1"], "an idea with no picture found is not offered");
+    assert.equal(got.suggestions[0].pick.thumbUrl, "https://images.pexels.com/123.jpg");
+    const applied = await server.inject({ method: "POST", url: url("apply"), payload: { revision: 1, plan: got, accepted: ["s1"] } });
+    assert.equal(applied.statusCode, 201, applied.body);
+    assert.deepEqual(imported, ["pexels:video:123"]);
+    assert.ok(applied.json().revision.timeline.tracks.find((t) => t.kind === "overlay").clips.some((c) => c.assetId === "pic"));
+  } finally { close(); }
+});

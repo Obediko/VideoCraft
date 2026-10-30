@@ -329,3 +329,5 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 /* Volume levels */
 .level { display: flex; flex-direction: column; gap: 4px; }
 .level-head { display: flex; justify-content: space-between; gap: 8px; }
+.stock-pick { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.stock-pick img { width: 72px; height: 72px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border); background: #0e0d0b; }

@@ -27,13 +27,15 @@ const PLATFORMS: Record<string, { label: string; short: string; width: number; h
   square: { label: "Feed · 1:1", short: "Feed 1:1", width: 1080, height: 1080, fit: "cover", captionStyle: "clean" },
   preview: { label: "Quick preview · 720p", short: "Preview 720p", width: 1280, height: 720, fit: "contain", captionStyle: "clean" },
 };
-type Suggestion = { id: string; kind: string; title: string; reason: string; text?: string; subtitle?: string; atS?: number; durationS?: number; segments?: Array<{ startS: number; endS: number }>; mood?: string; platform?: string; assetId?: string; mode?: string; changeDb?: number; target?: string; query?: string; color?: string };
+type Suggestion = { id: string; kind: string; title: string; reason: string; text?: string; subtitle?: string; atS?: number; durationS?: number; segments?: Array<{ startS: number; endS: number }>; mood?: string; platform?: string; assetId?: string; mode?: string; changeDb?: number; target?: string; query?: string; color?: string; pick?: { provider: string; id: string; thumbUrl: string; credit?: string } };
 type DirectorPlan = { summary: string; profile: { intent: string; audience: string; channel: string; tone: string; targetSeconds: number }; suggestions: Suggestion[]; source: "ai" | "rules"; model?: string; note?: string };
 const PLAN_GROUPS: Array<{ name: string; kinds: string[] }> = [
   { name: "Story", kinds: ["cut"] },
-  { name: "Text on screen", kinds: ["title", "callout", "lower-third", "progress"] },
-  { name: "Look", kinds: ["look", "background", "zooms", "broll"] },
-  { name: "Sound", kinds: ["music", "sfx"] },
+  { name: "Text on screen", kinds: ["title", "callout", "lower-third", "progress", "captions", "color"] },
+  { name: "Cutaways", kinds: ["broll", "stock"] },
+  { name: "Look", kinds: ["look", "background", "zooms"] },
+  { name: "Sound", kinds: ["music", "sfx", "volume", "voiceover"] },
+  { name: "Taking out", kinds: ["remove"] },
   { name: "Pacing", kinds: ["transitions"] },
   { name: "Format", kinds: ["platform"] },
   { name: "Tips from the director", kinds: ["advice"] },
@@ -899,7 +901,7 @@ export function App() {
               {item.kind !== "advice" && <input type="checkbox" id={"s-" + item.id} checked={Boolean(picked[item.id])} onChange={(event) => setPicked((current) => ({ ...current, [item.id]: event.target.checked }))} />}
               <div className="suggestion-body">
                 <label htmlFor={"s-" + item.id}><strong>{item.title}</strong></label>
-                <span className="small what">{describeSuggestion(item)}</span>
+                <span className="small what">{describeSuggestion(item)}</span>{item.pick && <span className="stock-pick"><img src={item.pick.thumbUrl} alt={"Stock: " + (item.query ?? "")} loading="lazy" /><span className="muted small">{item.pick.credit ?? "Free stock"}</span></span>}
                 {planText[item.id] !== undefined && <input aria-label={"Text for " + item.title} value={planText[item.id]} maxLength={120} onChange={(event) => setPlanText((current) => ({ ...current, [item.id]: event.target.value }))} />}
                 {item.reason && <details><summary>Why</summary><p className="small muted">{item.reason}</p></details>}
               </div>
@@ -1132,7 +1134,7 @@ export function App() {
               {askPlan.note && <p className="note">{askPlan.note}</p>}
               <ul className="suggestion-list">{askPlan.suggestions.map((item) => <li key={item.id} className={"suggestion" + (askPicked[item.id] || item.kind === "advice" ? "" : " off")}>
                 {item.kind !== "advice" && <input type="checkbox" id={"a-" + item.id} checked={Boolean(askPicked[item.id])} onChange={(event) => setAskPicked((current) => ({ ...current, [item.id]: event.target.checked }))} />}
-                <div className="suggestion-body"><label htmlFor={"a-" + item.id}><strong>{item.title}</strong></label><span className="small what">{describeSuggestion(item)}</span></div>
+                <div className="suggestion-body"><label htmlFor={"a-" + item.id}><strong>{item.title}</strong></label><span className="small what">{describeSuggestion(item)}</span>{item.pick && <span className="stock-pick"><img src={item.pick.thumbUrl} alt={"Stock: " + (item.query ?? "")} loading="lazy" /><span className="muted small">{item.pick.credit ?? "Free stock"}</span></span>}</div>
               </li>)}</ul>
               <div className="actions">
                 {askPlan.suggestions.some((item) => item.kind !== "advice") && <button className="primary" onClick={applyAsk} disabled={busy || !askPlan.suggestions.some((item) => askPicked[item.id] && item.kind !== "advice")}>Apply</button>}

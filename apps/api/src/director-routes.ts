@@ -19,6 +19,10 @@ export interface DirectorRouteDependencies {
   authorize: { canAccess(principal: { userId: UUID }, projectId: UUID, role: "viewer" | "editor"): Promise<boolean> };
   clock(): string;
   ffmpeg?: string;
+  /** Looks up the best free stock match for a few words, without importing it (to show it in a suggestion). */
+  previewStock?(query: string, kind: "video" | "photo" | "gif", orientation?: "portrait" | "landscape" | "square"): Promise<{ provider: "pexels" | "pixabay" | "giphy"; id: string; thumbUrl: string; credit?: string } | undefined>;
+  /** Imports one stock item the creator saw in a suggestion. */
+  importStock?(projectId: UUID, provider: "pexels" | "pixabay" | "giphy", kind: "video" | "photo" | "gif", id: string): Promise<{ id: UUID }>;
   /** Finds and imports a free stock video, photo or GIF for a few words (absent without stock keys). */
   findStock?(projectId: UUID, query: string, kind: "video" | "photo" | "gif", orientation?: "portrait" | "landscape" | "square"): Promise<{ id: UUID } | undefined>;
   /** Reads text aloud as an audio asset (absent without the OpenAI key). */
@@ -40,7 +44,7 @@ export function registerDirectorRoutes(server: FastifyInstance, dependencies: Di
     if (plan.source === "rules" && plan.note?.includes("unavailable")) {
       request.log.warn({ requestId: request.id, projectId: ctx.projectId, reason: plan.note.slice(0, 300), stage: "director_plan" }, "AI director fell back to rules");
     }
-    return { plan };
+    return { plan: await withStockPreviews(plan, dependencies, orientationOf(ctx.revision)) };
   });
 
   // A change to the current edit in the person's own words ("make it shorter", "warmer look").
@@ -69,7 +73,7 @@ export function registerDirectorRoutes(server: FastifyInstance, dependencies: Di
     if (plan.source === "rules" && plan.note?.includes("unavailable")) {
       request.log.warn({ requestId: request.id, projectId: ctx.projectId, reason: plan.note.slice(0, 300), stage: "director_ask" }, "AI director fell back to rules");
     }
-    return { plan };
+    return { plan: await withStockPreviews(plan, dependencies, orientationOf(ctx.revision)) };
   });
 
   server.post("/v1/projects/:projectId/director/apply", async (request: FastifyRequest, reply: FastifyReply) => {
@@ -107,8 +111,10 @@ export function registerDirectorRoutes(server: FastifyInstance, dependencies: Di
     for (const s of plan.suggestions.filter((x) => accepted.has(x.id))) {
       try {
         if (s.kind === "stock") {
-          if (!dependencies.findStock) { notes.push("Stock search is not set up on the server, so \"" + s.query + "\" was skipped."); continue; }
-          const asset = await dependencies.findStock(ctx.projectId, s.query, s.assetKind, s.mode === "pip" ? "landscape" : frame);
+          // The exact item shown in the suggestion when there was one; otherwise the best match now.
+          const asset = s.pick && dependencies.importStock ? await dependencies.importStock(ctx.projectId, s.pick.provider, s.assetKind, s.pick.id).catch(() => undefined)
+            : dependencies.findStock ? await dependencies.findStock(ctx.projectId, s.query, s.assetKind, s.mode === "pip" ? "landscape" : frame) : undefined;
+          if (!dependencies.findStock && !dependencies.importStock) { notes.push("Stock search is not set up on the server, so \"" + s.query + "\" was skipped."); continue; }
           if (!asset) { notes.push("No free stock matched \"" + s.query + "\"."); continue; }
           timeline = applyTimelineOperations(timeline, [{ type: "add-broll", assetId: asset.id, anchorAssetId: ctx.main.id, anchorSourceUs: anchorAt(s.atS), durationUs: Math.round(s.durationS * 1e6), mode: s.mode }]);
         } else if (s.kind === "voiceover") {
@@ -125,6 +131,20 @@ export function registerDirectorRoutes(server: FastifyInstance, dependencies: Di
     const platform = plan.suggestions.find((s) => s.kind === "platform" && accepted.has(s.id));
     return reply.code(201).send({ revision, ...(platform && platform.kind === "platform" ? { platform: platform.platform } : {}), ...(music ? { music } : {}), ...(notes.length ? { notes } : {}) });
   });
+}
+
+function orientationOf(revision: ProjectRevision): "portrait" | "landscape" { return revision.tailoring?.channel === "youtube" ? "landscape" : "portrait"; }
+
+/** Finds the stock item for each stock suggestion so the creator sees a thumbnail and credit before applying. */
+async function withStockPreviews(plan: DirectorPlan, dependencies: DirectorRouteDependencies, orientation: "portrait" | "landscape"): Promise<DirectorPlan> {
+  if (!dependencies.previewStock || !plan.suggestions.some((s) => s.kind === "stock")) return plan;
+  const suggestions = await Promise.all(plan.suggestions.map(async (s) => {
+    if (s.kind !== "stock" || s.pick) return s;
+    const pick = await dependencies.previewStock!(s.query, s.assetKind, s.mode === "pip" ? "landscape" : orientation).catch(() => undefined);
+    return pick ? { ...s, pick } : s;
+  }));
+  // A stock idea with nothing found is dropped rather than offered empty.
+  return { ...plan, suggestions: suggestions.filter((s) => s.kind !== "stock" || s.pick) };
 }
 
 /** The rest of the edit in a line, for the director: levels, effects, cutaways, captions, background. */

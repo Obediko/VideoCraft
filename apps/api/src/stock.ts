@@ -253,6 +253,16 @@ export async function importStock(dependencies: StockDependencies, fetcher: Fetc
   }
 }
 
+/** The best free stock match for a few words, not imported (shown in a suggestion before applying). */
+export async function previewStock(dependencies: StockDependencies, query: string, kind: StockKind, orientation?: "portrait" | "landscape" | "square"): Promise<{ provider: StockProvider; id: string; thumbUrl: string; credit?: string } | undefined> {
+  const fetcher: Fetcher = dependencies.fetch ?? ((url, init) => fetch(url, init) as never);
+  for (const provider of providersFor(dependencies.keys, kind)) {
+    const item = (await searchProvider(fetcher, dependencies.keys, provider, kind, query, orientation).catch(() => [])).find((candidate) => candidate.thumbUrl.startsWith("https://"));
+    if (item) return { provider, id: item.id, thumbUrl: item.thumbUrl, ...(item.credit ? { credit: item.credit + " on " + (provider === "pexels" ? "Pexels" : provider === "pixabay" ? "Pixabay" : "GIPHY") } : {}) };
+  }
+  return undefined;
+}
+
 /** The best free stock match for a few words, imported as an asset (for the director). Undefined when none. */
 export async function findStock(dependencies: StockDependencies, projectId: string, query: string, kind: StockKind, orientation?: "portrait" | "landscape" | "square"): Promise<Asset | undefined> {
   const fetcher: Fetcher = dependencies.fetch ?? ((url, init) => fetch(url, init) as never);
