@@ -9,12 +9,11 @@ async function editor(page:Page, screen='export', resume=false) {
     localStorage.setItem('videocraft.lastProject','p');localStorage.setItem('videocraft.lastScreen',screen);
     if(resume)localStorage.setItem('videocraft.render.v1.p',JSON.stringify({id:'job',revision:2,platform:'tiktok'}));
   },{screen,resume});
-  await page.route('**/*.webm*',()=>{});
   await page.route('http://localhost:8080/**',async route=>{
     const req=route.request(), path=new URL(req.url()).pathname;
     const headers={'access-control-allow-origin':req.headers()['origin']??'http://127.0.0.1:5173','access-control-allow-credentials':'true','access-control-allow-methods':'GET, POST, OPTIONS','access-control-allow-headers':'authorization, content-type'};
     if(req.method()==='OPTIONS'){await route.fulfill({status:204,headers});return;}
-    if(path==='/export.mp4'){await route.fulfill({status:200,headers,contentType:'video/webm',body:media});return;}
+    if(path==='/export.mp4'||path==='/fixture.webm'){await route.fulfill({status:200,headers,contentType:'video/webm',body:media});return;}
     let body:any={}; let status=200;
     if(state.expired){await route.fulfill({status:401,headers,contentType:'application/json',body:JSON.stringify({error:{message:'Session expired'}})});return;}
     if(path==='/auth/refresh')body={accessToken:'test',user:{email:'test@example.com'}};
@@ -122,7 +121,7 @@ test('an expired refresh session returns to sign-in and clears the editing works
 test('an upload refreshes an expired access token and preserves multipart boundaries',async({page})=>{
   const state=await editor(page,'edit');state.uploadExpired=true;
   await page.goto('/');
-  await page.getByRole('button',{name:'Cutaway here',exact:true}).click();
+  await page.getByRole('button',{name:'Visuals',exact:true}).click();
   await page.getByLabel('Upload a photo or clip',{exact:true}).setInputFiles({name:'photo.png',mimeType:'image/png',buffer:Buffer.from('test upload')});
   await expect.poll(()=>state.uploadCalls).toBe(2);
   expect(state.uploadTypes).toHaveLength(2);
