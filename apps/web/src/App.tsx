@@ -769,7 +769,8 @@ export function App() {
       setRevision(result.revision.revision); setTimeline(result.revision.timeline);
       setRenderUrl(""); setRenderJobId(""); setRenderJobStatus("");
       if (result.platform && PLATFORMS[result.platform]) setPlatform(result.platform);
-      if (result.music) { const listed = await request("/v1/projects/" + projectId + "/assets").catch(() => null); if (listed) setAssets(listed.assets); }
+      // Stock, end cards and narration also create assets when the plan has no music.
+      const listed = await request("/v1/projects/" + projectId + "/assets").catch(() => null); if (listed) setAssets(listed.assets);
       setPlanApplied(true); setCheck(null); setScreen("edit");
       setStatus("Plan applied (revision " + result.revision.revision + ")" + (result.music ? ". Music: " + result.music.description : ""));
     } catch (error) { setStatus(errorMessage(error)); }

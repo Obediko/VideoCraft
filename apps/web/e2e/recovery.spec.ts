@@ -13,8 +13,8 @@ try {
 } finally {rmSync(fixtureDir,{recursive:true,force:true});}
 
 async function editor(page:Page, screen='export', resume=false) {
-  const state={revision:2,status:'queued',offline:false,calls:0,links:0,submissions:0,submissionKeys:[] as string[],loseNextSubmission:false,expired:false,uploadCalls:0,uploadExpired:false,uploadTypes:[] as string[]};
-  const timeline=(seconds:number)=>({durationUs:seconds*1e6,tracks:[{id:'v',kind:'video',clips:[{id:'c',assetId:'a',sourceStartUs:0,sourceEndUs:seconds*1e6,timelineStartUs:0,timelineEndUs:seconds*1e6}]}]});
+  const state={revision:2,status:'queued',offline:false,calls:0,links:0,submissions:0,submissionKeys:[] as string[],loseNextSubmission:false,expired:false,uploadCalls:0,uploadExpired:false,uploadTypes:[] as string[],withTranscript:false,planApplied:false,assetLists:0};
+  const timeline=(seconds:number):any=>({durationUs:seconds*1e6,tracks:[{id:'v',kind:'video',clips:[{id:'c',assetId:'a',sourceStartUs:0,sourceEndUs:seconds*1e6,timelineStartUs:0,timelineEndUs:seconds*1e6}]}]});
   await page.addInitScript(({screen,resume})=>{
     localStorage.setItem('videocraft.lastProject','p');localStorage.setItem('videocraft.lastScreen',screen);
     if(resume)localStorage.setItem('videocraft.render.v1.p',JSON.stringify({id:'job',revision:2,platform:'tiktok'}));
@@ -23,6 +23,7 @@ async function editor(page:Page, screen='export', resume=false) {
     const req=route.request(), path=new URL(req.url()).pathname;
     const headers={'access-control-allow-origin':req.headers()['origin']??'http://127.0.0.1:5173','access-control-allow-credentials':'true','access-control-allow-methods':'GET, POST, OPTIONS','access-control-allow-headers':'authorization, content-type, range'};
     if(req.method()==='OPTIONS'){await route.fulfill({status:204,headers});return;}
+    if(path==='/stock.png'){await route.fulfill({status:200,headers,contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aCZkAAAAASUVORK5CYII=','base64')});return;}
     if(path==='/export.mp4'||path==='/fixture.mp4'){
       const range=/^bytes=(\d+)-(\d*)$/.exec(req.headers()['range']??'');
       const start=range?Number(range[1]):0,end=range&&range[2]?Math.min(Number(range[2]),media.length-1):media.length-1;
@@ -33,10 +34,12 @@ async function editor(page:Page, screen='export', resume=false) {
     if(path==='/auth/refresh')body={accessToken:'test',user:{email:'test@example.com'}};
     else if(path==='/v1/projects')body={projects:[{id:'p',name:'Recovery test',revision:state.revision,createdAt:'2026-01-01',updatedAt:'2026-01-01'}]};
     else if(path.endsWith('/assets/upload')){state.uploadCalls++;state.uploadTypes.push(req.headers()['content-type']??'');if(state.uploadExpired&&state.uploadCalls===1){status=401;body={error:{message:'Access expired'}};}else body={asset:{id:'photo',kind:'image',metadata:{filename:'photo.png'}}};}
-    else if(path.endsWith('/assets'))body={assets:[{id:'a',kind:'video',durationUs:2e6,metadata:{filename:'Test.mp4',width:640,height:360}}]};
-    else if(path.endsWith('/playback-url'))body={url:'/fixture.mp4',expires:Math.floor(Date.now()/1000)+3600};
+    else if(path.endsWith('/assets')){state.assetLists++;body={assets:[{id:'a',kind:'video',durationUs:2e6,metadata:{filename:'Test.mp4',width:640,height:360}},...(state.planApplied?[{id:'stock-photo',kind:'image',metadata:{filename:'Approved.png',width:1,height:1}}]:[])]};}
+    else if(path.endsWith('/playback-url'))body={url:path.includes('/stock-photo/')?'/stock.png':'/fixture.mp4',expires:Math.floor(Date.now()/1000)+3600};
     else if(path.endsWith('/faces'))body={step:1,boxes:[]};
-    else if(path.endsWith('/transcript'))body={segments:[]};
+    else if(path.endsWith('/transcript'))body={segments:state.withTranscript?[{id:'s',startUs:0,endUs:1e6,text:'Hello',words:[{text:'Hello',startUs:0,endUs:1e6,confidence:1}]}]:[]};
+    else if(path.endsWith('/director/plan'))body={plan:{source:'ai',summary:'Add the approved picture without music',suggestions:[{id:'stock',kind:'stock',title:'Approved picture',query:'freedom',atS:0,durationS:1,mode:'full'}]}};
+    else if(path.endsWith('/director/apply')){state.planApplied=true;state.revision++;const edited=timeline(2);edited.tracks.push({id:'o',kind:'overlay',clips:[{id:'photo-cutaway',assetId:'stock-photo',sourceStartUs:0,sourceEndUs:1e6,timelineStartUs:0,timelineEndUs:1e6,transform:{role:'broll',mode:'full'}}]});body={revision:{revision:state.revision,timeline:edited}};}
     else if(/\/revisions\/\d+\/restore$/.test(path)) {
       const expected=req.postDataJSON().expectedRevision;
       if(expected!==state.revision){status=409;body={error:{message:'Newer edit'}};}
@@ -144,4 +147,17 @@ test('an upload refreshes an expired access token and preserves multipart bounda
   expect(state.uploadTypes).toHaveLength(2);
   for(const type of state.uploadTypes)expect(type).toMatch(/^multipart\/form-data; boundary=/);
   await expect(page.getByText('Uploaded photo.png',{exact:true})).toBeVisible();
+});
+
+
+test('applying a Director plan without music loads the approved photo into the preview',async({page})=>{
+  const state=await editor(page,'describe');state.withTranscript=true;
+  await page.goto('/');
+  await page.getByLabel('Description',{exact:true}).fill('Add the approved picture, with no music');
+  await page.getByRole('button',{name:'Make the first cut',exact:true}).click();
+  await page.getByRole('button',{name:'Apply the selected',exact:true}).click();
+  await expect.poll(()=>state.assetLists).toBe(2);
+  await expect(page.locator('img.live-broll')).toHaveCount(1);
+  await expect(page.locator('img.live-broll')).toHaveJSProperty('naturalWidth',1);
+  await expect(page.locator('video.live-broll')).toHaveCount(0);
 });
