@@ -277,7 +277,7 @@ export function normalizeTimeline(timeline: Timeline): Timeline {
       const anchorAsset = String(clip.transform.anchorAssetId);
       const anchor = Number(clip.transform.anchorSourceUs);
       const wanted = Number(clip.transform.durationUs);
-      const host = video?.clips.find((candidate) => candidate.assetId === anchorAsset && anchor >= candidate.sourceStartUs && anchor < candidate.sourceEndUs);
+      const host = video?.clips.find((candidate) => (typeof clip.transform?.anchorClipId === "string" ? candidate.id === clip.transform.anchorClipId : candidate.assetId === anchorAsset) && anchor >= candidate.sourceStartUs && anchor < candidate.sourceEndUs);
       if (!host) return [];
       const start = host.timelineStartUs + (anchor - host.sourceStartUs);
       const end = Math.min(start + wanted, host.timelineEndUs);
@@ -291,8 +291,12 @@ export function normalizeTimeline(timeline: Timeline): Timeline {
     if (track.kind !== "audio") continue;
     track.clips = track.clips.flatMap((clip) => {
       if (clip.transform?.role === "sfx" || clip.transform?.role === "voiceover") {
+        if (clip.transform.timelineBound === true) {
+          const end = Math.min(Number(clip.transform.durationUs), videoEnd);
+          return end >= 50_000 ? [{ ...clip, timelineStartUs: 0, timelineEndUs: end, sourceEndUs: clip.sourceStartUs + end }] : [];
+        }
         // A sound effect plays at its moment; it may ring past a cut but not past the end.
-        const host = video?.clips.find((candidate) => candidate.assetId === String(clip.transform!.anchorAssetId) && Number(clip.transform!.anchorSourceUs) >= candidate.sourceStartUs && Number(clip.transform!.anchorSourceUs) < candidate.sourceEndUs);
+        const host = video?.clips.find((candidate) => (typeof clip.transform?.anchorClipId === "string" ? candidate.id === clip.transform.anchorClipId : candidate.assetId === String(clip.transform!.anchorAssetId)) && Number(clip.transform!.anchorSourceUs) >= candidate.sourceStartUs && Number(clip.transform!.anchorSourceUs) < candidate.sourceEndUs);
         if (!host) return [];
         const start = host.timelineStartUs + (Number(clip.transform.anchorSourceUs) - host.sourceStartUs);
         const end = Math.min(start + Number(clip.transform.durationUs), videoEnd);

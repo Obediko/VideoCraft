@@ -24,6 +24,8 @@ import { findStock, importStock, previewStock, registerStockRoutes } from "./sto
 import { registerVoiceoverRoutes, speak, voiceFetcher } from "./voiceover.js";
 import { registerPreferenceRoutes } from "./learning.js";
 import { registerMusicRoutes } from "./music-routes.js";
+import { registerCreationRoutes, storyboardPlanner } from "./creation.js";
+import { registerGeneratedMediaRoutes } from "./generated-media.js";
 import { registerDirectorRoutes } from "./director-routes.js";
 import { OpenAiDirector, RuleDirector } from "@videocraft/director";
 import { registerIntentRoutes } from "./intent-routes.js";
@@ -196,6 +198,12 @@ registerDirectorRoutes(server, { projects, assets, revisions, storage, transcrip
   previewStock: (query: string, kind: "video" | "photo" | "gif", orientation?: "portrait" | "landscape" | "square") => previewStock(stockDependencies, query, kind, orientation),
   importStock: async (projectId: string, provider: "pexels" | "pixabay" | "giphy", kind: "video" | "photo" | "gif", id: string) => (await importStock(stockDependencies, (url, init) => fetch(url, init) as never, projectId, provider, kind, id)).asset,
 } : {}), ...(voiceDependencies.apiKey ? { speak: (projectId: string, text: string) => speak(voiceDependencies, voiceFetcher(voiceDependencies), projectId, text, "marin") } : {}), saveRevision: (input) => timelineService.saveRevision(input), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, clock: () => new Date().toISOString(), ...(secretEnvironment.FFMPEG_BIN ? { ffmpeg: secretEnvironment.FFMPEG_BIN } : {}) });
+registerCreationRoutes(server, {
+  projects, assets, revisions, storage, transcripts,
+  ...(secretEnvironment.OPENAI_API_KEY && secretEnvironment.DIRECTOR_MODE !== "rules" ? { plan: storyboardPlanner({ apiKey: secretEnvironment.OPENAI_API_KEY, model: secretEnvironment.DIRECTOR_MODEL ?? "gpt-6.1-sol", ...(secretEnvironment.OPENAI_BASE_URL ? { endpoint: secretEnvironment.OPENAI_BASE_URL } : {}) }) } : {}),
+  saveRevision: input => timelineService.saveRevision(input), authenticate: request => authenticator.authenticate(request), authorize: authorizer, clock: () => new Date().toISOString(),
+});
+registerGeneratedMediaRoutes(server, { ...voiceDependencies, ...(secretEnvironment.IMAGE_MODEL ? { imageModel: secretEnvironment.IMAGE_MODEL } : {}), imageInspector: path => isStillImage(path, secretEnvironment.FFPROBE_BIN ? { executable: secretEnvironment.FFPROBE_BIN } : {}) });
 registerMusicRoutes(server, { assets, revisions, storage, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, clock: () => new Date().toISOString() });
 registerMediaRoutes(server, { assets, storage, signingSecret: requiredSecret("DOWNLOAD_SIGNING_SECRET"), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer,
   ...(secretEnvironment.FACES_SCRIPT ? { faces: { script: secretEnvironment.FACES_SCRIPT, ...(secretEnvironment.SCENE_PYTHON ? { executable: secretEnvironment.SCENE_PYTHON } : {}) } } : {}),

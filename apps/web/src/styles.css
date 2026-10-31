@@ -337,3 +337,17 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .export-history li { flex-wrap: wrap; align-items: flex-start; }
 .export-history li > span:first-child { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
 .export-history small { display: block; }
+
+/* Guided creation keeps the brief, media and storyboard readable on a phone. */
+.creation { max-width: 960px; margin-inline: auto; }
+.creation .card { padding: 1.25rem; }
+.creation-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: 1rem; margin-top: 1.5rem; }
+.creation-choice { display: flex; flex-direction: column; align-items: flex-start; text-align: left; gap: .8rem; padding: 1.5rem; min-height: 180px; }
+.creation-choice strong { font-size: 1.2rem; }
+.creation-library { display: grid; gap: .6rem; max-height: 280px; overflow: auto; overflow-wrap: anywhere; }
+.creation-scenes { padding-left: 1.5rem; }
+.creation-scenes > li { padding: 1rem 0; border-bottom: 1px solid var(--line, #444); }
+.creation-scenes input, .creation-scenes select, .creation textarea, .creation input { max-width: 100%; min-width: 0; }
+.creation-preview { display: block; width: 100%; max-height: 360px; object-fit: contain; background: #111; }
+.live-photo { position: absolute; inset: 0; width: 100%; height: 100%; }
+@media (max-width: 600px) { .creation .row-2 { grid-template-columns: 1fr; } .creation .actions { flex-wrap: wrap; } }
