@@ -113,6 +113,9 @@ test("an idea with no uploads requires an approved visual; stock and generated i
   expect(state.generated).toBe(1);
   state.photoFails = true;
   await page.getByRole("button", { name: "Assemble this story" }).click();
+  await expect(page.getByLabel("Live preview of the edit")).toBeVisible();
+  // A new document avoids reusing the decoded image already shown while choosing visuals.
+  await page.reload();
   await expect(page.getByRole("alert")).toContainText("The photo could not be loaded");
   state.photoFails = false;
   await page.getByRole("button", { name: "Reload footage", exact: true }).click();

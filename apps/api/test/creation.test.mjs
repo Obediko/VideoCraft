@@ -136,3 +136,12 @@ test("mixed video and photo storyboard renders the approved visual, music and co
     assert.ok(2 * Math.hypot(re, im) / (audio.length / 4) > 0.05, "the 880 Hz narration, rather than music alone, is present at the end");
   } finally { await s.close(); }
 });
+
+
+test("long narration extends a final photo in one input and refuses an unbounded number of short video repeats", () => {
+  const longVoice = { ...voice, durationUs: 600_000_000 };
+  const photoStory = storyTimeline([scenes[1]], longVoice, false, [photo]);
+  assert.equal(photoStory.tracks[0].clips.length, 1);
+  assert.equal(photoStory.durationUs, longVoice.durationUs);
+  assert.throws(() => storyTimeline([{ ...scenes[0], durationS: 0.5 }], longVoice, false, [video]), /too many repeated clips/);
+});

@@ -39,9 +39,10 @@ export function storyScenes(value: unknown, assets: Asset[], allowMissing = fals
 }
 
 /** Keep the complete narration. Repeat the last visual rather than silently cutting the voice. */
-export function storyTimeline(scenes: StoryScene[], narration?: Asset, captions = true): Timeline {
+export function storyTimeline(scenes: StoryScene[], narration?: Asset, sceneText = true, assets: Asset[] = []): Timeline {
   const clips: TimelineClip[] = []; let at = 0;
   const add = (s: StoryScene, durationUs = Math.round(s.durationS * 1e6)) => {
+    if (clips.length >= 40) throw new Error("Narration needs too many repeated clips. Lengthen the final scene or finish with a photo.");
     const start = Math.round(s.startS * 1e6);
     clips.push({ id: randomUUID(), assetId: s.assetId, sourceStartUs: start, sourceEndUs: start + durationUs, timelineStartUs: at, timelineEndUs: at + durationUs, reason: s.visual || "Storyboard scene", transform: { background: "none", ...(narration ? { muteSource: true } : {}) } });
     at += durationUs;
@@ -50,12 +51,14 @@ export function storyTimeline(scenes: StoryScene[], narration?: Asset, captions 
   if (narration) {
     if (!narration.durationUs || narration.durationUs < 200_000 || narration.durationUs > 600_000_000) throw new Error("Narration must have a known duration between 0.2 seconds and ten minutes");
     const last = scenes.at(-1)!;
-    while (at < narration.durationUs) add(last, Math.min(Math.round(last.durationS * 1e6), narration.durationUs - at));
+    if (at < narration.durationUs && assets.find(a => a.id === last.assetId)?.kind === "image") {
+      const tail = clips.at(-1)!; tail.sourceEndUs += narration.durationUs - at; tail.timelineEndUs = narration.durationUs; at = narration.durationUs;
+    } else while (at < narration.durationUs) add(last, Math.min(Math.round(last.durationS * 1e6), narration.durationUs - at));
   }
   let timeline: Timeline = { durationUs: at, tracks: [{ id: "video", kind: "video", clips }] };
   if (narration) timeline.tracks.push({ id: "narration", kind: "audio", clips: [{ id: randomUUID(), assetId: narration.id, sourceStartUs: 0, sourceEndUs: narration.durationUs!, timelineStartUs: 0, timelineEndUs: narration.durationUs!, transform: { role: "voiceover", volumeDb: 0, duck: true, anchorAssetId: clips[0]!.assetId, anchorSourceUs: clips[0]!.sourceStartUs, anchorClipId: clips[0]!.id, durationUs: narration.durationUs!, timelineBound: true } }] });
   // Text is approved scene text, not fabricated word timings for a generated or recorded voice.
-  if (captions) {
+  if (sceneText) {
     const graphics: TimelineClip[] = scenes.flatMap((s, i) => s.text.trim() ? [{ id: randomUUID(), assetId: "generated:graphic", sourceStartUs: 0, sourceEndUs: clips[i]!.timelineEndUs - clips[i]!.timelineStartUs, timelineStartUs: clips[i]!.timelineStartUs, timelineEndUs: clips[i]!.timelineEndUs, transform: { role: "graphic", kind: "callout", text: s.text.trim(), position: "bottom", anchorAssetId: clips[i]!.assetId, anchorSourceUs: clips[i]!.sourceStartUs, anchorClipId: clips[i]!.id, durationUs: clips[i]!.timelineEndUs - clips[i]!.timelineStartUs } }] : []);
     if (graphics.length) timeline.tracks.push({ id: "graphics", kind: "overlay", clips: graphics });
   }
@@ -97,7 +100,7 @@ export function registerCreationRoutes(server: FastifyInstance, d: CreationDepen
       const scenes = storyScenes(b.scenes, c.assets);
       const narration = typeof b.narrationAssetId === "string" && b.narrationAssetId ? c.assets.find(a => a.id === b.narrationAssetId && a.kind === "audio") : undefined;
       if (b.narrationAssetId && !narration) throw new Error("Narration must be an audio asset in this project");
-      let timeline = storyTimeline(scenes, narration, b.sceneText === true);
+      let timeline = storyTimeline(scenes, narration, b.sceneText === true, c.assets);
       if (narration && b.captions === true) {
         const segments = await d.transcripts.listForAsset(narration.id);
         const words = segments.flatMap(s => s.words).filter(w => Number.isSafeInteger(w.startUs) && Number.isSafeInteger(w.endUs) && w.startUs >= 0 && w.endUs > w.startUs && w.startUs < narration.durationUs!).sort((a, b) => a.startUs - b.startUs);
