@@ -1,9 +1,10 @@
+import { graphicPlacement } from "@videocraft/captions";
 import { THINKING_EQUATIONS } from "@videocraft/domain";
 import type React from "react";
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { generateSoundEffect, type SoundEffectKind } from "../../../packages/music/src/index.js";
 import { BackgroundLayer, type BackgroundSpec } from "./BackgroundLayer.js";
-import { LOOK_CSS, blendAt, captionBottomFor, faceDuring, faceInFrame, focusDuring, titleTopFor, veilAt, zoomAt, type FaceTrack, type FrameBox, type PreviewClip as Clip } from "./preview.js";
+import { LOOK_CSS, blendAt, captionBottomFor, faceDuring, faceInFrame, focusDuring, veilAt, zoomAt, type FaceTrack, type FrameBox, type PreviewClip as Clip } from "./preview.js";
 
 /**
  * Live preview of the edit in the browser: plays the cut clip by clip and draws captions, titles, cutaways,
@@ -315,7 +316,7 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
       {!urls[current?.assetId ?? ""] && <span className="live-empty">Preparing the footage…</span>}
       {broll.filter((c) => c.transform?.mode !== "behind").map((c) => { const url = urls[c.assetId]; const pip = c.transform?.mode === "pip"; return url ? <Cutaway key={c.id} clip={c} url={url} still={stills?.[c.assetId] === true} tUs={tUs} playing={playing} pip={pip} /> : <span key={c.id} className={"live-broll placeholder" + (pip ? " pip" : "")}>Cutaway</span>; })}
       {progress && <span className="live-progress" style={{ width: (100 * tUs) / Math.max(1, durationUs) + "%", background: String(progress.transform?.color ?? "#A8C49A") }} />}
-      {graphics.map((g) => { const kind = String(g.transform?.kind ?? "title"); const pos = String(g.transform?.position ?? (kind === "lower-third" ? "bottom" : "center")); const color = String(g.transform?.color ?? "#A8C49A");
+      {graphics.map((g) => { const kind = String(g.transform?.kind ?? "title"); const pos = String(g.transform?.position ?? (kind === "lower-third" ? "bottom" : "center")); const color = String(g.transform?.color ?? "#F5A524");
         if (kind === "thinking") {
           const duration = (g.timelineEndUs - g.timelineStartUs) / 1e6;
           return <div key={g.id} className="live-thinking" aria-label="Thinking equations effect">{THINKING_EQUATIONS.map((equation, i) => {
@@ -332,10 +333,15 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
           const below = 1 - (face.y1 + 0.02 + 0.12); const above = 1 - (face.y0 - 0.02);
           lowerBottom = below >= (captionTop !== undefined ? 1 - captionTop + 0.02 : 0.06) ? below : face.y0 - 0.14 >= 0.06 ? above : lowerBottom;
         }
-        const titleTop = kind === "lower-third" ? 0 : titleTopFor(pos, face, captionTop);
+        const frame = output ?? { width: shape === "tall" ? 1080 : 1920, height: shape === "tall" ? 1920 : shape === "square" ? 1920 : 1080 };
+        const placement = graphicPlacement({ kind: kind === "callout" ? "callout" : "title", text: String(g.transform?.text ?? ""), ...(g.transform?.subtitle ? { subtitle: String(g.transform.subtitle) } : {}), position: pos === "top" || pos === "bottom" ? pos : "center", startUs: g.timelineStartUs, endUs: g.timelineEndUs, ...(face ? { face: { x0: face.x0 * frame.width, x1: face.x1 * frame.width, y0: face.y0 * frame.height, y1: face.y1 * frame.height } } : {}) }, frame, captionTop !== undefined ? { topY: captionTop * frame.height, bottomY: frame.height } : undefined);
+        const elapsed = (tUs - g.timelineStartUs) / 1000, length = (g.timelineEndUs - g.timelineStartUs) / 1000;
+        const scale = 0.7 + 0.3 * Math.min(1, Math.max(0, elapsed / 220));
+        const opacity = Math.max(0, Math.min(1, elapsed / 160, (length - elapsed) / Math.min(250, Math.round(length / 4))));
+        const graphicStyle = { top: placement.y / frame.height * 100 + "%", background: color, padding: (placement.pad / frame.width * 100) + "cqw", fontSize: placement.fontSize / frame.width * 100 + "cqw", opacity, transform: "translate(-50%, -50%) scale(" + scale + ")" };
         return kind === "lower-third"
           ? <div key={g.id} className="live-lower" style={{ bottom: (lowerBottom * 100).toFixed(1) + "%" }}><span className="bar" style={{ background: color }} /><span className="text"><strong>{String(g.transform?.text ?? "")}</strong>{g.transform?.subtitle ? <span>{String(g.transform.subtitle)}</span> : null}</span></div>
-          : <div key={g.id} className={"live-title " + kind} style={{ top: (titleTop * 100).toFixed(1) + "%", ...(kind === "title" ? { borderColor: color } : { background: color }) }}><strong>{String(g.transform?.text ?? "")}</strong>{kind === "title" && g.transform?.subtitle ? <span>{String(g.transform.subtitle)}</span> : null}</div>; })}
+          : <div key={g.id} className={"live-title " + kind} style={graphicStyle}><strong>{String(g.transform?.text ?? "")}</strong>{kind === "title" && g.transform?.subtitle ? <span>{String(g.transform.subtitle)}</span> : null}</div>; })}
       {cue && <div className={"live-caption " + captionStyle} style={{ bottom: (captionBottom * 100).toFixed(1) + "%" }}>{cueWords.map((w, i) => <span key={i} className={i === activeWord ? "on" : ""}>{w} </span>)}</div>}
       {veil.opacity > 0 && <span className="live-veil" style={{ opacity: veil.opacity, background: veil.color }} />}
     </div>

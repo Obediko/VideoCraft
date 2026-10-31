@@ -26,10 +26,16 @@ curl -fsS "$SITE/$asset_js" | grep -q "videocraft.emancipationdevelopment.org/ap
 docker exec -w /app videocraft-api node --input-type=module -e '
 import { SignJWT } from "jose";
 const k = new TextEncoder().encode(process.env.AUTH_JWT_SECRET);
-const t = await new SignJWT({}).setProtectedHeader({ alg: "HS256" }).setSubject("staging-smoke-test")
+const t = await new SignJWT({}).setProtectedHeader({ alg: "HS256" }).setSubject("00000000-0000-4000-8000-000000000001")
   .setIssuer(process.env.AUTH_ISSUER).setAudience(process.env.AUTH_AUDIENCE).setIssuedAt().setExpirationTime("15m").sign(k);
 process.stdout.write("Authorization: Bearer " + t);' > "$TMP/auth"
 H=(-H "$(cat "$TMP/auth")")
+
+# The UUID smoke identity can read an empty private library without creating a user account.
+c="$(code "${H[@]}" "$API/v1/me/effects")"
+if [ "$c" = 200 ] && python3 -c 'import json,sys; d=json.load(sys.stdin); assert len(d["presets"]) >= 8 and isinstance(d["saved"], list)' < "$TMP/body"; then
+  ok "private effects library and database migration are available"
+else bad "effects library -> $c"; fi
 
 c="$(code -X POST "${H[@]}" -H 'content-type: application/json' -d "{\"name\":\"staging smoke test $(date -u +%Y%m%d-%H%M%S)\"}" "$API/v1/projects")"
 if [ "$c" = 201 ]; then PID="$(js 'd["project"]["id"]' < "$TMP/body")"; ok "project created $PID"; else bad "create project -> $c $(cat "$TMP/body")"; exit 1; fi

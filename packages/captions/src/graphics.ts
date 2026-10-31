@@ -16,6 +16,26 @@ export function assColour(hex: string | undefined): string {
   return (value.slice(5, 7) + value.slice(3, 5) + value.slice(1, 3)).toUpperCase();
 }
 
+export function graphicPlacement(item: GraphicItem, frame: { width: number; height: number }, avoidBand?: { topY: number; bottomY: number }): { y: number; fontSize: number; pad: number } {
+  const { width: W, height: H } = frame;
+  const vertical = H > W, base = Math.min(W, H);
+  const titleSize = Math.round(base * (vertical ? 0.085 : 0.075));
+  const calloutSize = Math.round(titleSize * 0.7), pad = Math.round(base * 0.025);
+  const half = Math.round((item.kind === "title" ? titleSize * (item.subtitle ? 1.9 : 1.2) : calloutSize * 1.2) / 2) + pad;
+  const avoid = item.avoid ?? avoidBand;
+  const slots = { top: Math.round(H * 0.18), center: Math.round(H * 0.42), bottom: Math.round(H * (vertical ? 0.64 : 0.74)) };
+  const wanted = item.position ?? "center";
+  const inBand = (y: number) => avoid !== undefined && y + half > avoid.topY && y - half < avoid.bottomY;
+  const onFace = (y: number) => item.face !== undefined && y + half > item.face.y0 && y - half < item.face.y1;
+  // The chosen position first; if it covers the face or the captions, the nearest other slot that covers neither.
+  const order = wanted === "top" ? ["top", "center", "bottom"] : wanted === "bottom" ? ["bottom", "center", "top"] : ["center", "top", "bottom"];
+  const clear = order.map((key) => slots[key as keyof typeof slots]).find((y) => !inBand(y) && !onFace(y));
+  let y = clear ?? slots[wanted];
+  // Keep text graphics out of the caption band: move above it when they would overlap.
+  if (clear === undefined && avoid && inBand(y)) y = Math.max(half, avoid.topY - half);
+  return { y, fontSize: item.kind === "title" ? titleSize : calloutSize, pad: item.kind === "title" ? pad : Math.round(pad * 0.8) };
+}
+
 /**
  * Animated motion graphics as an ASS document (rendered by libass in the same FFmpeg pass):
  * title cards and callouts pop in on an accent box, lower thirds slide in from the left with an accent bar,
@@ -92,18 +112,7 @@ export function renderGraphicsAss(items: GraphicItem[], progress: ProgressBar | 
       if (item.subtitle?.trim()) lines.push(event(2, item.startUs, item.endUs, "Role", "{\\an7\\move(" + (-W / 2) + "," + (top + Math.round(pad / 2) + nameSize + Math.round(pad * 0.4)) + "," + textX + "," + (top + Math.round(pad / 2) + nameSize + Math.round(pad * 0.4)) + ",120,390)\\fad(0," + fadeOut + ")}" + escapeAss(item.subtitle.trim())));
       continue;
     }
-    const half = Math.round((item.kind === "title" ? titleSize * (item.subtitle ? 1.9 : 1.2) : calloutSize * 1.2) / 2) + pad;
-    const avoid = item.avoid ?? options.avoid;
-    const slots = { top: Math.round(H * 0.18), center: Math.round(H * 0.42), bottom: Math.round(H * (vertical ? 0.64 : 0.74)) };
-    const wanted = item.position ?? "center";
-    const inBand = (y: number) => avoid !== undefined && y + half > avoid.topY && y - half < avoid.bottomY;
-    const onFace = (y: number) => item.face !== undefined && y + half > item.face.y0 && y - half < item.face.y1;
-    // The chosen position first; if it covers the face or the captions, the nearest other slot that covers neither.
-    const order = wanted === "top" ? ["top", "center", "bottom"] : wanted === "bottom" ? ["bottom", "center", "top"] : ["center", "top", "bottom"];
-    const clear = order.map((key) => slots[key as keyof typeof slots]).find((y) => !inBand(y) && !onFace(y));
-    let y = clear ?? slots[wanted];
-    // Keep text graphics out of the caption band: move above it when they would overlap.
-    if (clear === undefined && avoid && inBand(y)) y = Math.max(half, avoid.topY - half);
+    const { y } = graphicPlacement(item, frame, options.avoid);
     const style = item.kind === "title" ? "Title" : "Callout";
     // Pop: scale up from 70% with a quick fade in, then fade out at the end.
     const pop = "\\fscx70\\fscy70\\t(0,220,\\fscx100\\fscy100)\\fad(160," + fadeOut + ")";

@@ -16,9 +16,9 @@ Director suggestions remain reviewable. There is no claim that arbitrary creativ
 
 ## Rendering and provenance
 
-Existing FFmpeg paths render callouts, titles, quiet generated sounds, punch/slow push and dissolves. Decorative equation graphics use a deterministic layout shared by the browser and ASS renderer, including staggered entrances, drift, rotation and fades. They are decorative symbols, not factual annotations. Preview remains an approximation of the exported composition and fonts.
+Existing FFmpeg paths render callouts, titles, quiet generated sounds, punch/slow push and dissolves. Decorative equation graphics use a deterministic layout shared by the browser and ASS renderer, including staggered entrances, drift, rotation and fades. They are decorative symbols, not factual annotations. Titles and callouts share placement, face/caption clearance and scale calculations across preview and ASS, with matching accent boxes, white lettering and seek-driven entrance/fade timing. Preview remains an approximation of font metrics and the exported composition.
 
-The library is stored in PostgreSQL `effect_library`, keyed by authenticated owner and a hash of a validated, normalised recipe. All routes authenticate and derive ownership from the session. Migration 008 is additive. It requires the normal deployment migration step. No new paid provider is needed for built-in treatments. Stock import and generated imagery remain separate existing flows with their own provenance.
+The library is stored in PostgreSQL `effect_library`, keyed by authenticated owner and a hash of a validated, normalised recipe. All routes authenticate and derive ownership from the session. Migration 008 is additive. The pinned release script runs migrations before replacing app containers and aborts with the old apps still running if migration fails. No new paid provider is needed for built-in treatments. Stock import and generated imagery remain separate existing flows with their own provenance.
 
 ## Verification and remaining scope
 

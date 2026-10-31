@@ -246,13 +246,10 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .live-broll.pip { inset: 4% 4% auto auto; width: 42%; height: auto; aspect-ratio: 16 / 10; border-radius: 6px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5); }
 .live-broll.placeholder { display: flex; align-items: center; justify-content: center; background: #5a6a6c; color: #fff; font-size: 12px; }
 .live-progress { position: absolute; left: 0; top: 0; height: 1.2cqw; min-height: 3px; }
-.live-title { position: absolute; left: 7%; right: 7%; display: flex; flex-direction: column; align-items: center; gap: 0.5cqw; text-align: center; color: #fff; text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6); }
-.live-title.title { padding: 2.5cqw 3cqw; background: rgba(15, 13, 11, 0.55); border-left: 1.2cqw solid; border-radius: 1cqw; }
-.live-title.callout { left: auto; right: 6%; max-width: 70%; padding: 1.6cqw 3cqw; border-radius: 1.2cqw; color: #18230f; text-shadow: none; }
-.live-title strong { font-size: 7cqw; line-height: 1.15; font-weight: 700; }
-.live-title.callout strong { font-size: 5.5cqw; }
-.live-title span { font-size: 4cqw; opacity: 0.9; }
-.live-title.top { top: 8%; } .live-title.center { top: 40%; } .live-title.bottom { bottom: 24%; }
+.live-title { position: absolute; left: 50%; display: flex; flex-direction: column; align-items: center; width: max-content; max-width: 86%; text-align: center; color: #fff; font-family: "DejaVu Sans", sans-serif; text-shadow: none; }
+.live-title.title, .live-title.callout { border: 0; border-radius: 0; }
+.live-title strong { font-size: inherit; line-height: 1.15; font-weight: 700; }
+.live-title span { font-size: 55%; font-weight: 400; }
 .live-lower { position: absolute; left: 5%; bottom: 22%; display: flex; gap: 2cqw; align-items: stretch; max-width: 80%; }
 .live-lower .bar { width: 1.4cqw; border-radius: 0.6cqw; }
 .live-lower .text { display: flex; flex-direction: column; padding: 1.5cqw 3cqw; background: rgba(15, 13, 11, 0.75); border-radius: 1cqw; color: #fff; }

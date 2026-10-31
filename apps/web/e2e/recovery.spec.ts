@@ -231,6 +231,8 @@ test('creative library supports composing, applying, saving, reload reuse and pr
   expect(state.editOps.some(o=>o.type==='add-graphic'&&o.text==='It clicks')).toBe(true);
   expect(state.editOps.some(o=>o.type==='add-sfx'&&o.kind==='pop')).toBe(true);
   await expect(page.locator('.live-title.callout')).toContainText('It clicks');
+  await expect(page.locator('.live-title.callout')).toHaveCSS('color','rgb(255, 255, 255)');
+  await expect(page.locator('.live-title.callout')).toHaveCSS('background-color','rgb(99, 122, 82)');
   await page.reload();await page.getByRole('button',{name:'Visuals',exact:true}).click();
   await expect(library.getByRole('button',{name:'Realization pop · It clicks',exact:true})).toBeVisible();
   await library.getByRole('button',{name:'Realization pop · It clicks',exact:true}).click();
