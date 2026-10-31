@@ -123,9 +123,10 @@ export class FfmpegCommandPlanner {
     for (const [index, clip] of clips.entries()) {
       const length = (clip.sourceEndUs - clip.sourceStartUs) / 1_000_000;
       if (!(length > 0)) throw new Error("Clip has an invalid source range");
-      if (!audioPresent.has(clip.assetId)) audioPresent.set(clip.assetId, this.assets.hasAudio ? await this.assets.hasAudio(clip.assetId) : false);
+      // Stills have no media duration or audio stream. Detect them before the
+      // worker's duration-requiring video/audio probe runs.
       const still = this.assets.isStill ? await this.assets.isStill(clip.assetId) : false;
-      if (still) audioPresent.set(clip.assetId, false);
+      if (!audioPresent.has(clip.assetId)) audioPresent.set(clip.assetId, !still && this.assets.hasAudio ? await this.assets.hasAudio(clip.assetId) : false);
       addInput(await this.assets.resolve(clip.assetId), still
         ? ["-loop", "1", "-framerate", String(fps), "-t", (length + runOn[index]!).toFixed(6)]
         : ["-ss", seconds(clip.sourceStartUs), "-t", (length + runOn[index]!).toFixed(6), ...(splitEmbeddedAudio || clip.transform?.muteSource === true ? ["-an"] : [])]);

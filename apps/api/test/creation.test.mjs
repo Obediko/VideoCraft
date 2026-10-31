@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { InMemoryAssetRepository, InMemoryProjectRepository, InMemoryRevisionRepository, ProjectService } from "@videocraft/application";
+import { probeMedia, isStillImage } from "@videocraft/analysis";
 import { LocalObjectStorage } from "@videocraft/storage";
 import { applyTimelineOperations, parseTimelineOperations } from "@videocraft/domain";
 import { FfmpegCommandPlanner, FfmpegProcess } from "@videocraft/rendering";
@@ -119,7 +120,8 @@ test("mixed video and photo storyboard renders the approved visual, music and co
     const response = await s.server.inject({ method: "POST", url: "/v1/projects/p/creation/apply", payload: { revision: 0, scenes, narrationAssetId: "voice", music: true, sceneText: true } });
     assert.equal(response.statusCode, 201, response.body);
     const revision = response.json().revision;
-    const resolver = { resolve: async id => paths[id] ?? s.storage.resolve((await s.assets.listForProject("p")).find(a => a.id === id).storageKey), isStill: async id => id === "photo", hasAudio: async id => id !== "photo" };
+    const resolve = async id => paths[id] ?? s.storage.resolve((await s.assets.listForProject("p")).find(a => a.id === id).storageKey);
+    const resolver = { resolve, isStill: async id => isStillImage(await resolve(id)), hasAudio: async id => (await probeMedia(await resolve(id))).hasAudio };
     const output = join(s.directory, "story.mp4");
     const plan = await new FfmpegCommandPlanner(resolver).plan(revision, { format: "mp4", videoCodec: "libx264", audioCodec: "aac", frameRate: 30, width: 180, height: 320, fit: "contain", normalizeLoudness: false }, output);
     await new FfmpegProcess().run(plan);
