@@ -119,6 +119,17 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
   // Keep the picture on the right frame when the edit changes.
   useEffect(() => { seek(tRef.current); }, [clips, urls]);
 
+  useEffect(() => {
+    const hide = () => {
+      if (!document.hidden) return;
+      video.current?.pause(); music.current?.pause();
+      for (const el of Object.values(voiceEls.current)) el?.pause();
+      setPlaying(false);
+    };
+    document.addEventListener("visibilitychange", hide);
+    return () => document.removeEventListener("visibilitychange", hide);
+  }, []);
+
   // Sound effects play when the playhead reaches them, at their own volume (made in the browser, like the export's).
   useEffect(() => {
     const previous = lastSfxT.current; lastSfxT.current = tUs;

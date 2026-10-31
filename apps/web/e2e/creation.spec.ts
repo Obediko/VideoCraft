@@ -81,9 +81,10 @@ test("choose the purpose before creating a project; mixed uploads, draft recover
   await page.getByRole("button", { name: "Assemble this story" }).click();
   await expect(page.getByLabel("Live preview of the edit")).toBeVisible();
   expect(state.applied.scenes.map((s: any) => s.assetId)).toEqual(["a2", "a1"]);
-  await page.getByRole("button", { name: "Play", exact: true }).click();
+  await expect.poll(() => page.locator("video.live-video").evaluate((v: HTMLVideoElement) => v.readyState)).toBeGreaterThanOrEqual(2);
+  await page.getByRole("button", { name: "Play the edit", exact: true }).click();
   await expect(page.getByAltText("Storyboard photo")).toBeVisible();
-  await expect.poll(() => page.getByRole("button", { name: "Play", exact: true }).count()).toBe(1);
+  await expect.poll(() => page.getByRole("button", { name: "Play the edit", exact: true }).count()).toBe(1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
   await page.reload();
   await expect(page.getByRole("button", { name: "Open storyboard", exact: true })).toBeVisible();

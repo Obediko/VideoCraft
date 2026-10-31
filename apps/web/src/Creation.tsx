@@ -19,7 +19,13 @@ const message = (e: unknown) => e instanceof Error ? e.message : "The action fai
 const keyOf = (id: string) => "videocraft.story.v1." + id;
 function readDraft(id: string): Draft {
   const empty: Draft = { brief: "", seconds: 30, platform: "tiktok", selected: [], plan: null, narrationId: "", music: true, sceneText: true, captions: true };
-  try { const saved = JSON.parse(localStorage.getItem(keyOf(id)) ?? "null"); return saved && typeof saved.brief === "string" && Array.isArray(saved.selected) && (!saved.plan || Array.isArray(saved.plan.scenes)) ? { ...empty, ...saved } : empty; } catch { return empty; }
+  try {
+    const saved = JSON.parse(localStorage.getItem(keyOf(id)) ?? "null");
+    if (!saved || typeof saved.brief !== "string" || !Array.isArray(saved.selected)) return empty;
+    const plan = saved.plan;
+    if (plan && (typeof plan.summary !== "string" || typeof plan.script !== "string" || !["ai", "rules"].includes(plan.source) || !Array.isArray(plan.scenes) || plan.scenes.length > 40 || !plan.scenes.every((s: Scene) => s && typeof s.assetId === "string" && typeof s.text === "string" && typeof s.visual === "string" && Number.isFinite(s.startS) && Number.isFinite(s.durationS)))) return empty;
+    return { brief: saved.brief.slice(0, 2000), seconds: Number.isFinite(saved.seconds) ? saved.seconds : 30, platform: ["tiktok", "youtube", "square"].includes(saved.platform) ? saved.platform : "tiktok", selected: saved.selected.filter((s: unknown) => typeof s === "string").slice(0, 40), plan: plan ?? null, narrationId: typeof saved.narrationId === "string" ? saved.narrationId : "", music: saved.music !== false, sceneText: saved.sceneText !== false, captions: saved.captions !== false };
+  } catch { return empty; }
 }
 
 /** The storyboard is a draft until the creator assembles it. Uploads stay available after a failed step. */
@@ -34,8 +40,9 @@ export function Creation({ projectId, revision, mode, assets, apiBase, token, re
   const [urlRetry, setUrlRetry] = useState(0);
   const [recording, setRecording] = useState(false);
   const [voiceWorking, setVoiceWorking] = useState(false);
+  const [stockWorking, setStockWorking] = useState(false);
   const [previewError, setPreviewError] = useState(false);
-  const busy = Boolean(working || recording || voiceWorking);
+  const busy = Boolean(working || recording || voiceWorking || stockWorking);
   const media = assets.filter(a => a.kind === "image" || a.kind === "video");
   const narration = assets.find(a => a.id === draft.narrationId);
   const patch = (change: Partial<Draft>) => setDraft(d => ({ ...d, ...change }));
@@ -131,7 +138,7 @@ export function Creation({ projectId, revision, mode, assets, apiBase, token, re
         {draft.plan.note && <p role="status">{draft.plan.note}</p>}
         <ol className="creation-scenes">{draft.plan.scenes.map((s, i) => <li key={i} className="stack">
           <strong>Scene {i + 1}: {s.visual || "Choose a visual"}</strong>
-          <label>Visual<select value={s.assetId} disabled={busy} onChange={e => { const a = media.find(a => a.id === e.target.value); scenePatch(i, { assetId: e.target.value, startS: 0, durationS: Math.min(s.durationS, a?.kind === "video" ? (a.durationUs ?? 5e6) / 1e6 : 60) }); }}><option value="">Choose a visual</option>{media.map(a => <option key={a.id} value={a.id}>{nameOf(a)}</option>)}</select></label>
+          <label>Visual<select aria-label="Visual" value={s.assetId} disabled={busy} onChange={e => { const a = media.find(a => a.id === e.target.value); scenePatch(i, { assetId: e.target.value, startS: 0, durationS: Math.min(s.durationS, a?.kind === "video" ? (a.durationUs ?? 5e6) / 1e6 : 60) }); }}><option value="">Choose a visual</option>{media.map(a => <option key={a.id} value={a.id}>{nameOf(a)}</option>)}</select></label>
           <div className="row-2"><label>Start in source (seconds)<input type="number" min={0} step={0.1} disabled={busy || media.find(a => a.id === s.assetId)?.kind === "image"} value={s.startS} onChange={e => scenePatch(i, { startS: Number(e.target.value) })} /></label><label>On screen (seconds)<input type="number" min={0.5} max={60} step={0.1} value={s.durationS} disabled={busy} onChange={e => scenePatch(i, { durationS: Number(e.target.value) })} /></label></div>
           <label>On-screen text<input value={s.text} maxLength={120} disabled={busy} onChange={e => scenePatch(i, { text: e.target.value })} /></label>
           <div className="actions"><button className="btn" disabled={busy} onClick={() => { setSceneIndex(i); setImagePrompt(s.visual); }}>Preview / find visuals for scene {i + 1}</button>
@@ -144,12 +151,12 @@ export function Creation({ projectId, revision, mode, assets, apiBase, token, re
         {previewAsset && urls[previewAsset.id] && (previewAsset.kind === "image" ? <img className="creation-preview" src={urls[previewAsset.id]} alt={scene.visual || nameOf(previewAsset)} onError={() => setPreviewError(true)} /> : <video className="creation-preview" controls playsInline src={urls[previewAsset.id]} onError={() => setPreviewError(true)} />)}
         {previewError && <button className="btn" onClick={() => setUrlRetry(n => n + 1)}>Reload visual preview</button>}
         <p className="muted small">Search idea: {scene.visual}. Adding stock or generating an image assigns it to this scene.</p>
-        <StockSearch projectId={projectId} request={request} disabled={busy} orientation={draft.platform === "youtube" ? "landscape" : draft.platform === "square" ? "square" : "portrait"} onUse={a => selectVisual(a as Asset)} />
+        <StockSearch onWorking={setStockWorking} projectId={projectId} request={request} disabled={busy} orientation={draft.platform === "youtube" ? "landscape" : draft.platform === "square" ? "square" : "portrait"} onUse={a => selectVisual(a as Asset)} />
         {images ? <><label>Describe an image<textarea rows={2} value={imagePrompt} maxLength={2000} disabled={busy} onChange={e => setImagePrompt(e.target.value)} /></label><button className="btn" disabled={busy || imagePrompt.trim().length < 3} onClick={() => void run("Generating an image…", async () => { const r = await request("/v1/projects/" + projectId + "/creation/image", { method: "POST", body: JSON.stringify({ prompt: imagePrompt }) }); selectVisual(r.asset); })}>Generate image</button></> : <p className="muted small">Image generation is unavailable. Choose an upload or stock visual.</p>}
       </section>}
       <section className="card stack" aria-label="Story narration"><h2>4. Choose narration</h2>
         <p className="muted small">Keep the original sound, or add one narration track for the whole story. With narration, source speech is muted and visuals extend to include the complete recording.</p>
-        <label>Narration<select value={draft.narrationId} disabled={busy} onChange={e => patch({ narrationId: e.target.value })}><option value="">Keep original sound / no narration</option>{assets.filter(a => a.kind === "audio" && !a.metadata.mood).map(a => <option key={a.id} value={a.id}>{nameOf(a)}</option>)}</select></label>
+        <label>Narration<select aria-label="Narration" value={draft.narrationId} disabled={busy} onChange={e => patch({ narrationId: e.target.value })}><option value="">Keep original sound / no narration</option>{assets.filter(a => a.kind === "audio" && !a.metadata.mood).map(a => <option key={a.id} value={a.id}>{nameOf(a)}</option>)}</select></label>
         <label className="btn file-btn">Upload human narration<input type="file" accept="audio/*" disabled={busy} onChange={e => void upload(e.currentTarget, true)} /></label>
         {narration && urls[narration.id] && <audio controls src={urls[narration.id]} />}
         <VoiceOver projectId={projectId} apiBase={apiBase} token={token} request={request} disabled={Boolean(working)} initialScript={draft.plan.script} placement="story" onWorking={setVoiceWorking} onScriptChange={script => patch({ plan: { ...draft.plan!, script } })} onRecording={setRecording} onAdd={a => { onAsset(a); patch({ narrationId: a.id }); }} />
@@ -157,6 +164,7 @@ export function Creation({ projectId, revision, mode, assets, apiBase, token, re
         <label className="checkbox"><input type="checkbox" checked={draft.music} disabled={busy} onChange={e => patch({ music: e.target.checked })} />Add background music</label>
         <label className="checkbox"><input type="checkbox" checked={draft.sceneText} disabled={busy} onChange={e => patch({ sceneText: e.target.checked })} />Include approved scene text</label>
       </section>
+      {revision > 0 && <p className="note">Assembling replaces the current edit with this storyboard. Previous revisions remain available through Undo.</p>}
       <div className="actions"><button className="primary" disabled={busy || !draft.plan.scenes.length || draft.plan.scenes.some(s => !s.assetId || !media.some(a => a.id === s.assetId))} onClick={() => void assemble()}>Assemble this story</button><span className="muted small">The editor opens for playback, captions, transitions, and export.</span></div>
     </>}
     {(working || notice) && <p role={notice ? "alert" : "status"}>{working || notice}</p>}

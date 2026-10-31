@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { InMemoryAssetRepository, InMemoryProjectRepository, InMemoryRevisionRepository, ProjectService } from "@videocraft/application";
 import { LocalObjectStorage } from "@videocraft/storage";
-import { applyTimelineOperations } from "@videocraft/domain";
+import { applyTimelineOperations, parseTimelineOperations } from "@videocraft/domain";
 import { FfmpegCommandPlanner, FfmpegProcess } from "@videocraft/rendering";
 import { registerCreationRoutes, storyTimeline, storyScenes } from "../dist/creation.js";
 
@@ -16,7 +16,7 @@ const video = { ...photo, id: "video", kind: "video", durationUs: 1_200_000, met
 const voice = { ...photo, id: "voice", kind: "audio", durationUs: 3_600_000, metadata: { filename: "Human narration.wav" } };
 const scenes = [{ assetId: "video", startS: 0, durationS: 1, text: "First", visual: "Blue clip" }, { assetId: "photo", startS: 0, durationS: 1, text: "Second", visual: "Red photo" }];
 
-async function setup(plan) {
+async function setup(plan, segments = []) {
   const directory = mkdtempSync(join(tmpdir(), "vc-creation-"));
   const projects = new InMemoryProjectRepository(), assets = new InMemoryAssetRepository(), revisions = new InMemoryRevisionRepository();
   await projects.save({ id: "p", ownerId: "u", name: "Story", revision: 0, createdAt: "", updatedAt: "" });
@@ -24,7 +24,7 @@ async function setup(plan) {
   const service = new ProjectService(projects, assets, revisions, { next: () => "id" }, { now: () => "2026-10-31T10:00:00Z" });
   let access = true, signedIn = true;
   const server = Fastify(); const storage = new LocalObjectStorage(directory);
-  registerCreationRoutes(server, { projects, assets, revisions, storage, transcripts: { listForAsset: async () => [] }, authenticate: async () => signedIn ? { userId: "u" } : null, authorize: { canAccess: async () => access }, saveRevision: input => service.saveRevision(input), clock: () => "2026-10-31T10:00:00Z", ...(plan ? { plan } : {}) });
+  registerCreationRoutes(server, { projects, assets, revisions, storage, transcripts: { listForAsset: async id => id === "voice" ? segments : [] }, authenticate: async () => signedIn ? { userId: "u" } : null, authorize: { canAccess: async () => access }, saveRevision: input => service.saveRevision(input), clock: () => "2026-10-31T10:00:00Z", ...(plan ? { plan } : {}) });
   return { server, assets, storage, directory, access: value => { access = value; }, signIn: value => { signedIn = value; }, close: async () => { await server.close(); rmSync(directory, { force: true, recursive: true }); } };
 }
 
@@ -37,6 +37,39 @@ test("storyboard plans without speech or uploads, marks unresolved visuals, and 
     const unresolved = await s.server.inject({ method: "POST", url: "/v1/projects/p/creation/apply", payload: { revision: 0, scenes: plan.scenes } });
     assert.equal(unresolved.statusCode, 400);
   } finally { await s.close(); }
+});
+
+test("AI can reorder selected assets; invalid provider asset IDs fall back without importing foreign media", async () => {
+  let invalid = false;
+  const s = await setup(async input => {
+    assert.deepEqual(input.assets.map(a => a.id), ["video", "photo"]);
+    return { summary: "Open on the photo", script: "Our story begins here.", scenes: invalid ? [{ ...scenes[0], assetId: "foreign" }] : [...scenes].reverse() };
+  });
+  try {
+    const payload = { brief: "Make a narrated story", seconds: 10, assetIds: ["video", "photo"] };
+    const result = await s.server.inject({ method: "POST", url: "/v1/projects/p/creation/plan", payload });
+    assert.equal(result.statusCode, 200); assert.equal(result.json().plan.source, "ai");
+    assert.deepEqual(result.json().plan.scenes.map(s => s.assetId), ["photo", "video"]);
+    invalid = true;
+    const fallback = await s.server.inject({ method: "POST", url: "/v1/projects/p/creation/plan", payload });
+    assert.equal(fallback.json().plan.source, "rules"); assert.deepEqual(fallback.json().plan.scenes.map(s => s.assetId), ["video", "photo"]);
+  } finally { await s.close(); }
+});
+
+test("speech captions use actual narration timing, and assembly refuses captions when transcription is missing", async () => {
+  const segment = { words: [{ text: "Jesus", startUs: 200_000, endUs: 600_000 }, { text: "truly", startUs: 800_000, endUs: 1_200_000 }, { text: "saves", startUs: 2_500_000, endUs: 3_300_000 }] };
+  const s = await setup(undefined, [segment]);
+  try {
+    const response = await s.server.inject({ method: "POST", url: "/v1/projects/p/creation/apply", payload: { revision: 0, scenes, narrationAssetId: "voice", captions: true } });
+    assert.equal(response.statusCode, 201, response.body);
+    const cue = response.json().revision.timeline.tracks.find(t => t.kind === "caption").clips[0];
+    assert.equal(cue.timelineStartUs, 200_000); assert.equal(cue.timelineEndUs, 3_300_000); assert.equal(cue.transform.text, "Jesus truly saves");
+  } finally { await s.close(); }
+  const missing = await setup();
+  try {
+    const result = await missing.server.inject({ method: "POST", url: "/v1/projects/p/creation/apply", payload: { revision: 0, scenes, narrationAssetId: "voice", captions: true } });
+    assert.equal(result.statusCode, 400); assert.match(result.json().error.message, /Transcribe/);
+  } finally { await missing.close(); }
 });
 
 test("foreign assets, audio used as pictures, stale revisions and invalid source ranges cannot enter an assembled story", async () => {
@@ -66,6 +99,13 @@ test("repeated photos keep separate scene text and narration survives a later ti
   const graphics = changed.tracks.find(t => t.kind === "overlay").clips;
   assert.deepEqual(graphics.map(c => c.timelineStartUs), [0, 1e6]);
   assert.equal(changed.tracks.find(t => t.kind === "audio").clips[0].timelineEndUs, voice.durationUs);
+  const added = applyTimelineOperations(changed, parseTimelineOperations([{ type: "add-graphic", kind: "title", text: "Only the second photo", anchorAssetId: "photo", anchorClipId: changed.tracks[0].clips[1].id, anchorSourceUs: 0, durationUs: 500_000 }]));
+  assert.equal(added.tracks.find(t => t.kind === "overlay").clips.find(c => c.transform.text === "Only the second photo").timelineStartUs, 1e6);
+  const split = applyTimelineOperations(changed, [{ type: "split-clip", clipId: changed.tracks[0].clips[0].id, atUs: 500_000 }]);
+  assert.equal(split.tracks.find(t => t.kind === "overlay").clips.length, 2, "clip-bound titles survive a split");
+  const order = [...changed.tracks[0].clips].reverse().map(c => c.id);
+  const reordered = applyTimelineOperations(changed, [{ type: "reorder-clips", clipIds: order }]);
+  assert.equal(reordered.tracks.find(t => t.kind === "audio").clips[0].timelineStartUs, 0, "whole-story narration stays at zero after a reorder");
 });
 
 test("mixed video and photo storyboard renders the approved visual, music and complete human narration to a decodable MP4", async () => {
@@ -91,5 +131,8 @@ test("mixed video and photo storyboard renders the approved visual, music and co
     const audio = execFileSync("ffmpeg", ["-v", "error", "-ss", "3.1", "-i", output, "-t", "0.25", "-ac", "1", "-ar", "8000", "-f", "f32le", "-"]);
     let power = 0; for (let i = 0; i < audio.length; i += 4) power += audio.readFloatLE(i) ** 2;
     assert.ok(Math.sqrt(power / (audio.length / 4)) > 0.02, "narration remains audible at the end");
+    let re = 0, im = 0;
+    for (let i = 0; i < audio.length / 4; i++) { const a = audio.readFloatLE(i * 4), phase = 2 * Math.PI * 880 * i / 8000; re += a * Math.cos(phase); im += a * Math.sin(phase); }
+    assert.ok(2 * Math.hypot(re, im) / (audio.length / 4) > 0.05, "the 880 Hz narration, rather than music alone, is present at the end");
   } finally { await s.close(); }
 });

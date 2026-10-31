@@ -120,7 +120,7 @@ export function App() {
   const [captionDrafts, setCaptionDrafts] = useState<Record<string, string>>({});
   const [previewMode, setPreviewMode] = useState<"edit" | "source" | "render">("edit");
   const liveRef = useRef<LivePreviewHandle | null>(null);
-  const recordAnchor = useRef<{ anchorAssetId: string; anchorSourceUs: number; where: string } | undefined>(undefined);
+  const recordAnchor = useRef<{ anchorAssetId: string; anchorClipId?: string | undefined; anchorSourceUs: number; where: string } | undefined>(undefined);
   const liveUsRef = useRef(0);
   const lastLiveReport = useRef(0);
   const [liveUs, setLiveUs] = useState(0);
@@ -317,37 +317,37 @@ export function App() {
     if (edge === "start") trimSelectedClip(at - selectedClip.sourceStartUs, 0); else trimSelectedClip(0, at - selectedClip.sourceEndUs);
   }
   /** Anchor point: the selected words, else the playhead, else the selected clip's start. */
-  function anchorPoint(): { anchorAssetId: string; anchorSourceUs: number; where: string } | undefined {
+  function anchorPoint(): { anchorAssetId: string; anchorClipId?: string | undefined; anchorSourceUs: number; where: string } | undefined {
     if (selection && segmentsFor && words[selection.from]) {
       const at = words[Math.min(selection.from, selection.to)]!.startUs;
       if (sourceToTimeline(videoClips, segmentsFor, at) !== undefined) return { anchorAssetId: segmentsFor, anchorSourceUs: at, where: "at the selected words" };
     }
     if (previewMode === "edit" && !selectedClip) {
       const at = timelineToSource(videoClips, liveUsRef.current);
-      if (at) return { anchorAssetId: at.assetId, anchorSourceUs: Math.round(at.sourceUs), where: "at the playhead" };
+      if (at) return { anchorAssetId: at.assetId, anchorClipId: videoClips.find(c => liveUsRef.current >= c.timelineStartUs && liveUsRef.current < c.timelineEndUs)?.id, anchorSourceUs: Math.round(at.sourceUs), where: "at the playhead" };
     }
     const anchorClip = selectedClip ?? videoClips[0];
     if (!anchorClip) return undefined;
     const player = playerRef.current;
     const playheadUs = player && previewMode === "source" && sourceUrl ? Math.round(player.currentTime * 1_000_000) : anchorClip.sourceStartUs;
     const inside = videoClips.some((clip) => clip.assetId === anchorClip.assetId && playheadUs >= clip.sourceStartUs && playheadUs < clip.sourceEndUs);
-    return { anchorAssetId: anchorClip.assetId, anchorSourceUs: inside ? playheadUs : anchorClip.sourceStartUs, where: inside ? "at the playhead" : "at the start of the selected clip" };
+    return { anchorAssetId: anchorClip.assetId, anchorClipId: anchorClip.id, anchorSourceUs: inside ? playheadUs : anchorClip.sourceStartUs, where: inside ? "at the playhead" : "at the start of the selected clip" };
   }
   function addBroll(assetId = brollAssetId) {
     const anchor = anchorPoint();
     if (!anchor) { setStatus("Add a video clip first"); return; }
-    void applyEdit([{ type: "add-broll", assetId, anchorAssetId: anchor.anchorAssetId, anchorSourceUs: anchor.anchorSourceUs, durationUs: Math.round(brollSeconds * 1_000_000), mode: brollMode }], "Cutaway added " + anchor.where);
+    void applyEdit([{ type: "add-broll", assetId, anchorAssetId: anchor.anchorAssetId, ...(anchor.anchorClipId ? { anchorClipId: anchor.anchorClipId } : {}), anchorSourceUs: anchor.anchorSourceUs, durationUs: Math.round(brollSeconds * 1_000_000), mode: brollMode }], "Cutaway added " + anchor.where);
   }
   function addSoundEffect() {
     const anchor = anchorPoint();
     if (!anchor) { setStatus("Add a video clip first"); return; }
-    void applyEdit([{ type: "add-sfx", kind: sfxKind, anchorAssetId: anchor.anchorAssetId, anchorSourceUs: anchor.anchorSourceUs }], (SFX_LABEL[sfxKind] ?? "Sound") + " added " + anchor.where);
+    void applyEdit([{ type: "add-sfx", kind: sfxKind, anchorAssetId: anchor.anchorAssetId, ...(anchor.anchorClipId ? { anchorClipId: anchor.anchorClipId } : {}), anchorSourceUs: anchor.anchorSourceUs }], (SFX_LABEL[sfxKind] ?? "Sound") + " added " + anchor.where);
   }
   function addGraphic(text = gfxText, kind = gfxKind) {
     const anchor = anchorPoint();
     if (!anchor) { setStatus("Add a video clip first"); return; }
     if (!text.trim()) { setStatus("Enter the text first"); return; }
-    void applyEdit([{ type: "add-graphic", kind, text: text.trim(), ...(gfxSubtitle.trim() && kind !== "callout" ? { subtitle: gfxSubtitle.trim() } : {}), anchorAssetId: anchor.anchorAssetId, anchorSourceUs: anchor.anchorSourceUs, durationUs: Math.round(gfxSeconds * 1_000_000), position: kind === "lower-third" ? "bottom" : gfxPosition, color: gfxColor }], (kind === "title" ? "Title" : kind === "callout" ? "Callout" : "Name caption") + " added " + anchor.where).then((ok) => { if (ok) { setGfxText(""); setGfxSubtitle(""); } });
+    void applyEdit([{ type: "add-graphic", kind, text: text.trim(), ...(gfxSubtitle.trim() && kind !== "callout" ? { subtitle: gfxSubtitle.trim() } : {}), anchorAssetId: anchor.anchorAssetId, ...(anchor.anchorClipId ? { anchorClipId: anchor.anchorClipId } : {}), anchorSourceUs: anchor.anchorSourceUs, durationUs: Math.round(gfxSeconds * 1_000_000), position: kind === "lower-third" ? "bottom" : gfxPosition, color: gfxColor }], (kind === "title" ? "Title" : kind === "callout" ? "Callout" : "Name caption") + " added " + anchor.where).then((ok) => { if (ok) { setGfxText(""); setGfxSubtitle(""); } });
   }
   /** Composes an instrumental for the saved cut (its length, lifting at its cuts) and lays it under the video. */
   async function generateMusicBed() {
@@ -1014,7 +1014,7 @@ export function App() {
       if (saved.time > 0 && saved.time < player.duration) player.currentTime = saved.time;
       if (saved.playing) void player.play().catch(() => setStatus("Tap Play to resume the refreshed export."));
       exportPosition.current = { time: 0, playing: false };
-    }} src={renderUrl} onError={() => { setStatus("Export playback failed. Refresh the export link or download the file to try your device player."); }} /> : <span>{renderJobId ? "Exporting " + renderJobStatus : "Your exported video will play here"}</span>) : (sourceUrl ? <video ref={playerRef} controls playsInline src={sourceUrl} onTimeUpdate={stopAtClipEnd} /> : <span>{sourceNote || "Preparing the preview…"}</span>)}</div>}
+    }} src={renderUrl} onError={() => { setStatus("Export playback failed. Refresh the export link or download the file to try your device player."); }} /> : <span>{renderJobId ? "Exporting " + renderJobStatus : "Your exported video will play here"}</span>) : (sourceUrl ? (stillAssets[sourceAssetId] ? <img className="creation-preview" src={sourceUrl} alt="Original photo" /> : <video ref={playerRef} controls playsInline src={sourceUrl} onTimeUpdate={stopAtClipEnd} />) : <span>{sourceNote || "Preparing the preview…"}</span>)}</div>}
     {previewMode === "source" && sourceNote && sourceUrl && <p className="muted small">{sourceNote}</p>}
   </div>;
 
@@ -1170,7 +1170,7 @@ export function App() {
   }
 
   // ── Edit ────────────────────────────────────────────────────────────────────────────────
-  const modePane = mode === "story" ? <section className="pane transcript" aria-label="Transcript">
+  const modePane = mode === "story" && creationMode !== "footage" ? <section className="pane" aria-label="Story pieces"><div className="pane-head"><h2>Story</h2><span className="muted small">{videoClips.length} pieces</span></div><div className="pad stack"><p className="muted small">Select a piece to change its length, order, look, or transition. Open Storyboard to change the plan and narration.</p>{videoClips.map((clip, i) => <button className="btn" key={clip.id} disabled={busy} onClick={() => { setSelectedClipId(clip.id); setPreviewMode("edit"); liveRef.current?.seek(clip.timelineStartUs); }}>{i + 1}. {assetName(clip.assetId)} · {formatSeconds(clip.timelineEndUs - clip.timelineStartUs)}</button>)}</div></section> : mode === "story" ? <section className="pane transcript" aria-label="Transcript">
       <div className="pane-head"><h2>Story</h2><span className="muted small">{formatClock(keptUs)} kept{mainVideo?.durationUs ? " of " + formatClock(mainVideo.durationUs) : ""}</span></div>
       {words.length === 0 ? <p className="muted pad">{transcribing ? "Listening to the video… the transcript appears here." : "No transcript yet."}</p> : <>
         <p className="muted small pad">Click a word, shift-click another to select the words between. Cut words are struck through.</p>
@@ -1260,7 +1260,7 @@ export function App() {
             // A recording starts where the playhead was when recording began.
             const anchor = recordAnchor.current ?? anchorPoint(); recordAnchor.current = undefined;
             if (!anchor) { setStatus("Add a video clip first"); return; }
-            void applyEdit([{ type: "add-voiceover", assetId: asset.id, anchorAssetId: anchor.anchorAssetId, anchorSourceUs: anchor.anchorSourceUs, durationUs: Math.max(200_000, Number(asset.durationUs ?? 0) || 3_000_000), volumeDb: options.volumeDb, duck: options.duck }], "Voice-over added " + anchor.where);
+            void applyEdit([{ type: "add-voiceover", assetId: asset.id, anchorAssetId: anchor.anchorAssetId, ...(anchor.anchorClipId ? { anchorClipId: anchor.anchorClipId } : {}), anchorSourceUs: anchor.anchorSourceUs, durationUs: Math.max(200_000, Number(asset.durationUs ?? 0) || 3_000_000), volumeDb: options.volumeDb, duck: options.duck }], "Voice-over added " + anchor.where);
           }} />
         {voiceovers.length > 0 && <ul className="item-list">{voiceovers.map((clip) => <li key={clip.id}><span>{formatSeconds(clip.timelineStartUs)}–{formatSeconds(clip.timelineEndUs)} · {assetName(clip.assetId)}</span><button className="btn" onClick={() => void applyEdit([{ type: "remove-clip", clipId: clip.id, reason: "Voice-over removed" }], "Voice-over removed")} disabled={busy}>Remove</button></li>)}</ul>}
         <h3>Sound effects</h3>
@@ -1290,7 +1290,7 @@ export function App() {
         <button className="btn" onClick={() => trimSelectedClip(-500_000, 0)} disabled={busy}>Start −0.5s</button>
         <button className="btn" onClick={() => trimSelectedClip(0, -500_000)} disabled={busy}>Trim end −0.5s</button>
         <button className="btn" onClick={() => trimSelectedClip(0, 500_000)} disabled={busy}>End +0.5s</button>
-        {sourceUrl && <><button className="btn" onClick={() => trimToPlayhead("start")} disabled={busy}>Start at playhead</button><button className="btn" onClick={() => trimToPlayhead("end")} disabled={busy}>End at playhead</button><button className="btn" onClick={playSelectedClip}>Play clip</button></>}
+        {sourceUrl && !stillAssets[selectedClip.assetId] && <><button className="btn" onClick={() => trimToPlayhead("start")} disabled={busy}>Start at playhead</button><button className="btn" onClick={() => trimToPlayhead("end")} disabled={busy}>End at playhead</button><button className="btn" onClick={playSelectedClip}>Play clip</button></>}
       </div>
       <div className="clip-effects stack">
         <label>Zoom<select value={String(selectedClip.transform?.zoom ?? "none")} disabled={busy} onChange={(event) => void applyEdit([{ type: "set-clip-effects", clipId: selectedClip.id, zoom: event.target.value }], "Zoom: " + (ZOOM_LABEL[event.target.value] ?? event.target.value))}>{Object.entries(ZOOM_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>

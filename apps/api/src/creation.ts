@@ -100,7 +100,7 @@ export function registerCreationRoutes(server: FastifyInstance, d: CreationDepen
       let timeline = storyTimeline(scenes, narration, b.sceneText === true);
       if (narration && b.captions === true) {
         const segments = await d.transcripts.listForAsset(narration.id);
-        const words = segments.flatMap(s => s.words).filter(w => w.startUs >= 0 && w.endUs > w.startUs && w.startUs < narration.durationUs!);
+        const words = segments.flatMap(s => s.words).filter(w => Number.isSafeInteger(w.startUs) && Number.isSafeInteger(w.endUs) && w.startUs >= 0 && w.endUs > w.startUs && w.startUs < narration.durationUs!).sort((a, b) => a.startUs - b.startUs);
         if (!words.length) throw new Error("Transcribe the narration before adding speech captions, or turn captions off");
         const cues: TimelineClip[] = [];
         for (let i = 0; i < words.length; i += 4) {

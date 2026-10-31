@@ -50,11 +50,15 @@ export function VoiceOver({ projectId, apiBase, token, request, disabled, initia
 
   async function start() {
     setNote("");
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") { setNote("Recording is unavailable in this browser. Use AI narration or upload a recording."); return; }
+    setWorking("microphone");
     let stream: MediaStream;
     try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }); }
-    catch { setNote("Allow the microphone to record a voice-over."); return; }
+    catch { setWorking(""); setNote("Allow the microphone to record a voice-over."); return; }
     const type = ["audio/webm;codecs=opus", "audio/mp4", "audio/webm"].find((t) => typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(t));
-    const rec = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+    let rec: MediaRecorder;
+    try { rec = new MediaRecorder(stream, type ? { mimeType: type } : undefined); }
+    catch { stream.getTracks().forEach(track => track.stop()); setWorking(""); setNote("This browser could not start recording. Upload a recording instead."); return; }
     const chunks: Blob[] = [];
     rec.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
     rec.onstop = async () => {
@@ -68,7 +72,8 @@ export function VoiceOver({ projectId, apiBase, token, request, disabled, initia
       finally { setWorking(""); }
     };
     recorder.current = rec; started.current = Date.now(); setSeconds(0);
-    rec.start(); setRecording(true); onRecording(true);
+    try { rec.start(); setRecording(true); onRecording(true); setWorking(""); }
+    catch { recorder.current = null; stream.getTracks().forEach(track => track.stop()); setWorking(""); setNote("Recording could not start. Try again or upload a recording."); }
   }
   function stop() { recorder.current?.stop(); recorder.current = null; }
 

@@ -8,12 +8,13 @@ type Props = {
   request(path: string, init?: RequestInit): Promise<any>;
   orientation: "portrait" | "landscape" | "square";
   disabled: boolean;
+  onWorking?(working: boolean): void;
   /** Called with the stored asset; the editor adds it as a cutaway. */
   onUse(asset: { id: string; kind: string; metadata: Record<string, string | number | boolean> } & Record<string, unknown>): void;
 };
 const LIBRARY: Record<string, string> = { pexels: "Pexels", pixabay: "Pixabay", giphy: "GIPHY" };
 
-export function StockSearch({ projectId, request, orientation, disabled, onUse }: Props) {
+export function StockSearch({ projectId, request, orientation, disabled, onWorking, onUse }: Props) {
   const [sources, setSources] = useState<Sources | null>(null);
   const [kind, setKind] = useState<"video" | "photo" | "gif">("video");
   const [query, setQuery] = useState("");
@@ -21,9 +22,10 @@ export function StockSearch({ projectId, request, orientation, disabled, onUse }
   const [note, setNote] = useState("");
   const [working, setWorking] = useState("");
 
+  useEffect(() => { onWorking?.(Boolean(working)); return () => onWorking?.(false); }, [working]);
   useEffect(() => {
     let cancelled = false;
-    request("/v1/projects/" + projectId + "/stock/sources").then((value) => { if (!cancelled) setSources(value); }).catch(() => { if (!cancelled) setSources({ video: [], photo: [], gif: [] }); });
+    request("/v1/projects/" + projectId + "/stock/sources").then((value) => { if (!cancelled) { setSources(value); setKind(current => value[current]?.length ? current : ["video", "photo", "gif"].find(kind => value[kind]?.length) as "video" | "photo" | "gif" ?? "video"); } }).catch(() => { if (!cancelled) setSources({ video: [], photo: [], gif: [] }); });
     return () => { cancelled = true; };
   }, [projectId]);
 
