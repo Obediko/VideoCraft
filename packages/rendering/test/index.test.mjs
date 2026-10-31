@@ -426,3 +426,18 @@ test(`real ffmpeg: eight 1080p portrait clips with speech, music, a ${cutawayMod
 });
 
 }
+
+test("AAC exports keep stereo 48 kHz after loudness normalization and when normalization is disabled", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "vc-mobile-audio-"));
+  try {
+    const source = join(directory, "source.mp4");
+    execFileSync("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "color=blue:s=160x120:r=30:d=2", "-f", "lavfi", "-i", "sine=frequency=880:duration=2", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", source]);
+    for (const normalizeLoudness of [true, false]) {
+      const output = join(directory, normalizeLoudness ? "normalized.mp4" : "raw.mp4");
+      await new FfmpegProcess().run(await new FfmpegCommandPlanner({ resolve: async () => source, hasAudio: async () => true }).plan(revision([clip("c", 0, 2e6, 0)]), { ...settings, width: 160, height: 120, normalizeLoudness }, output));
+      const stream = JSON.parse(execFileSync("ffprobe", ["-v", "error", "-select_streams", "a:0", "-show_entries", "stream=sample_rate,channels,codec_name", "-of", "json", output], { encoding: "utf8" })).streams[0];
+      assert.equal(stream.codec_name, "aac"); assert.equal(stream.sample_rate, "48000", "normalization must not leave a high-rate AAC stream"); assert.equal(stream.channels, 2);
+      execFileSync("ffmpeg", ["-v", "error", "-xerror", "-i", output, "-f", "null", "-"]);
+    }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});

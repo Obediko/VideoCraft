@@ -75,3 +75,15 @@ test("overlapping recogniser timings: the fix lands in a real gap", () => {
   const fixed = applyTimelineOperations(timeline, issue.fix.operations);
   assert.ok(!checkEdit({ timeline: fixed, assetId: A, words: messy, sourceDurationUs: 6_000_000, platform: "youtube" }).some((i) => i.kind === "mid-word"), JSON.stringify(fixed.tracks[0].clips));
 });
+
+test("a readability fix must fit its host clip, or explicitly require a longer piece", () => {
+  const short = build([{ type: "insert-clip", assetId: A, sourceStartUs: 0, sourceEndUs: 1_400_000 }, { type: "add-graphic", kind: "title", text: "Choose Freedom", anchorAssetId: A, anchorSourceUs: 200_000, durationUs: 1_200_000 }]);
+  const issue = checkEdit({ timeline: short, assetId: A, words: [], sourceDurationUs: durationUs, platform: "youtube" }).find(i => i.kind === "too-fast");
+  assert.ok(issue); assert.equal(issue.fix, undefined, "do not offer a duration change that normalization silently clamps away");
+  assert.equal(issue.severity, "warn");
+  const roomy = build([{ type: "insert-clip", assetId: A, sourceStartUs: 0, sourceEndUs: 3_000_000 }, { type: "add-graphic", kind: "title", text: "Choose Freedom", anchorAssetId: A, anchorSourceUs: 2_000_000, durationUs: 1_000_000 }]);
+  const fix = checkEdit({ timeline: roomy, assetId: A, words: [], sourceDurationUs: durationUs, platform: "youtube" }).find(i => i.kind === "too-fast");
+  assert.ok(fix.fix);
+  const changed = applyTimelineOperations(roomy, fix.fix.operations);
+  assert.equal(checkEdit({ timeline: changed, assetId: A, words: [], sourceDurationUs: durationUs, platform: "youtube" }).some(i => i.kind === "too-fast"), false);
+});

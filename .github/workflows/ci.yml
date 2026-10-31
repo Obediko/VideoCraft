@@ -89,6 +89,12 @@ jobs:
         run: npm run test:release
       - run: npx playwright install --with-deps chromium webkit
       - run: npm run test:e2e --workspace=@videocraft/web
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-failure-traces
+          path: apps/web/test-results/
+          retention-days: 3
       - run: python -m pip install -r workers/timeline/requirements.txt
       - run: python workers/timeline/protocol_test.py
       - name: Integration tests
