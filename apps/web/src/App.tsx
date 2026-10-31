@@ -348,8 +348,9 @@ export function App() {
     if (!anchor) { setStatus("Add a video clip first"); return; }
     void applyEdit([{ type: "add-broll", assetId, anchorAssetId: anchor.anchorAssetId, ...(anchor.anchorClipId ? { anchorClipId: anchor.anchorClipId } : {}), anchorSourceUs: anchor.anchorSourceUs, durationUs: Math.round(brollSeconds * 1_000_000), mode: brollMode }], "Cutaway added " + anchor.where);
   }
-  async function addCreativeTreatment(recipe: EffectRecipe) {
-    const anchor = anchorPoint();
+  async function addCreativeTreatment(recipe: EffectRecipe, atUs?: number) {
+    const piece = atUs === undefined ? undefined : videoClips.find(c => atUs >= c.timelineStartUs && atUs < c.timelineEndUs);
+    const anchor = atUs === undefined ? anchorPoint() : piece ? { anchorAssetId: piece.assetId, anchorClipId: piece.id, anchorSourceUs: Math.round(piece.sourceStartUs + atUs - piece.timelineStartUs), where: "at " + formatSeconds(atUs) } : undefined;
     const host = anchor && videoClips.find(c => (!anchor.anchorClipId || c.id === anchor.anchorClipId) && c.assetId === anchor.anchorAssetId && anchor.anchorSourceUs >= c.sourceStartUs && anchor.anchorSourceUs < c.sourceEndUs);
     if (!anchor || !host) throw new Error("Select a clip or a moment in the edit first");
     const available = (host.sourceEndUs - anchor.anchorSourceUs) / 1e6;
@@ -1234,7 +1235,7 @@ export function App() {
     : mode === "visuals" ? <section className="pane" aria-label="Visuals">
       <div className="pane-head"><h2>Visuals</h2></div>
       <div className="pad stack broll-panel effects-panel">
-        <EffectLibrary request={request} refreshKey={assets.length} disabled={busy || revision === 0} onUse={addCreativeTreatment} />
+        <EffectLibrary projectId={projectId} revision={revision} request={request} refreshKey={assets.length} disabled={busy || revision === 0} onUse={addCreativeTreatment} />
         <h3>Look</h3>
         <label>Look for the whole video<select value={wholeLook} disabled={busy || revision === 0} onChange={(event) => { if (event.target.value !== "mixed") void applyEdit([{ type: "set-look", look: event.target.value }], "Look: " + (LOOK_LABEL[event.target.value] ?? event.target.value)); }}>{wholeLook === "mixed" && <option value="mixed">Mixed (set per clip)</option>}{Object.entries(LOOK_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
         <p className="muted small">Zooms and transitions are set per clip: select a clip on the timeline.</p>

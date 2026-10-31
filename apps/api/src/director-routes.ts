@@ -9,6 +9,7 @@ import type { AssetRepository, ProjectRepository, RevisionRepository } from "@vi
 import type { ObjectStorage } from "@videocraft/storage";
 import { RuleDirector, briefHints, checkEdit, effectOperations, parseMediaSignals, planOperations, sanitizePlan, type CheckIssue, type Director, type DirectorInput, type DirectorPlan, type MediaSignals } from "@videocraft/director";
 import { findCandidates } from "@videocraft/strategies";
+import { registerCreativeRoutes } from "./creative.js";
 import { savedEffect } from "./effects.js";
 import { composeMusicAsset } from "./music-routes.js";
 
@@ -37,6 +38,7 @@ export function registerDirectorRoutes(server: FastifyInstance, dependencies: Di
   const context = contextOf(dependencies);
   const directorInput = (ctx: NonNullable<Awaited<ReturnType<typeof context>>>, brief: string, request: FastifyRequest) => directorInputFor(dependencies, ctx, brief, request);
   registerCheckRoutes(server, dependencies, context);
+  registerCreativeRoutes(server, dependencies);
 
   server.post("/v1/projects/:projectId/director/plan", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } } as never, async (request: FastifyRequest, reply: FastifyReply) => {
     const ctx = await context(request, reply);

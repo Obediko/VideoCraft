@@ -2,12 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { SOUND_EFFECTS, CLIP_ZOOMS, EFFECT_PRESETS, parseEffectRecipe, type EffectRecipe, type SavedEffect } from "@videocraft/domain";
 
 type Props = {
+  projectId: string;
+  revision: number;
   request(path: string, init?: RequestInit): Promise<any>;
   refreshKey?: number;
   disabled: boolean;
-  onUse(recipe: EffectRecipe): Promise<boolean>;
+  onUse(recipe: EffectRecipe, atUs?: number): Promise<boolean>;
 };
-export function EffectLibrary({ request, disabled, onUse, refreshKey }: Props) {
+export function EffectLibrary({ request, disabled, onUse, refreshKey, projectId, revision }: Props) {
   const [saved, setSaved] = useState<SavedEffect[]>([]);
   const [recipe, setRecipe] = useState<EffectRecipe>(() => parseEffectRecipe({ presetId: "key-point" }));
   const [query, setQuery] = useState("");
@@ -16,6 +18,8 @@ export function EffectLibrary({ request, disabled, onUse, refreshKey }: Props) {
   const [message, setMessage] = useState("");
   const [loadError, setLoadError] = useState(false);
   const [reload, setReload] = useState(0);
+  const [direction, setDirection] = useState("");
+  const [ideas, setIdeas] = useState<{revision:number;note:string;source:string;proposals:Array<{id:string;title:string;reason:string;atUs:number;recipe:EffectRecipe;stockPreview?:{thumbUrl:string;credit?:string;provider:string}}>}>();
   const requestRef = useRef(request); requestRef.current = request;
   useEffect(() => {
     let active = true;
@@ -26,25 +30,39 @@ export function EffectLibrary({ request, disabled, onUse, refreshKey }: Props) {
   }, [reload, refreshKey]);
   const preset = EFFECT_PRESETS.find(p => p.id === recipe.presetId) ?? { name: "Stock cutaway", description: "Reuse the stock item accepted in an earlier project. It is imported from its provider when you add it here." };
   const clipTreatment = ["focus", "impact", "smooth-reveal"].includes(recipe.presetId);
-  async function save() {
-    const result = await requestRef.current("/v1/me/effects", { method: "POST", body: JSON.stringify(parseEffectRecipe(recipe)) });
+  async function save(chosen = recipe) {
+    const result = await requestRef.current("/v1/me/effects", { method: "POST", body: JSON.stringify(parseEffectRecipe(chosen)) });
     setSaved(items => [result.effect, ...items.filter(item => item.id !== result.effect.id)].slice(0, 100));
   }
-  async function useEffectRecipe() {
+  async function useEffectRecipe(chosen = recipe, atUs?: number) {
     setWorking(true); setMessage("");
     try {
-      if (!await onUse(recipe)) return;
+      if (!await onUse(chosen, atUs)) return;
       if (remember) {
-        try { await save(); setMessage("Treatment added and saved to your library."); }
+        try { await save(chosen); setMessage("Treatment added and saved to your library."); }
         catch { setMessage("Treatment added. Library save failed; use Save treatment to retry."); }
       } else setMessage("Treatment added. Undo is available in the editor.");
     } catch (error) { setMessage(error instanceof Error ? error.message : "Could not add this treatment"); }
+    finally { setWorking(false); }
+  }
+  async function planTreatments() {
+    setWorking(true); setMessage("");
+    try { setIdeas(await requestRef.current("/v1/projects/" + projectId + "/creative/plan", { method: "POST", body: JSON.stringify({ revision, brief: direction }) })); }
+    catch (error) { setMessage(error instanceof Error ? error.message : "Creative planning failed. Try again."); }
     finally { setWorking(false); }
   }
   const locked = disabled || working;
   return <section className="effect-library stack" aria-label="Creative effects library">
     <h3>Creative treatments</h3>
     <p className="muted small">Choose a treatment for this moment. The Director can suggest these too; accepted treatments grow your private library.</p>
+    <label>Creative direction<input value={direction} maxLength={600} disabled={locked} placeholder="Subtle documentary, playful reactions, energetic launch…" onChange={e => setDirection(e.target.value)} /></label>
+    <button type="button" className="btn" disabled={locked || revision === 0} onClick={() => void planTreatments()}>{working ? "Working…" : "Ask Director for creative treatments"}</button>
+    {ideas && <div className="stack" role="region" aria-label="Director creative suggestions">
+      <p className="muted small">{ideas.note}</p>
+      {ideas.revision !== revision && <p className="muted small">Your edit changed. Ask for new ideas before applying another suggestion.</p>}
+      {ideas.proposals.length === 0 && <p>No additional treatments suggested. You can choose one below.</p>}
+      {ideas.proposals.map(idea => <article key={idea.id} className="suggestion stack"><strong>{idea.title}</strong><p>{idea.reason}</p><span className="mono small">At {(idea.atUs / 1e6).toFixed(1)} s · {idea.recipe.durationS} s</span>{idea.stockPreview && <div className="stock-pick"><img src={idea.stockPreview.thumbUrl} alt={idea.recipe.text} /><span>{idea.stockPreview.credit ?? idea.stockPreview.provider}</span></div>}<button type="button" className="btn" disabled={locked || ideas.revision !== revision} onClick={() => { setRecipe(idea.recipe); void useEffectRecipe(idea.recipe,idea.atUs); }}>Apply treatment: {idea.title}</button></article>)}
+    </div>}
     <label>Find a treatment<input type="search" value={query} placeholder="Motion, sound, reactions, titles…" onChange={e => setQuery(e.target.value)} /></label>
     <div className="effect-preset-grid">{EFFECT_PRESETS.filter(p => (p.name + " " + p.tags.join(" ")).toLowerCase().includes(query.trim().toLowerCase())).map(p => <button type="button" key={p.id} className={"btn effect-preset" + (recipe.presetId === p.id ? " selected" : "")} aria-pressed={recipe.presetId === p.id} disabled={locked} onClick={() => setRecipe(parseEffectRecipe({ presetId: p.id }))}><strong>{p.name}</strong><span className="muted small">{p.tags.join(" · ")}</span></button>)}</div>
     <p>{preset.description}</p>
