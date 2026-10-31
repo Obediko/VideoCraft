@@ -355,13 +355,16 @@ export function App() {
     const available = (host.sourceEndUs - anchor.anchorSourceUs) / 1e6;
     const clipTreatment = ["focus", "impact", "smooth-reveal"].includes(recipe.presetId);
     if (!clipTreatment && available < recipe.durationS) throw new Error("This moment has " + available.toFixed(1) + " s left in the piece. Shorten the treatment or choose an earlier moment.");
-    let importedAssetId: string | undefined;
-    if (recipe.stock) {
-      const result = await request("/v1/projects/" + projectId + "/stock/import", { method: "POST", body: JSON.stringify({ provider: recipe.stock.provider, kind: recipe.stock.kind, id: recipe.stock.id }) });
-      importedAssetId = result.asset.id;
-      setAssets(current => [...current.filter(a => a.id !== result.asset.id), result.asset]);
-    }
-    return applyEdit(effectRecipeOperations(recipe, { ...anchor, anchorClipId: host.id, ...(importedAssetId ? { importedAssetId } : {}) }), "Creative treatment added " + anchor.where);
+    setBusy(true);
+    try {
+      let importedAssetId: string | undefined;
+      if (recipe.stock) {
+        const result = await request("/v1/projects/" + projectId + "/stock/import", { method: "POST", body: JSON.stringify({ provider: recipe.stock.provider, kind: recipe.stock.kind, id: recipe.stock.id }) });
+        importedAssetId = result.asset.id;
+        setAssets(current => [...current.filter(a => a.id !== result.asset.id), result.asset]);
+      }
+      return await applyEdit(effectRecipeOperations(recipe, { ...anchor, anchorClipId: host.id, ...(importedAssetId ? { importedAssetId } : {}) }), "Creative treatment added " + anchor.where);
+    } finally { setBusy(false); }
   }
   function addSoundEffect() {
     const anchor = anchorPoint();
