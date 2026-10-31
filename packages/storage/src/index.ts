@@ -14,7 +14,7 @@ export interface ObjectStorage {
   resolve(key: string): string;
   putFile(sourcePath: string, key: string): Promise<StoredObject>;
   remove(key: string): Promise<void>;
-  downloadToFile?(key: string, destinationPath: string): Promise<void>;
+  downloadToFile?(key: string, destinationPath: string, options?: { signal?: AbortSignal }): Promise<void>;
   list?(prefix?: string): Promise<ListedObject[]>;
   createDownloadUrl?(key: string, expiresInSeconds: number, options?: { filename?: string }): Promise<string>;
 }
@@ -51,8 +51,10 @@ export class LocalObjectStorage implements ObjectStorage {
     return results.filter((entry) => !prefix || entry.key.startsWith(prefix.endsWith("/") ? prefix : prefix + "/"));
   }
 
-  async downloadToFile(key: string, destinationPath: string): Promise<void> {
+  async downloadToFile(key: string, destinationPath: string, options: { signal?: AbortSignal } = {}): Promise<void> {
+    options.signal?.throwIfAborted();
     await copyFile(this.resolve(key), destinationPath);
+    options.signal?.throwIfAborted();
   }
 
   async remove(key: string): Promise<void> {

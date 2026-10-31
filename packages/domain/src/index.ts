@@ -25,11 +25,11 @@ export type TimelineOperation =
    * so it moves with that moment through cuts and reorders. "full" covers the frame, "pip" is a corner inset.
    */
   /** Animated text graphics anchored to a moment like b-roll: a title card, a callout, or a lower third (name + role). */
-  | { type: "add-graphic"; kind: "title" | "callout" | "lower-third"; text: string; subtitle?: string; anchorAssetId: UUID; anchorSourceUs: Microseconds; durationUs: Microseconds; position?: "top" | "center" | "bottom"; color?: string }
+  | { type: "add-graphic"; kind: "title" | "callout" | "lower-third"; text: string; subtitle?: string; anchorAssetId: UUID; anchorClipId?: UUID; anchorSourceUs: Microseconds; durationUs: Microseconds; position?: "top" | "center" | "bottom"; color?: string }
   | { type: "update-graphic"; clipId: string; text?: string; subtitle?: string; color?: string }
   /** A bar filling across the top of the frame over the whole cut. */
   | { type: "set-progress-bar"; enabled: boolean; color?: string }
-  | { type: "add-broll"; assetId: UUID; anchorAssetId: UUID; anchorSourceUs: Microseconds; durationUs: Microseconds; sourceStartUs?: Microseconds; mode?: "full" | "pip" | "behind" }
+  | { type: "add-broll"; assetId: UUID; anchorAssetId: UUID; anchorClipId?: UUID; anchorSourceUs: Microseconds; durationUs: Microseconds; sourceStartUs?: Microseconds; mode?: "full" | "pip" | "behind" }
   /** Append (or insert at `index`) a segment of a source asset on the video track. */
   | { type: "insert-clip"; assetId: UUID; sourceStartUs: Microseconds; sourceEndUs: Microseconds; reason: string; score?: number; features?: Record<string, number>; index?: number }
   /** Reorder the video track; `clipIds` must list every video clip exactly once. */
@@ -47,7 +47,7 @@ export type TimelineOperation =
   /** One colour look on every video clip ("none" clears). */
   | { type: "set-look"; look: ColourLook }
   /** A short generated sound effect anchored to a moment of a source video, like graphics. */
-  | { type: "add-sfx"; kind: SoundEffect; anchorAssetId: UUID; anchorSourceUs: Microseconds; volumeDb?: number }
+  | { type: "add-sfx"; kind: SoundEffect; anchorAssetId: UUID; anchorClipId?: UUID; anchorSourceUs: Microseconds; volumeDb?: number }
   /**
    * What is behind the person in a video clip (all video clips when clipId is left out): the original ("none"),
    * the original blurred, a solid colour, or a photo / video asset. The person is cut out by a matte;
@@ -62,7 +62,7 @@ export type TimelineOperation =
    * all sound effects or all voice-overs).
    */
   | { type: "set-volume"; clipId?: UUID; role?: "music" | "sfx" | "voiceover"; volumeDb: number }
-  | { type: "add-voiceover"; assetId: UUID; anchorAssetId: UUID; anchorSourceUs: Microseconds; durationUs: Microseconds; volumeDb?: number; duck?: boolean }
+  | { type: "add-voiceover"; assetId: UUID; anchorAssetId: UUID; anchorClipId?: UUID; anchorSourceUs: Microseconds; durationUs: Microseconds; volumeDb?: number; duck?: boolean }
   | { type: "set-background"; clipId?: UUID; background: Background; color?: string; assetId?: UUID; edge?: number; feather?: number };
 export const BACKGROUNDS = ["none", "blur", "color", "media"] as const;
 export type Background = (typeof BACKGROUNDS)[number];

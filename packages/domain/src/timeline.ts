@@ -98,7 +98,7 @@ export function applyTimelineOperations(timeline: Timeline, operations: Timeline
         let id = base;
         for (let n = 2; tracks.some((track) => track.clips.some((clip) => clip.id === id)); n += 1) id = base + "-" + n;
         const start = operation.sourceStartUs ?? 0;
-        overlay.clips.push({ id, assetId: operation.assetId, sourceStartUs: start, sourceEndUs: start + operation.durationUs, timelineStartUs: 0, timelineEndUs: operation.durationUs, transform: { role: "broll", mode: operation.mode ?? "full", anchorAssetId: operation.anchorAssetId, anchorSourceUs: operation.anchorSourceUs, durationUs: operation.durationUs } });
+        overlay.clips.push({ id, assetId: operation.assetId, sourceStartUs: start, sourceEndUs: start + operation.durationUs, timelineStartUs: 0, timelineEndUs: operation.durationUs, transform: { role: "broll", mode: operation.mode ?? "full", anchorAssetId: operation.anchorAssetId, ...(operation.anchorClipId ? { anchorClipId: operation.anchorClipId } : {}), anchorSourceUs: operation.anchorSourceUs, durationUs: operation.durationUs } });
         break;
       }
       case "add-graphic": {
@@ -109,7 +109,7 @@ export function applyTimelineOperations(timeline: Timeline, operations: Timeline
         for (let n = 2; tracks.some((track) => track.clips.some((clip) => clip.id === id)); n += 1) id = base + "-" + n;
         overlay.clips.push({ id, assetId: GENERATED_PREFIX + "graphic", sourceStartUs: 0, sourceEndUs: operation.durationUs, timelineStartUs: 0, timelineEndUs: operation.durationUs, transform: {
           role: "graphic", kind: operation.kind, text: operation.text, ...(operation.subtitle ? { subtitle: operation.subtitle } : {}), position: operation.position ?? (operation.kind === "lower-third" ? "bottom" : "center"),
-          ...(operation.color ? { color: operation.color } : {}), anchorAssetId: operation.anchorAssetId, anchorSourceUs: operation.anchorSourceUs, durationUs: operation.durationUs,
+          ...(operation.color ? { color: operation.color } : {}), anchorAssetId: operation.anchorAssetId, ...(operation.anchorClipId ? { anchorClipId: operation.anchorClipId } : {}), anchorSourceUs: operation.anchorSourceUs, durationUs: operation.durationUs,
         } });
         break;
       }
@@ -168,7 +168,7 @@ export function applyTimelineOperations(timeline: Timeline, operations: Timeline
         let id = base;
         for (let n = 2; tracks.some((track) => track.clips.some((clip) => clip.id === id)); n += 1) id = base + "-" + n;
         const durationUs = SFX_LENGTH_US[operation.kind] ?? 700_000;
-        audio.clips.push({ id, assetId: GENERATED_PREFIX + "sfx", sourceStartUs: 0, sourceEndUs: durationUs, timelineStartUs: 0, timelineEndUs: durationUs, transform: { role: "sfx", kind: operation.kind, volumeDb: operation.volumeDb ?? -18, anchorAssetId: operation.anchorAssetId, anchorSourceUs: operation.anchorSourceUs, durationUs } });
+        audio.clips.push({ id, assetId: GENERATED_PREFIX + "sfx", sourceStartUs: 0, sourceEndUs: durationUs, timelineStartUs: 0, timelineEndUs: durationUs, transform: { role: "sfx", kind: operation.kind, volumeDb: operation.volumeDb ?? -18, anchorAssetId: operation.anchorAssetId, ...(operation.anchorClipId ? { anchorClipId: operation.anchorClipId } : {}), anchorSourceUs: operation.anchorSourceUs, durationUs } });
         break;
       }
       case "set-volume": {
@@ -190,7 +190,7 @@ export function applyTimelineOperations(timeline: Timeline, operations: Timeline
         const base = "vo-" + operation.anchorSourceUs;
         let id = base;
         for (let n = 2; tracks.some((track) => track.clips.some((clip) => clip.id === id)); n += 1) id = base + "-" + n;
-        audio.clips.push({ id, assetId: operation.assetId, sourceStartUs: 0, sourceEndUs: operation.durationUs, timelineStartUs: 0, timelineEndUs: operation.durationUs, transform: { role: "voiceover", volumeDb: operation.volumeDb ?? 0, duck: operation.duck ?? true, anchorAssetId: operation.anchorAssetId, anchorSourceUs: operation.anchorSourceUs, durationUs: operation.durationUs } });
+        audio.clips.push({ id, assetId: operation.assetId, sourceStartUs: 0, sourceEndUs: operation.durationUs, timelineStartUs: 0, timelineEndUs: operation.durationUs, transform: { role: "voiceover", volumeDb: operation.volumeDb ?? 0, duck: operation.duck ?? true, anchorAssetId: operation.anchorAssetId, ...(operation.anchorClipId ? { anchorClipId: operation.anchorClipId } : {}), anchorSourceUs: operation.anchorSourceUs, durationUs: operation.durationUs } });
         break;
       }
       case "set-progress-bar": {
@@ -229,6 +229,7 @@ export function applyTimelineOperations(timeline: Timeline, operations: Timeline
           const ratio = (operation.atUs - clip.sourceStartUs) / (clip.sourceEndUs - clip.sourceStartUs);
           const timelineAt = clip.timelineStartUs + Math.round((clip.timelineEndUs - clip.timelineStartUs) * ratio);
           track.clips.splice(index, 1, { ...clip, id: clip.id + ":a", sourceEndUs: operation.atUs, timelineEndUs: timelineAt }, { ...clip, id: clip.id + ":b", sourceStartUs: operation.atUs, timelineStartUs: timelineAt });
+          for (const lane of tracks) lane.clips = lane.clips.map(item => item.transform?.anchorClipId === clip.id ? { ...item, transform: { ...item.transform, anchorClipId: clip.id + (Number(item.transform.anchorSourceUs) >= operation.atUs ? ":b" : ":a") } } : item);
         }
         break;
       }
@@ -277,7 +278,7 @@ export function normalizeTimeline(timeline: Timeline): Timeline {
       const anchorAsset = String(clip.transform.anchorAssetId);
       const anchor = Number(clip.transform.anchorSourceUs);
       const wanted = Number(clip.transform.durationUs);
-      const host = video?.clips.find((candidate) => candidate.assetId === anchorAsset && anchor >= candidate.sourceStartUs && anchor < candidate.sourceEndUs);
+      const host = video?.clips.find((candidate) => (typeof clip.transform?.anchorClipId === "string" ? candidate.id === clip.transform.anchorClipId : candidate.assetId === anchorAsset) && anchor >= candidate.sourceStartUs && anchor < candidate.sourceEndUs);
       if (!host) return [];
       const start = host.timelineStartUs + (anchor - host.sourceStartUs);
       const end = Math.min(start + wanted, host.timelineEndUs);
@@ -291,8 +292,12 @@ export function normalizeTimeline(timeline: Timeline): Timeline {
     if (track.kind !== "audio") continue;
     track.clips = track.clips.flatMap((clip) => {
       if (clip.transform?.role === "sfx" || clip.transform?.role === "voiceover") {
+        if (clip.transform.timelineBound === true) {
+          const end = Math.min(Number(clip.transform.durationUs), videoEnd);
+          return end >= 50_000 ? [{ ...clip, timelineStartUs: 0, timelineEndUs: end, sourceEndUs: clip.sourceStartUs + end }] : [];
+        }
         // A sound effect plays at its moment; it may ring past a cut but not past the end.
-        const host = video?.clips.find((candidate) => candidate.assetId === String(clip.transform!.anchorAssetId) && Number(clip.transform!.anchorSourceUs) >= candidate.sourceStartUs && Number(clip.transform!.anchorSourceUs) < candidate.sourceEndUs);
+        const host = video?.clips.find((candidate) => (typeof clip.transform?.anchorClipId === "string" ? candidate.id === clip.transform.anchorClipId : candidate.assetId === String(clip.transform!.anchorAssetId)) && Number(clip.transform!.anchorSourceUs) >= candidate.sourceStartUs && Number(clip.transform!.anchorSourceUs) < candidate.sourceEndUs);
         if (!host) return [];
         const start = host.timelineStartUs + (Number(clip.transform.anchorSourceUs) - host.sourceStartUs);
         const end = Math.min(start + Number(clip.transform.durationUs), videoEnd);
@@ -351,6 +356,7 @@ export function parseTimelineOperations(value: unknown): TimelineOperation[] {
     const op = raw as Record<string, unknown>;
     const fail = (message: string): never => { throw new Error("operations[" + index + "]: " + message); };
     if (typeof op !== "object" || op === null || Array.isArray(op)) return fail("must be an object");
+    if (op.anchorClipId !== undefined && !isId(op.anchorClipId)) return fail("anchorClipId must be a clip id");
     switch (op.type) {
       case "trim-clip":
         if (!isId(op.clipId) || !isUs(op.sourceStartUs) || !isUs(op.sourceEndUs) || op.sourceEndUs <= op.sourceStartUs) return fail("trim-clip needs clipId and a valid source range");
@@ -393,7 +399,7 @@ export function parseTimelineOperations(value: unknown): TimelineOperation[] {
         if (!isId(op.anchorAssetId) || !isUs(op.anchorSourceUs) || !isUs(op.durationUs) || (op.durationUs as number) < 300_000 || (op.durationUs as number) > 600_000_000) return fail("add-graphic needs anchorAssetId, anchorSourceUs and a duration of 0.3s-10min");
         if (op.position !== undefined && op.position !== "top" && op.position !== "center" && op.position !== "bottom") return fail("add-graphic position must be top, center or bottom");
         if (op.color !== undefined && !isHexColor(op.color)) return fail("color must be #RRGGBB");
-        return { type: "add-graphic", kind: op.kind, text: (op.text as string).trim(), ...(op.subtitle ? { subtitle: (op.subtitle as string).trim() } : {}), anchorAssetId: op.anchorAssetId, anchorSourceUs: op.anchorSourceUs as number, durationUs: op.durationUs as number, ...(op.position === undefined ? {} : { position: op.position as "top" | "center" | "bottom" }), ...(op.color === undefined ? {} : { color: (op.color as string).toUpperCase() }) };
+        return { type: "add-graphic", kind: op.kind, text: (op.text as string).trim(), ...(op.subtitle ? { subtitle: (op.subtitle as string).trim() } : {}), anchorAssetId: op.anchorAssetId, ...(typeof op.anchorClipId === "string" ? { anchorClipId: op.anchorClipId } : {}), anchorSourceUs: op.anchorSourceUs as number, durationUs: op.durationUs as number, ...(op.position === undefined ? {} : { position: op.position as "top" | "center" | "bottom" }), ...(op.color === undefined ? {} : { color: (op.color as string).toUpperCase() }) };
       }
       case "update-graphic":
         if (!isId(op.clipId) || (op.text === undefined && op.subtitle === undefined && op.color === undefined)) return fail("update-graphic needs clipId and text, subtitle or color");
@@ -409,7 +415,7 @@ export function parseTimelineOperations(value: unknown): TimelineOperation[] {
         if (!isId(op.assetId) || !isId(op.anchorAssetId) || !isUs(op.anchorSourceUs) || !isUs(op.durationUs) || (op.durationUs as number) < 200_000 || (op.durationUs as number) > 600_000_000) return fail("add-broll needs assetId, anchorAssetId, anchorSourceUs and a duration of 0.2s-10min");
         if (op.sourceStartUs !== undefined && !isUs(op.sourceStartUs)) return fail("add-broll sourceStartUs must be a non-negative integer");
         if (op.mode !== undefined && op.mode !== "full" && op.mode !== "pip" && op.mode !== "behind") return fail("add-broll mode must be full, pip or behind");
-        return { type: "add-broll", assetId: op.assetId, anchorAssetId: op.anchorAssetId, anchorSourceUs: op.anchorSourceUs as number, durationUs: op.durationUs as number, ...(op.sourceStartUs === undefined ? {} : { sourceStartUs: op.sourceStartUs as number }), ...(op.mode === undefined ? {} : { mode: op.mode as "full" | "pip" | "behind" }) };
+        return { type: "add-broll", assetId: op.assetId, anchorAssetId: op.anchorAssetId, ...(typeof op.anchorClipId === "string" ? { anchorClipId: op.anchorClipId } : {}), anchorSourceUs: op.anchorSourceUs as number, durationUs: op.durationUs as number, ...(op.sourceStartUs === undefined ? {} : { sourceStartUs: op.sourceStartUs as number }), ...(op.mode === undefined ? {} : { mode: op.mode as "full" | "pip" | "behind" }) };
       case "set-clip-effects": {
         if (!isId(op.clipId)) return fail("set-clip-effects needs clipId");
         const pick = <T extends string>(key: string, allowed: readonly T[]): T | undefined => { const v = op[key]; if (v === undefined) return undefined; if (typeof v !== "string" || !allowed.includes(v as T)) return fail(key + " must be one of " + allowed.join(", ")); return v as T; };
@@ -431,7 +437,7 @@ export function parseTimelineOperations(value: unknown): TimelineOperation[] {
         if (!isUs(op.durationUs) || (op.durationUs as number) < 200_000 || (op.durationUs as number) > 3_600_000_000) return fail("add-voiceover needs a duration of 0.2s-1h");
         if (op.volumeDb !== undefined && !(typeof op.volumeDb === "number" && op.volumeDb >= -30 && op.volumeDb <= 6)) return fail("add-voiceover volumeDb must be between -30 and 6");
         if (op.duck !== undefined && typeof op.duck !== "boolean") return fail("add-voiceover duck must be true or false");
-        return { type: "add-voiceover", assetId: op.assetId, anchorAssetId: op.anchorAssetId, anchorSourceUs: op.anchorSourceUs as number, durationUs: op.durationUs as number, ...(op.volumeDb === undefined ? {} : { volumeDb: op.volumeDb as number }), ...(op.duck === undefined ? {} : { duck: op.duck }) };
+        return { type: "add-voiceover", assetId: op.assetId, anchorAssetId: op.anchorAssetId, ...(typeof op.anchorClipId === "string" ? { anchorClipId: op.anchorClipId } : {}), anchorSourceUs: op.anchorSourceUs as number, durationUs: op.durationUs as number, ...(op.volumeDb === undefined ? {} : { volumeDb: op.volumeDb as number }), ...(op.duck === undefined ? {} : { duck: op.duck }) };
       case "set-background": {
         if (op.clipId !== undefined && !isId(op.clipId)) return fail("set-background clipId must be an id");
         if (typeof op.background !== "string" || !(BACKGROUNDS as readonly string[]).includes(op.background)) return fail("set-background background must be one of " + BACKGROUNDS.join(", "));
@@ -448,7 +454,7 @@ export function parseTimelineOperations(value: unknown): TimelineOperation[] {
         if (typeof op.kind !== "string" || !(SOUND_EFFECTS as readonly string[]).includes(op.kind)) return fail("add-sfx kind must be one of " + SOUND_EFFECTS.join(", "));
         if (!isId(op.anchorAssetId) || !isUs(op.anchorSourceUs)) return fail("add-sfx needs anchorAssetId and anchorSourceUs");
         if (op.volumeDb !== undefined && !(typeof op.volumeDb === "number" && op.volumeDb >= -40 && op.volumeDb <= 0)) return fail("add-sfx volumeDb must be between -40 and 0");
-        return { type: "add-sfx", kind: op.kind as (typeof SOUND_EFFECTS)[number], anchorAssetId: op.anchorAssetId, anchorSourceUs: op.anchorSourceUs as number, ...(op.volumeDb === undefined ? {} : { volumeDb: op.volumeDb as number }) };
+        return { type: "add-sfx", kind: op.kind as (typeof SOUND_EFFECTS)[number], anchorAssetId: op.anchorAssetId, ...(typeof op.anchorClipId === "string" ? { anchorClipId: op.anchorClipId } : {}), anchorSourceUs: op.anchorSourceUs as number, ...(op.volumeDb === undefined ? {} : { volumeDb: op.volumeDb as number }) };
       default:
         return fail("unknown operation type");
     }

@@ -34,7 +34,7 @@ export interface UploadDependencies {
 
 export function registerUploadRoutes(server: FastifyInstance, dependencies: UploadDependencies): void {
   server.register(multipart, { limits: { fileSize: 2_000_000_000, files: 1, fields: 8 } });
-  server.post("/v1/projects/:projectId/assets/upload", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } } as any, async (request: FastifyRequest, reply: FastifyReply) => {
+  server.post("/v1/projects/:projectId/assets/upload", { config: { rateLimit: { max: 40, timeWindow: "1 minute" } } } as any, async (request: FastifyRequest, reply: FastifyReply) => {
     const principal = await dependencies.authenticate(request);
     if (!principal) return error(reply, 401, "unauthorized", "Authentication required");
     const params = request.params as { projectId?: string };
@@ -93,7 +93,7 @@ export function registerUploadRoutes(server: FastifyInstance, dependencies: Uplo
         id: assetId, projectId, kind, storageKey: stored.key, checksumSha256: stored.checksumSha256,
         ...(info ? { durationUs: info.durationUs } : {}),
         metadata: {
-          filename: part.filename.slice(0, 255), mimeType: part.mimetype,
+          filename: part.filename.slice(0, 255), mimeType: part.mimetype, sizeBytes: stored.size,
           ...(needsProxy ? { proxyStatus: "pending" } : {}),
           ...(info ? { hasVideo: info.hasVideo, hasAudio: info.hasAudio, container: info.formatName.slice(0, 80), ...(info.width ? { width: info.width } : {}), ...(info.height ? { height: info.height } : {}), ...(info.frameRate ? { frameRate: info.frameRate } : {}), ...(info.videoCodec ? { videoCodec: info.videoCodec } : {}), ...(info.audioCodec ? { audioCodec: info.audioCodec } : {}) } : {}),
         },

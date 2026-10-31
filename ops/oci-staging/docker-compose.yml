@@ -99,6 +99,7 @@ services:
       WHISPER_MODEL: small
       # AI director (OpenAI). Without a key the built-in rules director is used.
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      IMAGE_MODEL: ${IMAGE_MODEL:-}
       DIRECTOR_MODEL: ${DIRECTOR_MODEL:-gpt-6.1-sol}
       # Free stock footage, photos and GIFs. Each source is skipped when its key is empty.
       PEXELS_API_KEY: ${PEXELS_API_KEY:-}

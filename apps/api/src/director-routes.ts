@@ -39,6 +39,7 @@ export function registerDirectorRoutes(server: FastifyInstance, dependencies: Di
   server.post("/v1/projects/:projectId/director/plan", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } } as never, async (request: FastifyRequest, reply: FastifyReply) => {
     const ctx = await context(request, reply);
     if (!ctx) return reply;
+    if (ctx.revision.tailoring?.constraints?.includes("creation:story")) return error(reply, 422, "storyboard_required", "Open Storyboard to rearrange this story or make a new plan. The single-video director cannot replace a mixed-media story.");
     const brief = typeof ctx.body.brief === "string" ? ctx.body.brief.trim().slice(0, 2000) : "";
     if (brief.length < 3) return error(reply, 400, "invalid_request", "Describe what the video is about and what you want");
     const plan = await dependencies.director.plan(await directorInput(ctx, brief, request));
@@ -52,6 +53,7 @@ export function registerDirectorRoutes(server: FastifyInstance, dependencies: Di
   server.post("/v1/projects/:projectId/director/ask", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } } as never, async (request: FastifyRequest, reply: FastifyReply) => {
     const ctx = await context(request, reply);
     if (!ctx) return reply;
+    if (ctx.revision.tailoring?.constraints?.includes("creation:story")) return error(reply, 422, "storyboard_required", "Open Storyboard to rearrange this story or make a new plan. The single-video director cannot replace a mixed-media story.");
     const instruction = typeof ctx.body.instruction === "string" ? ctx.body.instruction.trim().slice(0, 500) : "";
     if (instruction.length < 3) return error(reply, 400, "invalid_request", "Say what you would like to change");
     const brief = ctx.revision.tailoring?.intent ?? "";
@@ -83,6 +85,7 @@ export function registerDirectorRoutes(server: FastifyInstance, dependencies: Di
     const project = await dependencies.projects.get(ctx.projectId);
     if (project && project.revision !== ctx.revision.revision) return error(reply, 409, "revision_conflict", "Revision " + project.revision + " is newer; reload before applying");
     if (!Array.isArray(ctx.body.accepted) || !ctx.body.accepted.every((id) => typeof id === "string")) return error(reply, 400, "invalid_request", "accepted must list suggestion ids");
+    if (ctx.revision.tailoring?.constraints?.includes("creation:story")) return error(reply, 422, "storyboard_required", "Open Storyboard to rearrange this story or make a new plan. The single-video director cannot replace a mixed-media story.");
     const incoming = (ctx.body.plan ?? {}) as DirectorPlan;
     // The plan comes back from the browser, so it is validated again against this project's bounds.
     const plan = sanitizePlan(incoming, { brief: "", durationS: ctx.durationS, frame: { width: 0, height: 0 }, transcript: [], candidates: [], frames: [], assets: ctx.others }, incoming.source === "ai" ? "ai" : "rules");
@@ -193,8 +196,8 @@ function contextOf(dependencies: DirectorRouteDependencies) {
     const main = assets.find((asset) => asset.id === mainClip?.assetId);
     if (!mainClip || !main) { error(reply, 400, "invalid_request", "Add your video to the timeline first"); return null; }
     const transcript = await dependencies.transcripts.listForAsset(main.id);
-    if (!transcript.length) { error(reply, 409, "transcript_required", "Transcribe the video first so the director can hear what is said"); return null; }
-    const durationS = (main.durationUs ?? Math.max(...transcript.map((s) => s.endUs))) / 1_000_000;
+    if (!transcript.length && !revision.tailoring?.constraints?.includes("creation:story")) { error(reply, 409, "transcript_required", "Transcribe the video first so the director can hear what is said"); return null; }
+    const durationS = (main.durationUs ?? (revision.tailoring?.constraints?.includes("creation:story") ? mainClip.sourceEndUs : Math.max(...transcript.map((s) => s.endUs)))) / 1_000_000;
     const others = assets.filter((asset) => asset.id !== main.id && (asset.kind === "image" || asset.kind === "video")).map((asset) => ({ id: asset.id, kind: asset.kind as "image" | "video", name: String(asset.metadata.filename ?? asset.kind).slice(0, 80) }));
     return { principal, projectId, body, revision, main, transcript, durationS, others };
   };
@@ -205,6 +208,10 @@ export function registerCheckRoutes(server: FastifyInstance, dependencies: Direc
   server.post("/v1/projects/:projectId/director/check", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } } as never, async (request: FastifyRequest, reply: FastifyReply) => {
     const ctx = await context(request, reply);
     if (!ctx) return reply;
+    if (ctx.revision.tailoring?.constraints?.includes("creation:story")) {
+      const issues = checkEdit({ timeline: ctx.revision.timeline, assetId: ctx.main.id, words: [], sourceDurationUs: Math.round(ctx.durationS * 1e6), platform: String(ctx.body.platform ?? "tiktok") });
+      return { issues, ai: false, scanned: false, note: "Built-in timing and text checks only. Watch the complete storyboard and listen to the narration before export; this mixed-media story has not had an AI picture review." };
+    }
     const timeline = ctx.revision.timeline;
     const words = ctx.transcript.flatMap((segment) => segment.words);
     const pieces = timeline.tracks.filter((t) => t.kind === "video").flatMap((t) => t.clips).sort((a, b) => a.timelineStartUs - b.timelineStartUs);

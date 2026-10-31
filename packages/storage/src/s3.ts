@@ -61,10 +61,11 @@ export class S3ObjectStorage implements ObjectStorage {
     return objects;
   }
 
-  async downloadToFile(key: string, destinationPath: string): Promise<void> {
-    const response = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
+  async downloadToFile(key: string, destinationPath: string, options: { signal?: AbortSignal } = {}): Promise<void> {
+    options.signal?.throwIfAborted();
+    const response = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }), { ...(options.signal ? { abortSignal: options.signal } : {}) });
     if (!response.Body || !("transformToWebStream" in response.Body)) throw new Error("S3 object did not return a stream");
-    await pipeline(response.Body.transformToWebStream(), createWriteStream(destinationPath, { flags: "wx" }));
+    await pipeline(response.Body.transformToWebStream(), createWriteStream(destinationPath, { flags: "wx" }), { ...(options.signal ? { signal: options.signal } : {}) });
   }
 
   async remove(key: string): Promise<void> {

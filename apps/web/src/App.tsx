@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { Creation, type CreationMode } from "./Creation.js";
 import { LivePreview, type LivePreviewHandle } from "./LivePreview.js";
 import { StockSearch } from "./StockSearch.js";
 import { VoiceOver } from "./VoiceOver.js";
@@ -50,7 +51,7 @@ const MODES = [
   { id: "audio", label: "Audio" }, { id: "brand", label: "Brand" }, { id: "review", label: "Review" },
 ] as const;
 type Mode = (typeof MODES)[number]["id"];
-type Screen = "projects" | "describe" | "plan" | "edit" | "check" | "export";
+type Screen = "choose" | "create" | "projects" | "describe" | "plan" | "edit" | "check" | "export";
 /** Ruler ticks every 1/2/5/10/15/30/60 s so that there are about 6–12 of them. */
 function rulerTicks(durationUs: number): number[] {
   const total = Math.max(1, durationUs / 1e6);
@@ -119,7 +120,7 @@ export function App() {
   const [captionDrafts, setCaptionDrafts] = useState<Record<string, string>>({});
   const [previewMode, setPreviewMode] = useState<"edit" | "source" | "render">("edit");
   const liveRef = useRef<LivePreviewHandle | null>(null);
-  const recordAnchor = useRef<{ anchorAssetId: string; anchorSourceUs: number; where: string } | undefined>(undefined);
+  const recordAnchor = useRef<{ anchorAssetId: string; anchorClipId?: string | undefined; anchorSourceUs: number; where: string } | undefined>(undefined);
   const liveUsRef = useRef(0);
   const lastLiveReport = useRef(0);
   const [liveUs, setLiveUs] = useState(0);
@@ -149,6 +150,7 @@ export function App() {
   const [transcribing, setTranscribing] = useState<{ assetId: string; promise: Promise<void> } | null>(null);
   const [selection, setSelection] = useState<{ from: number; to: number } | null>(null);
   const [newName, setNewName] = useState("");
+  const [creationMode, setCreationMode] = useState<CreationMode>("footage");
   const [askText, setAskText] = useState("");
   const [askPlan, setAskPlan] = useState<DirectorPlan | null>(null);
   const [askPicked, setAskPicked] = useState<Record<string, boolean>>({});
@@ -315,37 +317,37 @@ export function App() {
     if (edge === "start") trimSelectedClip(at - selectedClip.sourceStartUs, 0); else trimSelectedClip(0, at - selectedClip.sourceEndUs);
   }
   /** Anchor point: the selected words, else the playhead, else the selected clip's start. */
-  function anchorPoint(): { anchorAssetId: string; anchorSourceUs: number; where: string } | undefined {
+  function anchorPoint(): { anchorAssetId: string; anchorClipId?: string | undefined; anchorSourceUs: number; where: string } | undefined {
     if (selection && segmentsFor && words[selection.from]) {
       const at = words[Math.min(selection.from, selection.to)]!.startUs;
       if (sourceToTimeline(videoClips, segmentsFor, at) !== undefined) return { anchorAssetId: segmentsFor, anchorSourceUs: at, where: "at the selected words" };
     }
     if (previewMode === "edit" && !selectedClip) {
       const at = timelineToSource(videoClips, liveUsRef.current);
-      if (at) return { anchorAssetId: at.assetId, anchorSourceUs: Math.round(at.sourceUs), where: "at the playhead" };
+      if (at) return { anchorAssetId: at.assetId, anchorClipId: videoClips.find(c => liveUsRef.current >= c.timelineStartUs && liveUsRef.current < c.timelineEndUs)?.id, anchorSourceUs: Math.round(at.sourceUs), where: "at the playhead" };
     }
     const anchorClip = selectedClip ?? videoClips[0];
     if (!anchorClip) return undefined;
     const player = playerRef.current;
     const playheadUs = player && previewMode === "source" && sourceUrl ? Math.round(player.currentTime * 1_000_000) : anchorClip.sourceStartUs;
     const inside = videoClips.some((clip) => clip.assetId === anchorClip.assetId && playheadUs >= clip.sourceStartUs && playheadUs < clip.sourceEndUs);
-    return { anchorAssetId: anchorClip.assetId, anchorSourceUs: inside ? playheadUs : anchorClip.sourceStartUs, where: inside ? "at the playhead" : "at the start of the selected clip" };
+    return { anchorAssetId: anchorClip.assetId, anchorClipId: anchorClip.id, anchorSourceUs: inside ? playheadUs : anchorClip.sourceStartUs, where: inside ? "at the playhead" : "at the start of the selected clip" };
   }
   function addBroll(assetId = brollAssetId) {
     const anchor = anchorPoint();
     if (!anchor) { setStatus("Add a video clip first"); return; }
-    void applyEdit([{ type: "add-broll", assetId, anchorAssetId: anchor.anchorAssetId, anchorSourceUs: anchor.anchorSourceUs, durationUs: Math.round(brollSeconds * 1_000_000), mode: brollMode }], "Cutaway added " + anchor.where);
+    void applyEdit([{ type: "add-broll", assetId, anchorAssetId: anchor.anchorAssetId, ...(anchor.anchorClipId ? { anchorClipId: anchor.anchorClipId } : {}), anchorSourceUs: anchor.anchorSourceUs, durationUs: Math.round(brollSeconds * 1_000_000), mode: brollMode }], "Cutaway added " + anchor.where);
   }
   function addSoundEffect() {
     const anchor = anchorPoint();
     if (!anchor) { setStatus("Add a video clip first"); return; }
-    void applyEdit([{ type: "add-sfx", kind: sfxKind, anchorAssetId: anchor.anchorAssetId, anchorSourceUs: anchor.anchorSourceUs }], (SFX_LABEL[sfxKind] ?? "Sound") + " added " + anchor.where);
+    void applyEdit([{ type: "add-sfx", kind: sfxKind, anchorAssetId: anchor.anchorAssetId, ...(anchor.anchorClipId ? { anchorClipId: anchor.anchorClipId } : {}), anchorSourceUs: anchor.anchorSourceUs }], (SFX_LABEL[sfxKind] ?? "Sound") + " added " + anchor.where);
   }
   function addGraphic(text = gfxText, kind = gfxKind) {
     const anchor = anchorPoint();
     if (!anchor) { setStatus("Add a video clip first"); return; }
     if (!text.trim()) { setStatus("Enter the text first"); return; }
-    void applyEdit([{ type: "add-graphic", kind, text: text.trim(), ...(gfxSubtitle.trim() && kind !== "callout" ? { subtitle: gfxSubtitle.trim() } : {}), anchorAssetId: anchor.anchorAssetId, anchorSourceUs: anchor.anchorSourceUs, durationUs: Math.round(gfxSeconds * 1_000_000), position: kind === "lower-third" ? "bottom" : gfxPosition, color: gfxColor }], (kind === "title" ? "Title" : kind === "callout" ? "Callout" : "Name caption") + " added " + anchor.where).then((ok) => { if (ok) { setGfxText(""); setGfxSubtitle(""); } });
+    void applyEdit([{ type: "add-graphic", kind, text: text.trim(), ...(gfxSubtitle.trim() && kind !== "callout" ? { subtitle: gfxSubtitle.trim() } : {}), anchorAssetId: anchor.anchorAssetId, ...(anchor.anchorClipId ? { anchorClipId: anchor.anchorClipId } : {}), anchorSourceUs: anchor.anchorSourceUs, durationUs: Math.round(gfxSeconds * 1_000_000), position: kind === "lower-third" ? "bottom" : gfxPosition, color: gfxColor }], (kind === "title" ? "Title" : kind === "callout" ? "Callout" : "Name caption") + " added " + anchor.where).then((ok) => { if (ok) { setGfxText(""); setGfxSubtitle(""); } });
   }
   /** Composes an instrumental for the saved cut (its length, lifting at its cuts) and lays it under the video. */
   async function generateMusicBed() {
@@ -483,7 +485,7 @@ export function App() {
     setRenderJobId(""); setRenderJobStatus(""); setRenderUrl(""); setBrief("");
   }
 
-  async function createProject() {
+  async function createProject(nextMode: CreationMode = "footage") {
     const name = (newName.trim() || "Video " + new Date().toLocaleDateString(undefined, { day: "numeric", month: "short" }) + " " + new Date().toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })).replace(/\s+/g, " ");
     // Same rule as the server: names are unique per person, ignoring case and extra spaces.
     const clash = projects.find((project) => project.name.trim().replace(/\s+/g, " ").toLowerCase() === name.toLowerCase());
@@ -494,7 +496,7 @@ export function App() {
       resetProjectState();
       setProjectId(result.project.id); setProjectName(result.project.name); remember(LAST_PROJECT_KEY, result.project.id);
       setProjects((current) => [...current.filter((project) => project.id !== result.project.id), result.project]);
-      setNewName(""); setScreen("describe");
+      setNewName(""); setCreationMode(nextMode); remember("videocraft.creation.v1." + result.project.id, nextMode); setScreen(nextMode === "footage" ? "describe" : "create");
       setStatus("Project created");
     } catch (error) { setStatus(errorMessage(error)); }
     finally { setBusy(false); }
@@ -524,6 +526,9 @@ export function App() {
         project.revision > 0 ? request("/v1/projects/" + project.id + "/revisions/" + project.revision) : Promise.resolve(null),
       ]);
       setAssets(assetResult.assets);
+      const savedMode = recall("videocraft.creation.v1." + project.id);
+      const projectMode: CreationMode = savedMode === "story" || savedMode === "idea" ? savedMode : revisionResult?.revision.tailoring?.constraints?.includes("creation:story") ? "story" : "footage";
+      setCreationMode(projectMode);
       const opened: Timeline = revisionResult ? revisionResult.revision.timeline : { durationUs: 0, tracks: [] };
       setTimeline(opened);
       previousRevision.current = project.revision;
@@ -537,7 +542,7 @@ export function App() {
       } catch { /* Ignore invalid local cache, never trust it as export authorization. */ }
       if (revisionResult?.revision.tailoring?.intent) setBrief(revisionResult.revision.tailoring.intent);
       const hasCut = (opened.tracks.find((track) => track.kind === "video")?.clips.length ?? 0) > 0;
-      const target: Screen = preferred && (hasCut || preferred === "describe") ? preferred : hasCut ? "edit" : "describe";
+      const target: Screen = preferred && ["describe", "create", "plan", "edit", "check", "export"].includes(preferred) && (hasCut || preferred === "describe" || preferred === "create") ? preferred : hasCut ? "edit" : projectMode === "footage" ? "describe" : "create";
       setScreen(target === "plan" ? (hasCut ? "edit" : "describe") : target);
       setStatus("Opened " + project.name);
     } catch (error) { setStatus(errorMessage(error)); }
@@ -734,6 +739,7 @@ export function App() {
   }
 
   async function planVideo() {
+    if (creationMode !== "footage") { setScreen("create"); return; }
     const video = mainVideo;
     if (!projectId || !video) { setStatus("Upload a video first"); return; }
     if (!brief.trim()) { setStatus("Describe the video first: what it is about, who it is for, and where it will go"); document.querySelector<HTMLTextAreaElement>("#brief")?.focus(); return; }
@@ -918,15 +924,15 @@ export function App() {
     { name: "Sound", kind: "audio", clips: timeline.tracks.filter((track) => track.kind === "audio").flatMap((track) => track.clips) },
   ].filter((lane) => lane.clips.length > 0 || lane.name === "Story");
   const steps: Array<{ label: string; screen: Screen; enabled: boolean; done: boolean }> = [
-    { label: "Upload", screen: "describe", enabled: true, done: hasVideo },
-    { label: "Describe", screen: "describe", enabled: hasVideo, done: edited },
+    { label: creationMode === "footage" ? "Upload" : "Storyboard", screen: "describe", enabled: true, done: hasVideo || edited },
+    ...(creationMode === "footage" ? [{ label: "Describe", screen: "describe" as Screen, enabled: hasVideo, done: edited }] : []),
     { label: "Edit", screen: "edit", enabled: edited, done: edited && Boolean(check) },
     { label: "Check", screen: "check", enabled: edited, done: Boolean(check) && check?.revision === revision },
     { label: "Export", screen: "export", enabled: edited, done: Boolean(renderUrl) },
   ];
   const stepBar = <nav aria-label="Workflow" className="steps">{steps.map((step, index) => {
-    const isCurrent = index === 0 ? screen === "describe" && !hasVideo : index === 1 ? (screen === "describe" && hasVideo) || screen === "plan" : index === 2 ? screen === "edit" : index === 3 ? screen === "check" : screen === "export";
-    return <button key={step.label} type="button" className={"step" + (isCurrent ? " current" : "") + (step.done && !isCurrent ? " done" : "")} aria-current={isCurrent ? "step" : undefined} disabled={!step.enabled || busy} onClick={() => setScreen(step.screen)}><span className="num" aria-hidden="true">{step.done && !isCurrent ? "✓" : index + 1}</span><span className="step-label">{step.label}</span></button>;
+    const isCurrent = creationMode === "footage" ? step.screen === screen && (step.label !== "Upload" || !hasVideo) && (step.label !== "Describe" || hasVideo) || (step.label === "Describe" && screen === "plan") : step.screen === "describe" ? screen === "create" : step.screen === screen;
+    return <button key={step.label} type="button" className={"step" + (isCurrent ? " current" : "") + (step.done && !isCurrent ? " done" : "")} aria-current={isCurrent ? "step" : undefined} disabled={!step.enabled || busy} onClick={() => setScreen(creationMode !== "footage" && step.screen === "describe" ? "create" : step.screen)}><span className="num" aria-hidden="true">{step.done && !isCurrent ? "✓" : index + 1}</span><span className="step-label">{step.label}</span></button>;
   })}</nav>;
 
   const statusPill = <div className="status-pill" role="status" aria-live="polite" title={status}><span className={"status-dot" + (busy ? " busy" : "")} />{status}</div>;
@@ -950,6 +956,16 @@ export function App() {
     </div>;
   }
 
+  if (screen === "choose") return <div className="app-shell" data-release={import.meta.env.VITE_RELEASE_SHA ?? "development"}>
+    <header className="topbar"><button className="btn" onClick={() => setScreen("projects")} disabled={busy}>Back to your videos</button><span className="brand">VideoCraft</span><div className="spacer" />{statusPill}</header>
+    <main className="page"><h1>What do you want to create?</h1><p className="muted">Choose a starting point. You can refine the result in the editor.</p>
+      <div className="creation-choices">{([
+        ["footage", "Edit my footage", "Start with a talk, interview, vlog, or existing video. Find highlights and improve the edit."],
+        ["story", "Tell a story", "Combine videos and photos. Add AI or human narration, stock visuals, music, and text."],
+        ["idea", "Create from an idea or script", "Describe your message. Review a storyboard, then choose stock, generated images, or your own visuals."],
+      ] as const).map(([id, title, description]) => <button type="button" className="card creation-choice" key={id} disabled={busy} onClick={() => void createProject(id)}><strong>{title}</strong><span className="muted">{description}</span></button>)}</div>
+    </main></div>;
+
   // ── Videos (projects) ─────────────────────────────────────────────────────────────────────
   if (screen === "projects" || !projectId) {
     const sorted = [...projects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -958,7 +974,7 @@ export function App() {
       <main className="page">
         <div className="page-head">
           <div><h1>Your videos</h1><p className="muted">Pick up where you left off, or start a new one.</p></div>
-          <form className="new-video" onSubmit={(event) => { event.preventDefault(); void createProject(); }}>
+          <form className="new-video" onSubmit={(event) => { event.preventDefault(); setScreen("choose"); }}>
             <label className="sr-only" htmlFor="new-name">Name for the new video</label>
             <input id="new-name" placeholder="Name (optional)" value={newName} maxLength={120} onChange={(event) => setNewName(event.target.value)} />
             <button type="submit" className="primary" disabled={busy}>New video</button>
@@ -998,11 +1014,17 @@ export function App() {
       if (saved.time > 0 && saved.time < player.duration) player.currentTime = saved.time;
       if (saved.playing) void player.play().catch(() => setStatus("Tap Play to resume the refreshed export."));
       exportPosition.current = { time: 0, playing: false };
-    }} src={renderUrl} onError={() => { setStatus("Export playback failed. Refresh the export link or download the file to try your device player."); }} /> : <span>{renderJobId ? "Exporting " + renderJobStatus : "Your exported video will play here"}</span>) : (sourceUrl ? <video ref={playerRef} controls playsInline src={sourceUrl} onTimeUpdate={stopAtClipEnd} /> : <span>{sourceNote || "Preparing the preview…"}</span>)}</div>}
+    }} src={renderUrl} onError={() => { setStatus("Export playback failed. Refresh the export link or download the file to try your device player."); }} /> : <span>{renderJobId ? "Exporting " + renderJobStatus : "Your exported video will play here"}</span>) : (sourceUrl ? (stillAssets[sourceAssetId] ? <img className="creation-preview" src={sourceUrl} alt="Original photo" /> : <video ref={playerRef} controls playsInline src={sourceUrl} onTimeUpdate={stopAtClipEnd} />) : <span>{sourceNote || "Preparing the preview…"}</span>)}</div>}
     {previewMode === "source" && sourceNote && sourceUrl && <p className="muted small">{sourceNote}</p>}
   </div>;
 
   // ── Upload & describe ────────────────────────────────────────────────────────────────────
+  if (screen === "create") return <div className="app-shell" data-release={import.meta.env.VITE_RELEASE_SHA ?? "development"}>{projectHeader}
+    <Creation key={projectId} projectId={projectId} revision={revision} mode={creationMode} assets={assets} apiBase={API} token={token} request={request} onWorking={setBusy}
+      onAsset={asset => setAssets(current => [...current.filter(a => a.id !== asset.id), { ...asset, storageKey: "" }])}
+      onReady={result => { setTimeline(result.revision.timeline); setRevision(result.revision.revision); setBrief(result.revision.tailoring?.intent ?? ""); setPlatform(result.platform); setPreviewMode("edit"); setScreen("edit"); setStatus("Story assembled. Play it through before exporting."); void request("/v1/projects/" + projectId + "/assets").then(r => setAssets(r.assets)).catch(error => setStatus("Story saved, but media refresh failed: " + errorMessage(error))); }} />
+    </div>;
+
   if (screen === "describe") {
     const transcribed = Boolean(mainVideo && segmentsFor === mainVideo.id);
     return <div className="app-shell" data-release={import.meta.env.VITE_RELEASE_SHA ?? "development"}>{projectHeader}
@@ -1148,7 +1170,7 @@ export function App() {
   }
 
   // ── Edit ────────────────────────────────────────────────────────────────────────────────
-  const modePane = mode === "story" ? <section className="pane transcript" aria-label="Transcript">
+  const modePane = mode === "story" && creationMode !== "footage" ? <section className="pane" aria-label="Story pieces"><div className="pane-head"><h2>Story</h2><span className="muted small">{videoClips.length} pieces</span></div><div className="pad stack"><p className="muted small">Select a piece to change its length, order, look, or transition. Open Storyboard to change the plan and narration.</p>{videoClips.map((clip, i) => <button className="btn" key={clip.id} disabled={busy} onClick={() => { setSelectedClipId(clip.id); setPreviewMode("edit"); liveRef.current?.seek(clip.timelineStartUs); }}>{i + 1}. {assetName(clip.assetId)} · {formatSeconds(clip.timelineEndUs - clip.timelineStartUs)}</button>)}</div></section> : mode === "story" ? <section className="pane transcript" aria-label="Transcript">
       <div className="pane-head"><h2>Story</h2><span className="muted small">{formatClock(keptUs)} kept{mainVideo?.durationUs ? " of " + formatClock(mainVideo.durationUs) : ""}</span></div>
       {words.length === 0 ? <p className="muted pad">{transcribing ? "Listening to the video… the transcript appears here." : "No transcript yet."}</p> : <>
         <p className="muted small pad">Click a word, shift-click another to select the words between. Cut words are struck through.</p>
@@ -1238,7 +1260,7 @@ export function App() {
             // A recording starts where the playhead was when recording began.
             const anchor = recordAnchor.current ?? anchorPoint(); recordAnchor.current = undefined;
             if (!anchor) { setStatus("Add a video clip first"); return; }
-            void applyEdit([{ type: "add-voiceover", assetId: asset.id, anchorAssetId: anchor.anchorAssetId, anchorSourceUs: anchor.anchorSourceUs, durationUs: Math.max(200_000, Number(asset.durationUs ?? 0) || 3_000_000), volumeDb: options.volumeDb, duck: options.duck }], "Voice-over added " + anchor.where);
+            void applyEdit([{ type: "add-voiceover", assetId: asset.id, anchorAssetId: anchor.anchorAssetId, ...(anchor.anchorClipId ? { anchorClipId: anchor.anchorClipId } : {}), anchorSourceUs: anchor.anchorSourceUs, durationUs: Math.max(200_000, Number(asset.durationUs ?? 0) || 3_000_000), volumeDb: options.volumeDb, duck: options.duck }], "Voice-over added " + anchor.where);
           }} />
         {voiceovers.length > 0 && <ul className="item-list">{voiceovers.map((clip) => <li key={clip.id}><span>{formatSeconds(clip.timelineStartUs)}–{formatSeconds(clip.timelineEndUs)} · {assetName(clip.assetId)}</span><button className="btn" onClick={() => void applyEdit([{ type: "remove-clip", clipId: clip.id, reason: "Voice-over removed" }], "Voice-over removed")} disabled={busy}>Remove</button></li>)}</ul>}
         <h3>Sound effects</h3>
@@ -1268,7 +1290,7 @@ export function App() {
         <button className="btn" onClick={() => trimSelectedClip(-500_000, 0)} disabled={busy}>Start −0.5s</button>
         <button className="btn" onClick={() => trimSelectedClip(0, -500_000)} disabled={busy}>Trim end −0.5s</button>
         <button className="btn" onClick={() => trimSelectedClip(0, 500_000)} disabled={busy}>End +0.5s</button>
-        {sourceUrl && <><button className="btn" onClick={() => trimToPlayhead("start")} disabled={busy}>Start at playhead</button><button className="btn" onClick={() => trimToPlayhead("end")} disabled={busy}>End at playhead</button><button className="btn" onClick={playSelectedClip}>Play clip</button></>}
+        {sourceUrl && !stillAssets[selectedClip.assetId] && <><button className="btn" onClick={() => trimToPlayhead("start")} disabled={busy}>Start at playhead</button><button className="btn" onClick={() => trimToPlayhead("end")} disabled={busy}>End at playhead</button><button className="btn" onClick={playSelectedClip}>Play clip</button></>}
       </div>
       <div className="clip-effects stack">
         <label>Zoom<select value={String(selectedClip.transform?.zoom ?? "none")} disabled={busy} onChange={(event) => void applyEdit([{ type: "set-clip-effects", clipId: selectedClip.id, zoom: event.target.value }], "Zoom: " + (ZOOM_LABEL[event.target.value] ?? event.target.value))}>{Object.entries(ZOOM_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
@@ -1291,11 +1313,11 @@ export function App() {
         <div className="work-top">
           {modePane}
           <section className="pane preview-pane" aria-label="Preview">{player}
-            <form className="ask" onSubmit={(event) => { event.preventDefault(); void askDirector(); }}>
+            {creationMode !== "footage" ? <button className="btn" disabled={busy} onClick={() => setScreen("create")}>Open storyboard</button> : <form className="ask" onSubmit={(event) => { event.preventDefault(); void askDirector(); }}>
               <label htmlFor="ask" className="ask-label">Ask</label>
               <input id="ask" value={askText} maxLength={500} placeholder="Change anything… “make it shorter”, “warmer look”, “remove the part about pricing”" onChange={(event) => setAskText(event.target.value)} disabled={busy || revision === 0} />
               <button type="submit" className="primary" disabled={busy || revision === 0 || askText.trim().length < 3}>Go</button>
-            </form>
+            </form>}
             {askPlan && <div className="card ask-result" aria-label="Suggested changes">
               <div className="row-between"><strong>{askPlan.summary}</strong><span className="tag">{askPlan.source === "ai" ? "AI director" : "Built-in director"}</span></div>
               {askPlan.note && <p className="note">{askPlan.note}</p>}

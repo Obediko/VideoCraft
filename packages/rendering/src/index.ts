@@ -123,8 +123,13 @@ export class FfmpegCommandPlanner {
     for (const [index, clip] of clips.entries()) {
       const length = (clip.sourceEndUs - clip.sourceStartUs) / 1_000_000;
       if (!(length > 0)) throw new Error("Clip has an invalid source range");
-      if (!audioPresent.has(clip.assetId)) audioPresent.set(clip.assetId, this.assets.hasAudio ? await this.assets.hasAudio(clip.assetId) : false);
-      addInput(await this.assets.resolve(clip.assetId), ["-ss", seconds(clip.sourceStartUs), "-t", (length + runOn[index]!).toFixed(6), ...(splitEmbeddedAudio ? ["-an"] : [])]);
+      // Stills have no media duration or audio stream. Detect them before the
+      // worker's duration-requiring video/audio probe runs.
+      const still = this.assets.isStill ? await this.assets.isStill(clip.assetId) : false;
+      if (!audioPresent.has(clip.assetId)) audioPresent.set(clip.assetId, !still && this.assets.hasAudio ? await this.assets.hasAudio(clip.assetId) : false);
+      addInput(await this.assets.resolve(clip.assetId), still
+        ? ["-loop", "1", "-framerate", String(fps), "-t", (length + runOn[index]!).toFixed(6)]
+        : ["-ss", seconds(clip.sourceStartUs), "-t", (length + runOn[index]!).toFixed(6), ...(splitEmbeddedAudio || clip.transform?.muteSource === true ? ["-an"] : [])]);
     }
 
     let nextInput = clips.length;
@@ -134,7 +139,7 @@ export class FfmpegCommandPlanner {
     const embeddedAudioInputs = new Map<number, number>();
     if (splitEmbeddedAudio) {
       for (const [index, clip] of clips.entries()) {
-        if (!audioPresent.get(clip.assetId)) continue;
+        if (!audioPresent.get(clip.assetId) || clip.transform?.muteSource === true) continue;
         embeddedAudioInputs.set(index, nextInput++);
         addInput(await this.assets.resolve(clip.assetId), ["-ss", seconds(clip.sourceStartUs), "-t", seconds(clip.sourceEndUs - clip.sourceStartUs), "-vn"]);
       }
@@ -231,7 +236,7 @@ export class FfmpegCommandPlanner {
     };
     const fits = await Promise.all(clips.map((clip, index) => fitFor(clip, index)));
 
-    const useEmbeddedAudio = !externalAudio && [...audioPresent.values()].some(Boolean);
+    const useEmbeddedAudio = !externalAudio && clips.some(clip => audioPresent.get(clip.assetId) && clip.transform?.muteSource !== true);
     const filters: string[] = [];
     const concatInputs: string[] = [];
     const matteConcat: string[] = [];
@@ -274,7 +279,7 @@ export class FfmpegCommandPlanner {
         concatInputs.push("[vx" + index + "]");
       } else concatInputs.push("[v" + index + "]");
       if (useEmbeddedAudio) {
-        if (audioPresent.get(clip.assetId)) {
+        if (audioPresent.get(clip.assetId) && clip.transform?.muteSource !== true) {
           const fade = Math.min(0.015, length / 4).toFixed(3);
           filters.push("[" + (embeddedAudioInputs.get(index) ?? index) + ":a]asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,atrim=duration=" + length.toFixed(6) + ",afade=t=in:d=" + fade + ",afade=t=out:st=" + Math.max(0, length - Number(fade)).toFixed(3) + ":d=" + fade + "[a" + index + "]");
         } else {

@@ -73,3 +73,14 @@ test('attachment URLs carry a signed filename and reject header injection', asyn
   await assert.rejects(storage.createDownloadUrl('out.mp4',300,{filename:'bad\r\nheader'}),/filename/);
   client.destroy();
 });
+
+
+test("a cancelled media sample aborts an S3 download before starting or while waiting for headers", async () => {
+  const c = new AbortController(); let calls = 0;
+  const client = { send: async (_, options) => { calls++; assert.equal(options.abortSignal, c.signal); return new Promise((resolve, reject) => { options.abortSignal.addEventListener("abort", () => reject(options.abortSignal.reason), { once: true }); queueMicrotask(() => c.abort(new Error("sampling cancelled"))); }); } };
+  const storage = new S3ObjectStorage({ bucket: "test", region: "auto", client });
+  await assert.rejects(storage.downloadToFile("object", "/unused", { signal: c.signal }), /sampling cancelled/);
+  assert.equal(calls, 1);
+  await assert.rejects(storage.downloadToFile("object", "/unused", { signal: c.signal }), /sampling cancelled/);
+  assert.equal(calls, 1, "an already aborted sample must not start another request");
+});

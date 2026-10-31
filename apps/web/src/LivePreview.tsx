@@ -41,6 +41,8 @@ function mediaFailure(code: number): string {
 
 export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePreview({ tracks, durationUs, urls, shape, fit, output, captionStyle = "bold-pop", faces, sizes, mattes, stills, onTime, onRetryMatte, onRetryMedia, mediaErrors }, ref) {
   const video = useRef<HTMLVideoElement | null>(null);
+  const photo = useRef<HTMLImageElement | null>(null);
+  const photoClock = useRef({ time: 0, localUs: 0 });
   const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
   const snapRef = useRef<HTMLCanvasElement | null>(null);
   const snapFor = useRef(-1);
@@ -48,6 +50,7 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
   const [tUs, setT] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [playbackError, setPlaybackError] = useState("");
+  const [mediaAttempt, setMediaAttempt] = useState(0);
   const loadGeneration = useRef(0);
   const pendingMetadata = useRef<(() => void) | null>(null);
   const clips = useMemo(() => [...(tracks.find((t) => t.kind === "video")?.clips ?? [])].sort((a, b) => a.timelineStartUs - b.timelineStartUs), [tracks]);
@@ -74,6 +77,12 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
     pendingMetadata.current = null;
     const url = urls[clip.assetId];
     if (!url) return;
+    if (stills?.[clip.assetId]) {
+      el.pause();
+      photoClock.current = { time: performance.now(), localUs };
+      return;
+    }
+    el.volume = clip.transform?.muteSource === true ? 0 : 1;
     if (el.dataset.src !== url || el.error) { el.dataset.src = url; el.src = url; el.load(); }
     const at = (clip.sourceStartUs + localUs) / 1e6;
     const go = () => { if (generation === loadGeneration.current) el.currentTime = at; };
@@ -87,6 +96,7 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
   }
 
   function retryMedia() {
+    setMediaAttempt(n => n + 1);
     loadGeneration.current += 1;
     setPlaying(false); music.current?.pause(); setPlaybackError("");
     const el = video.current;
@@ -110,6 +120,17 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
 
   // Keep the picture on the right frame when the edit changes.
   useEffect(() => { seek(tRef.current); }, [clips, urls]);
+
+  useEffect(() => {
+    const hide = () => {
+      if (!document.hidden) return;
+      video.current?.pause(); music.current?.pause();
+      for (const el of Object.values(voiceEls.current)) el?.pause();
+      setPlaying(false);
+    };
+    document.addEventListener("visibilitychange", hide);
+    return () => document.removeEventListener("visibilitychange", hide);
+  }, []);
 
   // Sound effects play when the playhead reaches them, at their own volume (made in the browser, like the export's).
   useEffect(() => {
@@ -143,7 +164,7 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
         if (el.paused) void el.play().catch(() => undefined);
       } else if (!el.paused) el.pause();
     }
-    if (video.current) video.current.volume = ducked ? 0.2 : 1;
+    if (video.current) video.current.volume = clips[clipAt(tUs)]?.transform?.muteSource === true ? 0 : ducked ? 0.2 : 1;
     if (music.current && musicClip) music.current.volume = Math.min(1, Math.pow(10, Number(musicClip.transform?.volumeDb ?? -16) / 20) * 1.6) * (ducked ? 0.2 : 1);
   }, [tUs, playing]);
 
@@ -151,18 +172,23 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
   useEffect(() => {
     if (!playing) return;
     let frame = 0;
+    let lastTick = performance.now();
     const tick = () => {
       const el = video.current; const clip = clips[indexRef.current];
       if (el && clip) {
-        const sourceUs = el.currentTime * 1e6;
-        if (sourceUs >= clip.sourceEndUs - 20_000 || el.ended) {
+        const now = performance.now();
+        const still = stills?.[clip.assetId] === true;
+        if (still && (!photo.current?.complete || !photo.current.naturalWidth || document.hidden)) photoClock.current.time += now - lastTick;
+        lastTick = now;
+        const sourceUs = still ? clip.sourceStartUs + photoClock.current.localUs + Math.max(0, now - photoClock.current.time) * 1000 : el.currentTime * 1e6;
+        if (sourceUs >= clip.sourceEndUs - 20_000 || (!still && el.ended)) {
           const next = indexRef.current + 1;
           if (next >= clips.length) { el.pause(); music.current?.pause(); setPlaying(false); report(durationUs); return; }
           // A blend into the next clip shows this clip's last frame over the start of the next, as the export overlaps them.
           const snap = snapRef.current;
-          if (snap && el.videoWidth && blendAt(clips, clips[next]!.timelineStartUs + 1)) {
-            snap.width = el.videoWidth; snap.height = el.videoHeight;
-            try { snap.getContext("2d")?.drawImage(el, 0, 0, snap.width, snap.height); snapFor.current = next; } catch { snapFor.current = -1; }
+          if (snap && (still ? photo.current?.naturalWidth : el.videoWidth) && blendAt(clips, clips[next]!.timelineStartUs + 1)) {
+            snap.width = still ? photo.current!.naturalWidth : el.videoWidth; snap.height = still ? photo.current!.naturalHeight : el.videoHeight;
+            try { snap.getContext("2d")?.drawImage(still ? photo.current! : el, 0, 0, snap.width, snap.height); snapFor.current = next; } catch { snapFor.current = -1; }
           }
           load(next, 0, true);
           report(clips[next]!.timelineStartUs);
@@ -174,7 +200,7 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
     };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [playing, clips]);
+  }, [playing, clips, stills]);
 
   function toggle() {
     const el = video.current; if (!el) return;
@@ -276,11 +302,12 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
     <div className={"live-frame " + shape} aria-label="Live preview of the edit">
       <video ref={(el) => { video.current = el; if (el !== videoEl) setVideoEl(el); }} className="live-video" onLoadedData={() => setPlaybackError("")} onError={(event) => {
         const el = event.currentTarget;
-        if (!el.getAttribute("src") || !el.error) return;
+        if (!el.getAttribute("src") || !el.error || stills?.[clips[indexRef.current]?.assetId ?? ""]) return;
         setPlaying(false); music.current?.pause();
         const code = el.error.code;
         setPlaybackError(mediaFailure(code));
-      }} muted={false} playsInline preload="auto" style={{ objectFit: fit, ...(currentFocus ? { objectPosition: (currentFocus.x * 100).toFixed(1) + "% " + (currentFocus.y * 100).toFixed(1) + "%" } : {}), transform: zoom !== 1 ? "scale(" + zoom.toFixed(4) + ")" : undefined, transformOrigin: "50% 40%", filter: look, ...(compositing ? { opacity: 0 } : {}) }} />
+      }} muted={false} playsInline preload="auto" style={{ ...(stills?.[current?.assetId ?? ""] ? { visibility: "hidden" } : {}), objectFit: fit, ...(currentFocus ? { objectPosition: (currentFocus.x * 100).toFixed(1) + "% " + (currentFocus.y * 100).toFixed(1) + "%" } : {}), transform: zoom !== 1 ? "scale(" + zoom.toFixed(4) + ")" : undefined, transformOrigin: "50% 40%", filter: look, ...(compositing ? { opacity: 0 } : {}) }} />
+      {current && stills?.[current.assetId] && urls[current.assetId] && <img ref={photo} key={urls[current.assetId] + ":" + mediaAttempt} className="live-video live-photo" src={urls[current.assetId]} alt="Storyboard photo" onLoad={() => setPlaybackError("")} onError={() => { setPlaying(false); music.current?.pause(); setPlaybackError("The photo could not be loaded. Reload footage to retry."); }} style={{ objectFit: fit, filter: look, transform: zoom !== 1 ? "scale(" + zoom.toFixed(4) + ")" : undefined }} />}
       {compositing && <BackgroundLayer video={videoEl} matteUrl={matteUrl!} spec={background!} fit={fit} focus={currentFocus} zoom={zoom} filter={look} onError={() => setCutoutFailed(true)} />}
       <canvas ref={snapRef} className="live-snap" aria-hidden="true" style={blendStyle ?? { display: "none" }} />
       {background && (!matteUrl || cutoutFailed) && <span className="live-note">{cutoutExpired || cutoutFailed ? <>Cutout preview unavailable. Showing the original footage. <button type="button" onClick={() => { setCutoutFailed(false); setCutoutExpired(false); setCutoutAttempt((n) => n + 1); onRetryMatte?.(); }}>Retry cutout</button></> : "Cutting you out for the preview…"}</span>}
