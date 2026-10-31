@@ -179,6 +179,7 @@ export function sanitizePlan(raw: unknown, input: DirectorInput, source: Directo
     } else if (kind === "effect") {
       try {
         const recipe = parseEffectRecipe(s.recipe ?? { presetId: s.presetId, ...(s.text ? { text: s.text } : {}), ...(s.color ? { color: s.color } : {}), ...(s.durationS ? { durationS: s.durationS } : {}), ...(s.effectSound ? { sound: s.effectSound } : {}), ...(s.style ? { zoom: s.style } : {}) });
+        if (recipe.stock) return;
         const atS = num(s.atS);
         if (!(atS >= 0 && atS < input.durationS) || suggestions.filter(e => e.kind === "effect").length >= 3 || suggestions.some(e => e.kind === "effect" && Math.abs(e.atS - atS) < 4)) return;
         suggestions.push({ ...base(s, index), kind: "effect", recipe, atS });

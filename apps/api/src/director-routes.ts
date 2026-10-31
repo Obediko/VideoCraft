@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { applyTimelineOperations, parseTimelineOperations, type EffectLibraryRepository, type ProjectRevision, type TranscriptSegment, type UUID } from "@videocraft/domain";
+import { applyTimelineOperations, parseTimelineOperations, parseEffectRecipe, type EffectRecipe, type EffectLibraryRepository, type ProjectRevision, type TranscriptSegment, type UUID } from "@videocraft/domain";
 import type { AssetRepository, ProjectRepository, RevisionRepository } from "@videocraft/application";
 import type { ObjectStorage } from "@videocraft/storage";
 import { RuleDirector, briefHints, checkEdit, effectOperations, parseMediaSignals, planOperations, sanitizePlan, type CheckIssue, type Director, type DirectorInput, type DirectorPlan, type MediaSignals } from "@videocraft/director";
@@ -111,6 +111,7 @@ export function registerDirectorRoutes(server: FastifyInstance, dependencies: Di
     }
     // Free stock cutaways and typed voice-overs need the network, so they are made here, after the cut.
     const notes: string[] = [];
+    const stockRecipes: EffectRecipe[] = [];
     const kept = timeline.tracks.filter((t) => t.kind === "video").flatMap((t) => t.clips).filter((c) => c.assetId === ctx.main.id);
     const anchorAt = (atS: number) => { const at = Math.round(atS * 1e6); if (kept.some((c) => at >= c.sourceStartUs && at < c.sourceEndUs)) return at; const near = [...kept].sort((a, b) => Math.abs(a.sourceStartUs - at) - Math.abs(b.sourceStartUs - at))[0]; return near ? near.sourceStartUs + 100_000 : at; };
     const frame = ctx.revision.tailoring?.channel === "youtube" ? "landscape" : "portrait";
@@ -123,6 +124,7 @@ export function registerDirectorRoutes(server: FastifyInstance, dependencies: Di
           if (!dependencies.findStock && !dependencies.importStock) { notes.push("Stock search is not set up on the server, so \"" + s.query + "\" was skipped."); continue; }
           if (!asset) { notes.push("No free stock matched \"" + s.query + "\"."); continue; }
           timeline = applyTimelineOperations(timeline, [{ type: "add-broll", assetId: asset.id, anchorAssetId: ctx.main.id, anchorSourceUs: anchorAt(s.atS), durationUs: Math.round(s.durationS * 1e6), mode: s.mode }]);
+          if (s.pick && /^[0-9]{1,20}$/.test(s.pick.id) && ["pexels", "pixabay"].includes(s.pick.provider) && s.assetKind !== "gif") stockRecipes.push(parseEffectRecipe({ presetId: "stock-cutaway", text: s.query.slice(0, 80), durationS: Math.max(1, Math.min(6, s.durationS)), stock: { provider: s.pick.provider, id: s.pick.id, kind: s.assetKind, mode: s.mode } }));
         } else if (s.kind === "voiceover") {
           if (!dependencies.speak) { notes.push("Typed voice-overs need the OpenAI key; record yours in Audio → Voice-over."); continue; }
           const asset = await dependencies.speak(ctx.projectId, s.text);
@@ -148,6 +150,10 @@ export function registerDirectorRoutes(server: FastifyInstance, dependencies: Di
       const host = timeline.tracks.filter(t => t.kind === "video").flatMap(t => t.clips).find(c => c.assetId === ctx.main.id && s.atS * 1e6 >= c.sourceStartUs && c.sourceEndUs - s.atS * 1e6 >= 1_000_000);
       if (host) try { await dependencies.effects.save(ctx.principal.userId, savedEffect(s.recipe)); }
       catch (caught) { request.log.warn({ err: caught }, "Effect library save failed"); notes.push("Your edit was saved, but this treatment could not be added to your library. Save it from Visuals to retry."); }
+    }
+    if (dependencies.effects) for (const recipe of stockRecipes) {
+      try { await dependencies.effects.save(ctx.principal.userId, savedEffect(recipe)); }
+      catch (caught) { request.log.warn({ err: caught }, "Stock treatment library save failed"); notes.push("The stock cutaway is in your edit, but could not be saved for reuse."); }
     }
     const platform = plan.suggestions.find((s) => s.kind === "platform" && accepted.has(s.id));
     return reply.code(201).send({ revision, ...(platform && platform.kind === "platform" ? { platform: platform.platform } : {}), ...(music ? { music } : {}), ...(notes.length ? { notes } : {}) });
@@ -327,7 +333,7 @@ async function directorInputFor(dependencies: DirectorRouteDependencies, ctx: No
   }
   const frames = await sampleFrames(dependencies, ctx.main.storageKey, ctx.durationS, 8).catch((caught) => { request.log.warn({ err: caught }, "Frame sampling failed; planning from words only"); return []; });
   return {
-    ...(dependencies.effects ? { effects: (await dependencies.effects.list(ctx.principal.userId)).map(e => e.recipe) } : {}),
+    ...(dependencies.effects ? { effects: (await dependencies.effects.list(ctx.principal.userId).catch(caught => { request.log.warn({ err: caught }, "Effect library unavailable; using built-in treatments"); return []; })).slice(0, 24).map(e => e.recipe) } : {}),
     brief, durationS: ctx.durationS, frame: { width: Number(ctx.main.metadata.width) || 1080, height: Number(ctx.main.metadata.height) || 1920 },
     transcript: ctx.transcript.map((s) => ({ startS: s.startUs / 1e6, endS: s.endUs / 1e6, text: s.text })), candidates, frames, assets: ctx.others,
   };

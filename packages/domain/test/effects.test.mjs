@@ -25,3 +25,12 @@ test('a new combination of text, motion and sound is a reusable recipe, not anot
   assert.deepEqual(parseEffectRecipe(JSON.parse(JSON.stringify(recipe))),recipe);
   for(const field of [{sound:'remote-mp3'},{zoom:'run-script'}])assert.throws(()=>parseEffectRecipe({...recipe,...field}));
 });
+
+
+test('stock recipes preserve provider references and cannot fetch arbitrary URLs',()=>{
+  const r=parseEffectRecipe({presetId:'stock-cutaway',text:'City lights',stock:{provider:'pexels',id:'11',kind:'video',mode:'pip'}});
+  assert.throws(()=>effectRecipeOperations(r,{anchorAssetId:'a',anchorClipId:'c',anchorSourceUs:0}),/Import/);
+  const ops=effectRecipeOperations(r,{anchorAssetId:'a',anchorClipId:'c',anchorSourceUs:0,importedAssetId:'imported'});
+  assert.equal(ops[0].type,'add-broll');assert.equal(ops[0].assetId,'imported');assert.equal(ops[0].mode,'pip');
+  for(const stock of [{provider:'untrusted',id:'11',kind:'video',mode:'full'},{provider:'pexels',id:'https://evil.example/x',kind:'video',mode:'full'}])assert.throws(()=>parseEffectRecipe({...r,stock}));
+});

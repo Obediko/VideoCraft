@@ -339,3 +339,12 @@ test('AI review samples end-card graphics from the end-card asset instead of ori
     assert.equal(frame.atS,durationUs/1e6);assert.match(seen.pieces[1].text,/Intentional narrated end card: Jesus truly saves/);
   }finally{await state.server.close();state.close();}
 });
+
+test('accepted sourced visuals add provider recipes to the library after the revision is saved',async()=>{
+  const saved=[];const state=await setup(new RuleDirector(),{extra:{effects:{list:async()=>[],save:async(uid,e)=>saved.push({uid,...e}),remove:async()=>{}},importStock:async()=>({id:'pic'})}});
+  try{
+    const plan={source:'ai',suggestions:[{id:'stock',kind:'stock',query:'campus gardens',assetKind:'photo',atS:1,durationS:3,mode:'pip',pick:{provider:'pexels',id:'11',thumbUrl:'https://images.pexels.com/11.jpg'}}]};
+    const r=await state.server.inject({method:'POST',url:'/v1/projects/'+state.projectId+'/director/apply',payload:{revision:1,plan,accepted:['stock']}});
+    assert.equal(r.statusCode,201,r.body);assert.equal(saved.length,1);assert.equal(saved[0].uid,'u');assert.deepEqual(saved[0].recipe.stock,{provider:'pexels',id:'11',kind:'photo',mode:'pip'});
+  }finally{await state.server.close();state.close();}
+});

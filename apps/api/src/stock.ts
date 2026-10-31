@@ -6,9 +6,10 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import type { Asset, UUID } from "@videocraft/domain";
+import { parseEffectRecipe, type EffectLibraryRepository, type Asset, type UUID } from "@videocraft/domain";
 import type { AssetRepository } from "@videocraft/application";
 import type { ObjectStorage } from "@videocraft/storage";
+import { savedEffect } from "./effects.js";
 import { validateMedia, type MediaInfo } from "@videocraft/analysis";
 
 /**
@@ -148,6 +149,7 @@ async function download(fetcher: Fetcher, url: string, path: string): Promise<vo
 }
 
 export interface StockDependencies {
+  effects?: EffectLibraryRepository;
   keys: StockKeys;
   fetch?: Fetcher;
   assets: AssetRepository;
@@ -205,7 +207,14 @@ export function registerStockRoutes(server: FastifyInstance, dependencies: Stock
     if (!provider || !kind || typeof body.id !== "string") return error(reply, 400, "invalid_request", "provider, kind and id are required");
     try {
       const { asset, created } = await importStock(dependencies, fetcher, projectId, provider, kind, body.id);
-      return reply.code(created ? 201 : 200).send({ asset });
+      let libraryNote: string | undefined;
+      if (dependencies.effects && (provider === "pexels" || provider === "pixabay") && kind !== "gif" && /^[0-9]{1,20}$/.test(body.id)) {
+        const principal = await dependencies.authenticate(request);
+        if (principal) try {
+          await dependencies.effects.save(principal.userId, savedEffect(parseEffectRecipe({ presetId: "stock-cutaway", text: String(asset.metadata.filename ?? "Stock cutaway").slice(0, 80), durationS: 3, stock: { provider, id: body.id, kind, mode: "full" } })));
+        } catch (caught) { request.log.warn({ err: caught }, "Imported stock library save failed"); libraryNote = "Stock imported. It could not be saved to your reusable library."; }
+      }
+      return reply.code(created ? 201 : 200).send({ asset, ...(libraryNote ? { libraryNote } : {}) });
     } catch (caught) {
       if (caught instanceof StockError) return error(reply, caught.status, "stock_failed", caught.message);
       request.log.warn({ err: caught }, "stock import failed");

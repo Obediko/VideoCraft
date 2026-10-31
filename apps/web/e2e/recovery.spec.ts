@@ -15,7 +15,7 @@ try {
 
 async function editor(page:Page, screen='export', resume=false) {
   let editedTimeline:any;
-  const state={savedEffects:[] as any[],libraryFails:false,editOps:[] as any[],revision:2,status:'queued',offline:false,calls:0,links:0,submissions:0,submissionKeys:[] as string[],loseNextSubmission:false,expired:false,uploadCalls:0,uploadExpired:false,uploadTypes:[] as string[],withTranscript:false,planApplied:false,assetLists:0,mediaFails:false,linkFails:false,mediaRequests:0,playbackRequests:0};
+  const state={importCalls:0,withImportedPhoto:false,savedEffects:[] as any[],libraryFails:false,editOps:[] as any[],revision:2,status:'queued',offline:false,calls:0,links:0,submissions:0,submissionKeys:[] as string[],loseNextSubmission:false,expired:false,uploadCalls:0,uploadExpired:false,uploadTypes:[] as string[],withTranscript:false,planApplied:false,assetLists:0,mediaFails:false,linkFails:false,mediaRequests:0,playbackRequests:0};
   const timeline=(seconds:number):any=>({durationUs:seconds*1e6,tracks:[{id:'v',kind:'video',clips:[{id:'c',assetId:'a',sourceStartUs:0,sourceEndUs:seconds*1e6,timelineStartUs:0,timelineEndUs:seconds*1e6}]}]});
   await page.addInitScript(({screen,resume})=>{
     localStorage.setItem('videocraft.lastProject','p');localStorage.setItem('videocraft.lastScreen',screen);
@@ -43,8 +43,9 @@ async function editor(page:Page, screen='export', resume=false) {
     else if(path.startsWith('/v1/me/effects/')&&req.method()==='DELETE'){state.savedEffects=state.savedEffects.filter(e=>e.id!==path.split('/').at(-1));body={};}
     else if(path.endsWith('/edit')&&req.method()==='POST'){state.editOps=req.postDataJSON().operations;editedTimeline=applyTimelineOperations(editedTimeline??timeline(2),state.editOps);state.revision++;body={revision:{revision:state.revision,timeline:editedTimeline}};}
     else if(path==='/v1/projects')body={projects:[{id:'p',name:'Recovery test',revision:state.revision,createdAt:'2026-01-01',updatedAt:'2026-01-01'}]};
+    else if(path.endsWith('/stock/import')){state.importCalls++;state.withImportedPhoto=true;body={asset:{id:'stock-photo',kind:'image',metadata:{filename:'Library photo',stockProvider:'pexels',stockId:'11',stockKind:'photo'}}};}
     else if(path.endsWith('/assets/upload')){state.uploadCalls++;state.uploadTypes.push(req.headers()['content-type']??'');if(state.uploadExpired&&state.uploadCalls===1){status=401;body={error:{message:'Access expired'}};}else body={asset:{id:'photo',kind:'image',metadata:{filename:'photo.png'}}};}
-    else if(path.endsWith('/assets')){state.assetLists++;body={assets:[{id:'a',kind:'video',durationUs:2e6,metadata:{filename:'Test.mp4',width:640,height:360}},...(state.planApplied?[{id:'stock-photo',kind:'image',metadata:{filename:'Approved.png',width:1,height:1}}]:[])]};}
+    else if(path.endsWith('/assets')){state.assetLists++;body={assets:[{id:'a',kind:'video',durationUs:2e6,metadata:{filename:'Test.mp4',width:640,height:360}},...((state.planApplied||state.withImportedPhoto)?[{id:'stock-photo',kind:'image',metadata:{filename:'Approved.png',width:1,height:1}}]:[])]};}
     else if(path.endsWith('/playback-url')){state.playbackRequests++;if(state.linkFails){status=503;body={error:{message:'Temporary link failure'}};}else body={url:path.includes('/stock-photo/')?'/stock.png':'/fixture.mp4',expires:Math.floor(Date.now()/1000)+3600};}
     else if(path.endsWith('/faces'))body={step:1,boxes:[]};
     else if(path.endsWith('/transcript'))body={segments:state.withTranscript?[{id:'s',startUs:0,endUs:1e6,text:'Hello',words:[{text:'Hello',startUs:0,endUs:1e6,confidence:1}]}]:[]};
@@ -252,4 +253,18 @@ test('a library outage leaves the edit usable and a failed save can be retried w
   await expect(library.getByRole('alert')).toHaveCount(0);
   await library.getByRole('button',{name:'Save treatment',exact:true}).click();
   await expect.poll(()=>state.savedEffects.length).toBe(1);expect(state.revision).toBe(3);
+});
+
+
+test('a saved stock treatment is imported into the current project before it is placed',async({page})=>{
+  const state=await editor(page,'edit');
+  state.savedEffects=[{id:'saved-stock',recipe:parseEffectRecipe({presetId:'stock-cutaway',text:'Library photo',durationS:2,stock:{provider:'pexels',id:'11',kind:'photo',mode:'pip'}}),updatedAt:'2026-10-31'}];
+  await page.goto('/');await page.getByRole('button',{name:'Visuals',exact:true}).click();
+  const library=page.getByRole('region',{name:'Creative effects library'});
+  await library.getByRole('button',{name:'Stock cutaway · Library photo',exact:true}).click();
+  await library.getByRole('button',{name:'Add treatment at this moment',exact:true}).click();
+  await expect.poll(()=>state.importCalls).toBe(1);
+  await expect.poll(()=>state.revision).toBe(3);
+  expect(state.editOps.some(o=>o.type==='add-broll'&&o.assetId==='stock-photo'&&o.mode==='pip')).toBe(true);
+  await expect(page.locator('img.live-broll.pip')).toHaveJSProperty('naturalWidth',1);
 });

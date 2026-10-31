@@ -310,6 +310,7 @@ export function App() {
     flushSync(() => setPreviewMode("source"));
     const player = playerRef.current;
     if (!player) { setStatus("The source preview is unavailable. Reload the footage and try again."); return; }
+    player.scrollIntoView({ block: "nearest" });
     const at = selectedClip.sourceStartUs / 1_000_000;
     const seek = () => { if (playerRef.current === player) player.currentTime = at; };
     if (player.readyState >= 1) seek(); else player.addEventListener("loadedmetadata", seek, { once: true });
@@ -354,7 +355,13 @@ export function App() {
     const available = (host.sourceEndUs - anchor.anchorSourceUs) / 1e6;
     const clipTreatment = ["focus", "impact", "smooth-reveal"].includes(recipe.presetId);
     if (!clipTreatment && available < recipe.durationS) throw new Error("This moment has " + available.toFixed(1) + " s left in the piece. Shorten the treatment or choose an earlier moment.");
-    return applyEdit(effectRecipeOperations(recipe, { ...anchor, anchorClipId: host.id }), "Creative treatment added " + anchor.where);
+    let importedAssetId: string | undefined;
+    if (recipe.stock) {
+      const result = await request("/v1/projects/" + projectId + "/stock/import", { method: "POST", body: JSON.stringify({ provider: recipe.stock.provider, kind: recipe.stock.kind, id: recipe.stock.id }) });
+      importedAssetId = result.asset.id;
+      setAssets(current => [...current.filter(a => a.id !== result.asset.id), result.asset]);
+    }
+    return applyEdit(effectRecipeOperations(recipe, { ...anchor, anchorClipId: host.id, ...(importedAssetId ? { importedAssetId } : {}) }), "Creative treatment added " + anchor.where);
   }
   function addSoundEffect() {
     const anchor = anchorPoint();
@@ -1224,7 +1231,7 @@ export function App() {
     : mode === "visuals" ? <section className="pane" aria-label="Visuals">
       <div className="pane-head"><h2>Visuals</h2></div>
       <div className="pad stack broll-panel effects-panel">
-        <EffectLibrary request={request} disabled={busy || revision === 0} onUse={addCreativeTreatment} />
+        <EffectLibrary request={request} refreshKey={assets.length} disabled={busy || revision === 0} onUse={addCreativeTreatment} />
         <h3>Look</h3>
         <label>Look for the whole video<select value={wholeLook} disabled={busy || revision === 0} onChange={(event) => { if (event.target.value !== "mixed") void applyEdit([{ type: "set-look", look: event.target.value }], "Look: " + (LOOK_LABEL[event.target.value] ?? event.target.value)); }}>{wholeLook === "mixed" && <option value="mixed">Mixed (set per clip)</option>}{Object.entries(LOOK_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
         <p className="muted small">Zooms and transitions are set per clip: select a clip on the timeline.</p>

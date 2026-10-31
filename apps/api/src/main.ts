@@ -184,6 +184,7 @@ const director = secretEnvironment.OPENAI_API_KEY && secretEnvironment.DIRECTOR_
   ? new OpenAiDirector({ apiKey: secretEnvironment.OPENAI_API_KEY, model: secretEnvironment.DIRECTOR_MODEL ?? "gpt-6.1-sol", ...(secretEnvironment.OPENAI_BASE_URL ? { endpoint: secretEnvironment.OPENAI_BASE_URL } : {}) })
   : new RuleDirector();
 const stockDependencies = {
+  effects,
   keys: { ...(secretEnvironment.PEXELS_API_KEY ? { pexels: secretEnvironment.PEXELS_API_KEY } : {}), ...(secretEnvironment.PIXABAY_API_KEY ? { pixabay: secretEnvironment.PIXABAY_API_KEY } : {}), ...(secretEnvironment.GIPHY_API_KEY ? { giphy: secretEnvironment.GIPHY_API_KEY } : {}) },
   assets, storage, authorize: authorizer, authenticate: (request: FastifyRequest) => authenticator.authenticate(request), clock: () => new Date().toISOString(),
   inspector: (path: string) => probeMedia(path, secretEnvironment.FFPROBE_BIN ? { executable: secretEnvironment.FFPROBE_BIN } : {}),
