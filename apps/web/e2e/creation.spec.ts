@@ -37,7 +37,7 @@ async function setup(page: Page) {
     else if (path.endsWith("/assets/upload")) {
       state.uploads++;
       const kind = new URL(req.url()).searchParams.get("kind");
-      const asset = { id: "a" + state.uploads, kind, durationUs: kind === "audio" ? 3_600_000 : kind === "video" ? 3_000_000 : undefined, storageKey: "", metadata: { filename: kind === "audio" ? "Human narration.wav" : "Upload " + state.uploads } };
+      const asset = { id: "a" + state.uploads, kind, durationUs: kind === "audio" ? 3_600_000 : kind === "video" ? 3_000_000 : undefined, storageKey: "", metadata: { filename: kind === "audio" ? "Human narration.wav" : "Camera_" + "LongFilename".repeat(8) + "_" + state.uploads } };
       state.assets.push(asset); body = { asset };
     } else if (path.endsWith("/creation/capabilities")) body = { images: true, generatedVideo: false };
     else if (path.endsWith("/creation/plan")) {
@@ -74,12 +74,14 @@ test("choose the purpose before creating a project; mixed uploads, draft recover
   await page.getByRole("button", { name: "New video", exact: true }).click();
   await expect(page.getByRole("heading", { name: "What do you want to create?" })).toBeVisible();
   expect(state.creates).toBe(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
   await page.getByRole("button", { name: /^Tell a story/ }).click();
   await page.getByLabel("Your brief").fill("Tell our mentoring story");
   await page.getByLabel("Upload videos and photos", { exact: true }).setInputFiles([{ name: "photo.png", mimeType: "image/png", buffer: photo }, { name: "video.mp4", mimeType: "video/mp4", buffer: media }]);
   await expect.poll(() => state.uploads).toBe(2);
   await page.getByRole("button", { name: "Make my storyboard" }).click();
   await expect(page.getByRole("heading", { name: "3. Review the storyboard" })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
   await page.reload();
   await expect(page.getByLabel("Your brief")).toHaveValue("Tell our mentoring story");
   await expect(page.getByRole("heading", { name: "3. Review the storyboard" })).toBeVisible();

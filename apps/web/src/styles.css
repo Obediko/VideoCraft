@@ -342,7 +342,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .creation { max-width: 960px; margin-inline: auto; }
 .creation .card { padding: 1.25rem; }
 .creation-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: 1rem; margin-top: 1.5rem; }
-.creation-choice { display: flex; flex-direction: column; align-items: flex-start; text-align: left; gap: .8rem; padding: 1.5rem; min-height: 180px; }
+.creation-choice { white-space: normal; min-width: 0; overflow-wrap: anywhere; display: flex; flex-direction: column; align-items: flex-start; text-align: left; gap: .8rem; padding: 1.5rem; min-height: 180px; }
 .creation-choice strong { font-size: 1.2rem; }
 .creation-library { display: grid; gap: .6rem; max-height: 280px; overflow: auto; overflow-wrap: anywhere; }
 .creation-scenes { padding-left: 1.5rem; }
@@ -351,3 +351,5 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .creation-preview { display: block; width: 100%; max-height: 360px; object-fit: contain; background: #111; }
 .live-photo { position: absolute; inset: 0; width: 100%; height: 100%; }
 @media (max-width: 600px) { .creation .row-2 { grid-template-columns: 1fr; } .creation .actions { flex-wrap: wrap; } }
+
+[aria-label="Story pieces"] .btn { white-space: normal; overflow-wrap: anywhere; max-width: 100%; }
