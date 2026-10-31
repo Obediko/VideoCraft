@@ -237,6 +237,7 @@ export async function importStock(dependencies: StockDependencies, fetcher: Fetc
       id: assetId, projectId, kind: assetKind, storageKey: stored.key, checksumSha256: stored.checksumSha256,
       ...(info ? { durationUs: info.durationUs } : {}),
       metadata: {
+        sizeBytes: stored.size,
         filename: (label + " · " + (item.title?.split(",")[0]?.trim() || libraryName) + "." + rendition.extension).slice(0, 255), mimeType: rendition.mimeType,
         stockProvider: provider, stockKind: kind, stockId: id,
         credit: ((item.credit ? item.credit + " on " : "") + libraryName).slice(0, 200),

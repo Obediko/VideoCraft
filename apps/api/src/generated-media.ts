@@ -25,7 +25,7 @@ export function registerGeneratedMediaRoutes(server: FastifyInstance, d: Omit<Vo
     const directory = await mkdtemp(join(tmpdir(), "videocraft-image-"));
     try {
       const response = await (d.fetch ?? fetch)((d.endpoint ?? "https://api.openai.com/v1").replace(/\/$/, "") + "/images/generations", {
-        method: "POST", signal: AbortSignal.timeout(120_000), headers: { authorization: "Bearer " + d.apiKey, "content-type": "application/json" },
+        method: "POST", signal: AbortSignal.timeout(90_000), headers: { authorization: "Bearer " + d.apiKey, "content-type": "application/json" },
         body: JSON.stringify({ model: d.imageModel, prompt: b.prompt.trim(), n: 1, size: "1024x1024", output_format: "png" }),
       });
       if (!response.ok) throw new Error("Image generation failed (provider " + response.status + "). Try stock or upload a visual.");
@@ -37,7 +37,7 @@ export function registerGeneratedMediaRoutes(server: FastifyInstance, d: Omit<Vo
       const path = join(directory, "image.png"); await writeFile(path, data);
       if (!(await d.imageInspector(path))) throw new Error("The generated image could not be decoded");
       const id = randomUUID(); const stored = await d.storage.putFile(path, "projects/" + projectId + "/assets/" + id + ".media");
-      const asset = { id, projectId, kind: "image" as const, storageKey: stored.key, checksumSha256: stored.checksumSha256, metadata: { filename: "Generated image.png", mimeType: "image/png", generated: true, generationModel: d.imageModel, prompt: b.prompt.trim() }, createdAt: d.clock() };
+      const asset = { id, projectId, kind: "image" as const, storageKey: stored.key, checksumSha256: stored.checksumSha256, metadata: { filename: "Generated image.png", mimeType: "image/png", sizeBytes: stored.size, generated: true, generationModel: d.imageModel, prompt: b.prompt.trim() }, createdAt: d.clock() };
       await d.assets.save(asset);
       return reply.code(201).send({ asset });
     } catch (err) {

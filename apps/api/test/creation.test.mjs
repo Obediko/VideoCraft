@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import Fastify from "fastify";
-import { mkdtempSync, rmSync } from "node:fs";
+import { createServer } from "node:http";
+import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -10,7 +11,7 @@ import { probeMedia, isStillImage } from "@videocraft/analysis";
 import { LocalObjectStorage } from "@videocraft/storage";
 import { applyTimelineOperations, parseTimelineOperations } from "@videocraft/domain";
 import { FfmpegCommandPlanner, FfmpegProcess } from "@videocraft/rendering";
-import { registerCreationRoutes, storyTimeline, storyScenes } from "../dist/creation.js";
+import { registerCreationRoutes, storyTimeline, storyScenes, sampleStoryFrames, storyboardPlanner } from "../dist/creation.js";
 
 const photo = { id: "photo", projectId: "p", kind: "image", storageKey: "projects/p/assets/photo.media", checksumSha256: "a".repeat(64), metadata: { filename: "Photo.png" }, createdAt: "" };
 const video = { ...photo, id: "video", kind: "video", durationUs: 1_200_000, metadata: { filename: "Video.mp4" } };
@@ -146,4 +147,33 @@ test("long narration extends a final photo in one input and refuses an unbounded
   assert.equal(photoStory.tracks[0].clips.length, 1);
   assert.equal(photoStory.durationUs, longVoice.durationUs);
   assert.throws(() => storyTimeline([{ ...scenes[0], durationS: 0.5 }], longVoice, false, [video]), /too many repeated clips/);
+});
+
+
+test("story planning sends real labelled photo/video samples to the model and skips oversized or unknown media", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "vc-story-vision-"));
+  const image = join(directory, "photo.png"), movie = join(directory, "video.mp4");
+  const http = createServer((req, res) => {
+    let raw = ""; req.on("data", chunk => { raw += chunk; }); req.on("end", () => {
+      const body = JSON.parse(raw); captured = body;
+      res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ output_text: JSON.stringify({ summary: "Use the red photo before the blue video", script: "Our story", scenes }) }));
+    });
+  });
+  let captured;
+  try {
+    execFileSync("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "color=red:s=160x120", "-frames:v", "1", "-threads", "1", image]);
+    execFileSync("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "color=blue:s=160x120:r=30:d=1.2", "-c:v", "libx264", "-pix_fmt", "yuv420p", movie]);
+    const media = [{ ...photo, metadata: { filename: "IMG_001.png", sizeBytes: statSync(image).size } }, { ...video, metadata: { filename: "IMG_002.mp4", sizeBytes: statSync(movie).size } }, { ...photo, id: "large", metadata: { sizeBytes: 51 * 1024 ** 2 } }, { ...photo, id: "unknown", metadata: {} }];
+    const staged = [];
+    const frames = await sampleStoryFrames({ storage: { resolve: key => key.includes("video") ? movie : image, downloadToFile: async (key, path, options) => { assert.ok(options.signal); staged.push(key); const { copyFile } = await import("node:fs/promises"); await copyFile(key.includes("video") ? movie : image, path); } } }, media.map(a => ({ ...a, storageKey: a.id + ".media" })));
+    assert.deepEqual(frames.map(f => [f.assetId, f.atS]), [["photo", 0], ["video", 0], ["video", 0.6]]);
+    assert.equal(staged.length, 2); assert.ok(frames.every(f => Buffer.from(f.jpegBase64, "base64").subarray(0, 2).equals(Buffer.from([255, 216]))));
+    await new Promise(resolve => http.listen(0, "127.0.0.1", resolve));
+    const planned = await storyboardPlanner({ apiKey: "test", model: "vision-model", endpoint: "http://127.0.0.1:" + http.address().port })({ brief: "Tell a story", seconds: 10, assets: [], frames });
+    assert.equal(planned.summary, "Use the red photo before the blue video");
+    const content = captured.input[0].content;
+    assert.equal(content.filter(c => c.type === "input_image").length, 3);
+    assert.ok(content.some(c => c.type === "input_text" && c.text.includes("Asset video, frame at 0.60")));
+    assert.equal(content[0].text.includes(frames[0].jpegBase64), false, "images are vision inputs, not base64 pasted into prompt text");
+  } finally { if (http.listening) await new Promise(resolve => http.close(resolve)); rmSync(directory, { recursive: true, force: true }); }
 });

@@ -199,7 +199,7 @@ registerDirectorRoutes(server, { projects, assets, revisions, storage, transcrip
   importStock: async (projectId: string, provider: "pexels" | "pixabay" | "giphy", kind: "video" | "photo" | "gif", id: string) => (await importStock(stockDependencies, (url, init) => fetch(url, init) as never, projectId, provider, kind, id)).asset,
 } : {}), ...(voiceDependencies.apiKey ? { speak: (projectId: string, text: string) => speak(voiceDependencies, voiceFetcher(voiceDependencies), projectId, text, "marin") } : {}), saveRevision: (input) => timelineService.saveRevision(input), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, clock: () => new Date().toISOString(), ...(secretEnvironment.FFMPEG_BIN ? { ffmpeg: secretEnvironment.FFMPEG_BIN } : {}) });
 registerCreationRoutes(server, {
-  projects, assets, revisions, storage, transcripts,
+  projects, assets, revisions, storage, transcripts, ...(secretEnvironment.FFMPEG_BIN ? { ffmpeg: secretEnvironment.FFMPEG_BIN } : {}),
   ...(secretEnvironment.OPENAI_API_KEY && secretEnvironment.DIRECTOR_MODE !== "rules" ? { plan: storyboardPlanner({ apiKey: secretEnvironment.OPENAI_API_KEY, model: secretEnvironment.DIRECTOR_MODEL ?? "gpt-6.1-sol", ...(secretEnvironment.OPENAI_BASE_URL ? { endpoint: secretEnvironment.OPENAI_BASE_URL } : {}) }) } : {}),
   saveRevision: input => timelineService.saveRevision(input), authenticate: request => authenticator.authenticate(request), authorize: authorizer, clock: () => new Date().toISOString(),
 });

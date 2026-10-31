@@ -93,7 +93,7 @@ export function registerUploadRoutes(server: FastifyInstance, dependencies: Uplo
         id: assetId, projectId, kind, storageKey: stored.key, checksumSha256: stored.checksumSha256,
         ...(info ? { durationUs: info.durationUs } : {}),
         metadata: {
-          filename: part.filename.slice(0, 255), mimeType: part.mimetype,
+          filename: part.filename.slice(0, 255), mimeType: part.mimetype, sizeBytes: stored.size,
           ...(needsProxy ? { proxyStatus: "pending" } : {}),
           ...(info ? { hasVideo: info.hasVideo, hasAudio: info.hasAudio, container: info.formatName.slice(0, 80), ...(info.width ? { width: info.width } : {}), ...(info.height ? { height: info.height } : {}), ...(info.frameRate ? { frameRate: info.frameRate } : {}), ...(info.videoCodec ? { videoCodec: info.videoCodec } : {}), ...(info.audioCodec ? { audioCodec: info.audioCodec } : {}) } : {}),
         },
