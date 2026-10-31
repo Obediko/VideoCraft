@@ -50,6 +50,7 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
   const [tUs, setT] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [playbackError, setPlaybackError] = useState("");
+  const [mediaAttempt, setMediaAttempt] = useState(0);
   const loadGeneration = useRef(0);
   const pendingMetadata = useRef<(() => void) | null>(null);
   const clips = useMemo(() => [...(tracks.find((t) => t.kind === "video")?.clips ?? [])].sort((a, b) => a.timelineStartUs - b.timelineStartUs), [tracks]);
@@ -95,6 +96,7 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
   }
 
   function retryMedia() {
+    setMediaAttempt(n => n + 1);
     loadGeneration.current += 1;
     setPlaying(false); music.current?.pause(); setPlaybackError("");
     const el = video.current;
@@ -305,7 +307,7 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
         const code = el.error.code;
         setPlaybackError(mediaFailure(code));
       }} muted={false} playsInline preload="auto" style={{ ...(stills?.[current?.assetId ?? ""] ? { visibility: "hidden" } : {}), objectFit: fit, ...(currentFocus ? { objectPosition: (currentFocus.x * 100).toFixed(1) + "% " + (currentFocus.y * 100).toFixed(1) + "%" } : {}), transform: zoom !== 1 ? "scale(" + zoom.toFixed(4) + ")" : undefined, transformOrigin: "50% 40%", filter: look, ...(compositing ? { opacity: 0 } : {}) }} />
-      {current && stills?.[current.assetId] && urls[current.assetId] && <img ref={photo} key={urls[current.assetId]} className="live-video live-photo" src={urls[current.assetId]} alt="Storyboard photo" onLoad={() => setPlaybackError("")} onError={() => { setPlaying(false); music.current?.pause(); setPlaybackError("The photo could not be loaded. Reload footage to retry."); }} style={{ objectFit: fit, filter: look, transform: zoom !== 1 ? "scale(" + zoom.toFixed(4) + ")" : undefined }} />}
+      {current && stills?.[current.assetId] && urls[current.assetId] && <img ref={photo} key={urls[current.assetId] + ":" + mediaAttempt} className="live-video live-photo" src={urls[current.assetId]} alt="Storyboard photo" onLoad={() => setPlaybackError("")} onError={() => { setPlaying(false); music.current?.pause(); setPlaybackError("The photo could not be loaded. Reload footage to retry."); }} style={{ objectFit: fit, filter: look, transform: zoom !== 1 ? "scale(" + zoom.toFixed(4) + ")" : undefined }} />}
       {compositing && <BackgroundLayer video={videoEl} matteUrl={matteUrl!} spec={background!} fit={fit} focus={currentFocus} zoom={zoom} filter={look} onError={() => setCutoutFailed(true)} />}
       <canvas ref={snapRef} className="live-snap" aria-hidden="true" style={blendStyle ?? { display: "none" }} />
       {background && (!matteUrl || cutoutFailed) && <span className="live-note">{cutoutExpired || cutoutFailed ? <>Cutout preview unavailable. Showing the original footage. <button type="button" onClick={() => { setCutoutFailed(false); setCutoutExpired(false); setCutoutAttempt((n) => n + 1); onRetryMatte?.(); }}>Retry cutout</button></> : "Cutting you out for the preview…"}</span>}

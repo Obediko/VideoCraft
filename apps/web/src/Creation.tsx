@@ -14,7 +14,7 @@ type Props = {
   onReady(result: any): void;
   onWorking(working: boolean): void;
 };
-const nameOf = (a: Asset) => String(a.metadata.filename ?? a.kind);
+const nameOf = (a: Asset) => a.kind === "image" && typeof a.metadata.prompt === "string" ? "Generated · " + a.metadata.prompt.slice(0, 60) : String(a.metadata.filename ?? a.kind);
 const message = (e: unknown) => e instanceof Error ? e.message : "The action failed. Your draft is kept; try again.";
 const keyOf = (id: string) => "videocraft.story.v1." + id;
 function readDraft(id: string): Draft {
@@ -148,7 +148,7 @@ export function Creation({ projectId, revision, mode, assets, apiBase, token, re
         <button className="btn" disabled={busy || draft.plan.scenes.length >= 40} onClick={() => patch({ plan: { ...draft.plan!, scenes: [...draft.plan!.scenes, { assetId: "", startS: 0, durationS: 5, text: "", visual: "" }] } })}>Add a scene</button>
       </section>
       {scene && <section className="card stack" aria-label="Scene visuals"><h2>Visual for scene {sceneIndex! + 1}</h2>
-        {previewAsset && urls[previewAsset.id] && (previewAsset.kind === "image" ? <img className="creation-preview" src={urls[previewAsset.id]} alt={scene.visual || nameOf(previewAsset)} onError={() => setPreviewError(true)} /> : <video className="creation-preview" controls playsInline src={urls[previewAsset.id]} onError={() => setPreviewError(true)} />)}
+        {previewAsset && urls[previewAsset.id] && (previewAsset.kind === "image" ? <img key={urlRetry} className="creation-preview" src={urls[previewAsset.id]} alt={scene.visual || nameOf(previewAsset)} onError={() => setPreviewError(true)} /> : <video key={urlRetry} className="creation-preview" controls playsInline src={urls[previewAsset.id]} onError={() => setPreviewError(true)} />)}
         {previewError && <button className="btn" onClick={() => setUrlRetry(n => n + 1)}>Reload visual preview</button>}
         <p className="muted small">Search idea: {scene.visual}. Adding stock or generating an image assigns it to this scene.</p>
         <StockSearch onWorking={setStockWorking} projectId={projectId} request={request} disabled={busy} orientation={draft.platform === "youtube" ? "landscape" : draft.platform === "square" ? "square" : "portrait"} onUse={a => selectVisual(a as Asset)} />

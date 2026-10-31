@@ -14,13 +14,16 @@ try {
 const photo = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=", "base64");
 
 async function setup(page: Page) {
-  const state = { creates: 0, uploads: 0, assets: [] as any[], revision: 0, timeline: { durationUs: 0, tracks: [] } as any, applied: null as any, transcripts: 0, generated: 0, plans: 0 };
+  const state = { creates: 0, uploads: 0, assets: [] as any[], revision: 0, timeline: { durationUs: 0, tracks: [] } as any, applied: null as any, transcripts: 0, generated: 0, plans: 0, photoFails: false, photoRequests: 0, voiceRequests: 0 };
   const project = () => ({ id: "p", name: "New story", revision: state.revision, createdAt: "2026-10-31", updatedAt: "2026-10-31" });
   await page.route("http://localhost:8080/**", async route => {
     const req = route.request(), path = new URL(req.url()).pathname;
     const headers = { "access-control-allow-origin": req.headers().origin ?? "http://127.0.0.1:5173", "access-control-allow-credentials": "true", "access-control-allow-methods": "GET, POST, OPTIONS", "access-control-allow-headers": "authorization, content-type, range" };
     if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers });
-    if (path === "/photo.png") return route.fulfill({ headers, contentType: "image/png", body: photo });
+    if (path === "/photo.png") {
+      state.photoRequests++;
+      return route.fulfill({ status: state.photoFails ? 503 : 200, headers: { ...headers, "cache-control": "no-store" }, contentType: state.photoFails ? "text/plain" : "image/png", body: state.photoFails ? Buffer.from("temporary failure") : photo });
+    }
     if (path === "/video.mp4") {
       const range = /^bytes=(\d+)-(\d*)$/.exec(req.headers().range ?? "");
       const start = range ? Number(range[1]) : 0, end = range?.[2] ? Math.min(Number(range[2]), media.length - 1) : media.length - 1;
@@ -48,6 +51,9 @@ async function setup(page: Page) {
       let at = 0;
       state.timeline = { durationUs: 0, tracks: [{ id: "video", kind: "video", clips: state.applied.scenes.map((s: any, i: number) => { const start = at; at += s.durationS * 1e6; return { id: "c" + i, assetId: s.assetId, sourceStartUs: s.startS * 1e6, sourceEndUs: (s.startS + s.durationS) * 1e6, timelineStartUs: start, timelineEndUs: at, transform: { background: "none" } }; }) }] }; state.timeline.durationUs = at;
       body = { platform: "tiktok", revision: { revision: state.revision, timeline: state.timeline, tailoring: { intent: "A story", constraints: ["creation:story"] } } };
+    } else if (path.endsWith("/voiceover/speech")) {
+      state.voiceRequests++;
+      const input = req.postDataJSON(); const asset = { id: "aiVoice", kind: "audio", durationUs: 3_600_000, metadata: { filename: "AI narration.mp3", voiceover: true, script: input.text } }; state.assets.push(asset); body = { asset };
     } else if (path.endsWith("/voiceover/voices")) body = { voices: ["marin"] };
     else if (path.endsWith("/stock/sources")) body = { video: ["pexels"], photo: ["pexels"], gif: [] };
     else if (path.endsWith("/stock/search")) body = { items: [{ provider: "pexels", id: "stock", kind: "photo", thumbUrl: "http://localhost:8080/photo.png", width: 100, height: 100, title: "Sunrise", credit: "Photographer" }] };
@@ -105,8 +111,13 @@ test("an idea with no uploads requires an approved visual; stock and generated i
   await page.getByRole("button", { name: "Generate image", exact: true }).click();
   await expect(page.getByLabel("Visual", { exact: true })).toHaveValue("generated");
   expect(state.generated).toBe(1);
+  state.photoFails = true;
   await page.getByRole("button", { name: "Assemble this story" }).click();
-  await expect(page.getByAltText("Storyboard photo")).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText("The photo could not be loaded");
+  state.photoFails = false;
+  await page.getByRole("button", { name: "Reload footage", exact: true }).click();
+  await expect.poll(() => page.getByAltText("Storyboard photo").evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0);
+  await expect(page.getByRole("alert")).toHaveCount(0);
   expect(state.applied.scenes[0].assetId).toBe("generated");
 });
 
@@ -122,4 +133,21 @@ test("human narration is uploaded separately and transcription is requested befo
   await page.getByRole("button", { name: "Assemble this story" }).click();
   await expect(page.getByLabel("Live preview of the edit")).toBeVisible();
   expect(state.applied.narrationAssetId).toBe("a2"); expect(state.applied.captions).toBe(true); expect(state.transcripts).toBe(1);
+});
+
+
+test("AI narration uses the reviewed script and the resulting audio asset is selected for assembly", async ({ page }) => {
+  const state = await setup(page);
+  await page.getByRole("button", { name: "New video", exact: true }).click();
+  await page.getByRole("button", { name: /^Tell a story/ }).click();
+  await page.getByLabel("Your brief").fill("A narrated photo story");
+  await page.getByLabel("Upload videos and photos", { exact: true }).setInputFiles({ name: "photo.png", mimeType: "image/png", buffer: photo });
+  await page.getByRole("button", { name: "Make my storyboard" }).click();
+  await expect(page.getByLabel("Or type what to say")).toHaveValue("Jesus truly saves.");
+  await page.getByRole("button", { name: "Add this voice-over", exact: true }).click();
+  await expect(page.getByLabel("Narration", { exact: true })).toHaveValue("aiVoice");
+  await page.getByRole("button", { name: "Assemble this story" }).click();
+  await expect(page.getByLabel("Live preview of the edit")).toBeVisible();
+  expect(state.voiceRequests).toBe(1); expect(state.applied.narrationAssetId).toBe("aiVoice");
+  expect(state.assets.find(a => a.id === "aiVoice").metadata.script).toBe("Jesus truly saves.");
 });
