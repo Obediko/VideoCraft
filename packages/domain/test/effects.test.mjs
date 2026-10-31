@@ -16,3 +16,12 @@ test('untrusted recipes cannot inject unknown executable effects or unbounded pa
   for(const value of [{presetId:'remote-js',url:'https://example.com/code.js'},{presetId:'thinking',durationS:Infinity},{presetId:'thinking',color:'url(x)'},{presetId:'chapter',text:'x'.repeat(81)},null])assert.throws(()=>parseEffectRecipe(value));
   assert.equal(parseEffectRecipe({presetId:'chapter',text:'  Hello  ',color:'#aabbcc'}).text,'Hello');
 });
+
+test('a new combination of text, motion and sound is a reusable recipe, not another hard-coded preset',()=>{
+  const recipe=parseEffectRecipe({presetId:'question',text:'What changed?',color:'#8AA592',durationS:2.5,sound:'riser',zoom:'push'});
+  const ops=effectRecipeOperations(recipe,{anchorAssetId:'a',anchorClipId:'clip',anchorSourceUs:1e6});
+  assert.deepEqual(ops.map(o=>o.type),['set-clip-effects','add-graphic','add-sfx']);
+  assert.equal(ops[0].zoom,'push');assert.equal(ops[1].text,'What changed?');assert.equal(ops[2].kind,'riser');
+  assert.deepEqual(parseEffectRecipe(JSON.parse(JSON.stringify(recipe))),recipe);
+  for(const field of [{sound:'remote-mp3'},{zoom:'run-script'}])assert.throws(()=>parseEffectRecipe({...recipe,...field}));
+});

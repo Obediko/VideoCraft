@@ -227,20 +227,31 @@ export function registerCheckRoutes(server: FastifyInstance, dependencies: Direc
     const target = ctx.revision.tailoring?.targetDurationUs ? Math.round(ctx.revision.tailoring.targetDurationUs / 1e6) : undefined;
     const overlays = timeline.tracks.filter((t) => t.kind === "overlay").flatMap((t) => t.clips);
     const graphics = overlays.filter((c) => c.transform?.role === "graphic").sort((a, b) => a.timelineStartUs - b.timelineStartUs);
-    // Source moments worth looking at: each piece's first second and each graphic, labelled with their place in the edit.
-    const looks = [
-      ...mine.slice(0, 8).map((c, i) => ({ sourceS: c.sourceStartUs / 1e6 + Math.min(0.8, (c.sourceEndUs - c.sourceStartUs) / 2e6), atS: c.timelineStartUs / 1e6, label: "Start of piece #" + i })),
-      ...graphics.slice(0, 4).map((g, i) => ({ sourceS: Number(g.transform?.anchorSourceUs ?? 0) / 1e6 + 0.5, atS: g.timelineStartUs / 1e6, label: "Under on-screen text #" + i })),
-    ];
+    const reviewAssets = await dependencies.assets.listForProject(ctx.projectId);
+    // Every frame carries its own source identity. A card's source time is never a time in the original talk.
+    const sampledPieces = pieces.length > 8 ? [...pieces.slice(0, 7), pieces[pieces.length - 1]!] : pieces;
+    const looks = sampledPieces.map(c => ({ assetId: c.assetId, sourceS: c.sourceStartUs / 1e6 + Math.min(0.8, (c.sourceEndUs - c.sourceStartUs) / 2e6), atS: c.timelineStartUs / 1e6, label: "Start of piece #" + pieces.indexOf(c) }));
+    for (const [i, g] of graphics.slice(0, 4).entries()) {
+      const host = pieces.find(c => c.timelineStartUs <= g.timelineStartUs && c.timelineEndUs > g.timelineStartUs);
+      if (host) looks.push({ assetId: host.assetId, sourceS: (host.sourceStartUs + g.timelineStartUs - host.timelineStartUs) / 1e6 + Math.min(0.5, (host.timelineEndUs - g.timelineStartUs) / 2e6), atS: g.timelineStartUs / 1e6, label: "Under on-screen text #" + i });
+    }
     const brief = typeof ctx.body.brief === "string" && ctx.body.brief.trim() ? ctx.body.brief.trim().slice(0, 2000) : ctx.revision.tailoring?.intent ?? "";
     let media: MediaSignals | undefined; let frames: Array<{ atS: number; label: string; jpegBase64: string }> = [];
     await withSource(dependencies, ctx.main.storageKey, async (input, directory) => {
       media = await scanPicture(dependencies, input, mine.map((c) => ({ startUs: c.sourceStartUs, endUs: c.sourceEndUs }))).catch((caught) => { request.log.warn({ err: caught }, "Picture scan failed"); return undefined; });
-      if (dependencies.director.review) {
-        const shots = await framesAt(dependencies, input, directory, looks.map((l) => l.sourceS)).catch(() => []);
-        frames = shots.map((shot, i) => ({ atS: looks[i]!.atS, label: looks[i]!.label, jpegBase64: shot.jpegBase64 }));
-      }
     }).catch((caught) => request.log.warn({ err: caught }, "Could not open the source for the check"));
+    if (dependencies.director.review) for (const assetId of new Set(looks.map(l => l.assetId))) {
+      const asset = reviewAssets.find(a => a.id === assetId);
+      if (!asset || !["video", "image"].includes(asset.kind)) continue;
+      const group = looks.filter(l => l.assetId === assetId);
+      await withSource(dependencies, asset.storageKey, async (input, directory) => {
+        // Extract separately so one unavailable frame cannot shift the labels of later frames.
+        for (const look of group) {
+          const shots = await framesAt(dependencies, input, directory, [asset.kind === "image" ? 0 : look.sourceS]).catch(() => []);
+          if (shots[0]) frames.push({ atS: look.atS, label: look.label + " (source frame, overlays described separately)", jpegBase64: shots[0].jpegBase64 });
+        }
+      }).catch(caught => request.log.warn({ err: caught, assetId }, "Review source unavailable"));
+    }
     const issues: CheckIssue[] = checkEdit({ timeline, assetId: ctx.main.id, words, sourceDurationUs: ctx.main.durationUs ?? Math.round(ctx.durationS * 1e6), platform, ...(target ? { targetSeconds: target } : {}), ...(media ? { media } : {}) });
     let note: string | undefined; let ai = false;
     if (dependencies.director.review) {
@@ -250,7 +261,7 @@ export function registerCheckRoutes(server: FastifyInstance, dependencies: Direc
       try {
         const reviewed = await dependencies.director.review({
           brief, platform, frames,
-          pieces: pieces.map((c) => ({ clipId: c.id, startS: c.timelineStartUs / 1e6, endS: c.timelineEndUs / 1e6, text: c.assetId === ctx.main.id ? textOf(c.sourceStartUs, c.sourceEndUs) : "(other footage)" })),
+          pieces: pieces.map((c) => ({ clipId: c.id, startS: c.timelineStartUs / 1e6, endS: c.timelineEndUs / 1e6, text: c.assetId === ctx.main.id ? textOf(c.sourceStartUs, c.sourceEndUs) : reviewAssets.find(a => a.id === c.assetId)?.metadata.endCard === true ? "Intentional narrated end card: " + graphics.filter(g => g.timelineStartUs < c.timelineEndUs && g.timelineEndUs > c.timelineStartUs).map(g => String(g.transform?.text ?? "")).join(" ") : "(other footage)" })),
           graphics: graphics.map((g) => ({ clipId: g.id, kind: String(g.transform?.kind ?? "title"), text: String(g.transform?.text ?? ""), atS: g.timelineStartUs / 1e6, durationS: (g.timelineEndUs - g.timelineStartUs) / 1e6 })),
           cutaways: overlays.filter((c) => c.transform?.role === "broll").map((c) => ({ atS: c.timelineStartUs / 1e6, durationS: (c.timelineEndUs - c.timelineStartUs) / 1e6, name: ctx.others.find((o) => o.id === c.assetId)?.name ?? "media" })),
           ...(musicAsset ? { music: String(musicAsset.metadata.description ?? musicAsset.metadata.mood ?? musicAsset.metadata.filename ?? "music") } : {}),
