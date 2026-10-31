@@ -12,6 +12,10 @@ type Props = {
   request(path: string, init?: RequestInit): Promise<any>;
   disabled: boolean;
   initialScript?: string;
+  initialVoice?: string;
+  initialStyle?: string;
+  onVoiceChange?(voice: string): void;
+  onStyleChange?(style: string): void;
   placement?: "story" | "playhead";
   onWorking?(working: boolean): void;
   onScriptChange?(script: string): void;
@@ -22,11 +26,11 @@ type Props = {
 };
 const VOICE_LABEL: Record<string, string> = { marin: "Marin (natural, female)", cedar: "Cedar (natural, male)", verse: "Verse (expressive)", alloy: "Alloy (neutral)", ash: "Ash (clear, male)", ballad: "Ballad (soft)", coral: "Coral (bright, female)", echo: "Echo (calm, male)", fable: "Fable (storyteller)", nova: "Nova (warm, female)", onyx: "Onyx (deep, male)", sage: "Sage (gentle)", shimmer: "Shimmer (light, female)" };
 
-export function VoiceOver({ projectId, apiBase, token, request, disabled, initialScript = "", placement = "playhead", onWorking, onScriptChange, onRecording, onAdd }: Props) {
+export function VoiceOver({ projectId, apiBase, token, request, disabled, initialScript = "", initialVoice = "marin", initialStyle = "", onVoiceChange, onStyleChange, placement = "playhead", onWorking, onScriptChange, onRecording, onAdd }: Props) {
   const [voices, setVoices] = useState<string[]>([]);
   const [script, setScript] = useState(initialScript);
-  const [voice, setVoice] = useState("marin");
-  const [style, setStyle] = useState("");
+  const [voice, setVoice] = useState(initialVoice);
+  const [style, setStyle] = useState(initialStyle);
   const [duck, setDuck] = useState(true);
   const [volumeDb, setVolumeDb] = useState(0);
   const [recording, setRecording] = useState(false);
@@ -37,6 +41,8 @@ export function VoiceOver({ projectId, apiBase, token, request, disabled, initia
   const started = useRef(0);
 
   useEffect(() => { setScript(initialScript); }, [initialScript]);
+  useEffect(() => { setVoice(initialVoice); }, [initialVoice]);
+  useEffect(() => { setStyle(initialStyle); }, [initialStyle]);
   useEffect(() => { onWorking?.(Boolean(working || recording)); return () => onWorking?.(false); }, [working, recording]);
   useEffect(() => () => { const rec = recorder.current; if (rec) { rec.onstop = null; rec.stream.getTracks().forEach(track => track.stop()); if (rec.state !== "inactive") rec.stop(); } }, []);
   useEffect(() => { request("/v1/projects/" + projectId + "/voiceover/voices").then((r) => setVoices(r.voices ?? [])).catch(() => setVoices([])); }, [projectId]);
@@ -92,12 +98,12 @@ export function VoiceOver({ projectId, apiBase, token, request, disabled, initia
       ? <button type="button" className="btn primary rec" onClick={stop}>■ Stop recording · {seconds.toFixed(1)}s</button>
       : <button type="button" className="btn" onClick={() => void start()} disabled={disabled || working !== ""}>● Record my voice</button>}
     {voices.length > 0 && <>
-      <label>Or type what to say<textarea rows={3} maxLength={3000} value={script} onChange={(event) => { setScript(event.target.value); onScriptChange?.(event.target.value); }} placeholder="The words to read out" /></label>
+      <label>Or type what to say<textarea disabled={disabled || Boolean(working) || recording} rows={3} maxLength={3000} value={script} onChange={(event) => { setScript(event.target.value); onScriptChange?.(event.target.value); }} placeholder="The words to read out" /></label>
       <div className="row-2">
-        <label>Voice<select value={voice} onChange={(event) => setVoice(event.target.value)}>{voices.map((v) => <option key={v} value={v}>{VOICE_LABEL[v] ?? v}</option>)}</select></label>
-        <label>Delivery<input value={style} maxLength={200} onChange={(event) => setStyle(event.target.value)} placeholder="e.g. upbeat, calm" /></label>
+        <label>Voice<select disabled={disabled || Boolean(working) || recording} value={voice} onChange={(event) => { setVoice(event.target.value); onVoiceChange?.(event.target.value); }}>{voices.map((v) => <option key={v} value={v}>{VOICE_LABEL[v] ?? v}</option>)}</select></label>
+        <label>Delivery<input disabled={disabled || Boolean(working) || recording} value={style} maxLength={200} onChange={(event) => { setStyle(event.target.value); onStyleChange?.(event.target.value); }} placeholder="e.g. upbeat, calm" /></label>
       </div>
-      <button type="button" className="btn" onClick={() => void speak()} disabled={disabled || working !== "" || !script.trim()}>{working === "speak" ? "Making the voice…" : "Add this voice-over"}</button>
+      <button type="button" className="btn" onClick={() => void speak()} disabled={disabled || working !== "" || !script.trim()}>{working === "speak" ? "Making the voice…" : placement === "story" ? "Preview AI narration" : "Add this voice-over"}</button>
     </>}
     {placement !== "story" && <><label>Voice-over volume ({volumeDb > 0 ? "+" : ""}{volumeDb} dB)<input type="range" min={-12} max={6} step={1} value={volumeDb} onChange={(event) => setVolumeDb(Number(event.target.value))} /></label>
     <label className="checkbox"><input type="checkbox" checked={duck} onChange={(event) => setDuck(event.target.checked)} /> Lower the video's sound under it</label></>}
