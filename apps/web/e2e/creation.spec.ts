@@ -14,7 +14,7 @@ try {
 const photo = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=", "base64");
 
 async function setup(page: Page) {
-  const state = { creates: 0, uploads: 0, assets: [] as any[], revision: 0, timeline: { durationUs: 0, tracks: [] } as any, applied: null as any, transcripts: 0, generated: 0, plans: 0, photoFails: false, photoRequests: 0, voiceRequests: 0 };
+  const state = { creates: 0, uploads: 0, assets: [] as any[], revision: 0, timeline: { durationUs: 0, tracks: [] } as any, applied: null as any, transcripts: 0, generated: 0, plans: 0, photoFails: false, photoRequests: 0, voiceRequests: 0, voiceFails: false, applyFailures: 0, applyRequests: 0 };
   const project = () => ({ id: "p", name: "New story", revision: state.revision, createdAt: "2026-10-31", updatedAt: "2026-10-31" });
   await page.route("http://localhost:8080/**", async route => {
     const req = route.request(), path = new URL(req.url()).pathname;
@@ -47,13 +47,16 @@ async function setup(page: Page) {
     } else if (path.endsWith("/creation/image")) {
       state.generated++; const asset = { id: "generated", kind: "image", metadata: { filename: "Generated image.png", generated: true } }; state.assets.push(asset); body = { asset };
     } else if (path.endsWith("/creation/apply")) {
+      state.applyRequests++;
+      if (state.applyFailures > 0) { state.applyFailures--; await route.fulfill({ status: 503, headers, contentType: "application/json", body: JSON.stringify({ error: { message: "Assembly temporarily unavailable" } }) }); return; }
       state.applied = req.postDataJSON(); state.revision++;
       let at = 0;
       state.timeline = { durationUs: 0, tracks: [{ id: "video", kind: "video", clips: state.applied.scenes.map((s: any, i: number) => { const start = at; at += s.durationS * 1e6; return { id: "c" + i, assetId: s.assetId, sourceStartUs: s.startS * 1e6, sourceEndUs: (s.startS + s.durationS) * 1e6, timelineStartUs: start, timelineEndUs: at, transform: { background: "none" } }; }) }] }; state.timeline.durationUs = at;
       body = { platform: "tiktok", revision: { revision: state.revision, timeline: state.timeline, tailoring: { intent: "A story", constraints: ["creation:story"] } } };
     } else if (path.endsWith("/voiceover/speech")) {
       state.voiceRequests++;
-      const input = req.postDataJSON(); const asset = { id: "aiVoice", kind: "audio", durationUs: 3_600_000, metadata: { filename: "AI narration.mp3", voiceover: true, script: input.text } }; state.assets.push(asset); body = { asset };
+      if (state.voiceFails) { await route.fulfill({ status: 503, headers, contentType: "application/json", body: JSON.stringify({ error: { message: "AI narration temporarily unavailable" } }) }); return; }
+      const input = req.postDataJSON(); const asset = { id: state.voiceRequests === 1 ? "aiVoice" : "aiVoice" + state.voiceRequests, kind: "audio", durationUs: 3_600_000, metadata: { filename: "AI narration.mp3", voiceover: true, script: input.text } }; state.assets.push(asset); body = { asset };
     } else if (path.endsWith("/voiceover/voices")) body = { voices: ["marin"] };
     else if (path.endsWith("/stock/sources")) body = { video: ["pexels"], photo: ["pexels"], gif: [] };
     else if (path.endsWith("/stock/search")) body = { items: [{ provider: "pexels", id: "stock", kind: "photo", thumbUrl: "http://localhost:8080/photo.png", width: 100, height: 100, title: "Sunrise", credit: "Photographer" }] };
@@ -102,6 +105,7 @@ test("an idea with no uploads requires an approved visual; stock and generated i
   const state = await setup(page);
   await page.getByRole("button", { name: "New video", exact: true }).click();
   await page.getByRole("button", { name: /^Create from an idea or script/ }).click();
+  await expect(page.getByLabel("Narration preference", { exact: true })).toHaveValue("ai");
   await page.getByLabel("Your brief").fill("A hopeful sunrise story");
   await page.getByRole("button", { name: "Make my storyboard" }).click();
   await expect(page.getByRole("button", { name: "Assemble this story" })).toBeDisabled();
@@ -124,6 +128,7 @@ test("an idea with no uploads requires an approved visual; stock and generated i
   await expect.poll(() => page.getByAltText("Storyboard photo").evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0);
   await expect(page.getByRole("alert")).toHaveCount(0);
   expect(state.applied.scenes[0].assetId).toBe("generated");
+  expect(state.voiceRequests).toBe(1); expect(state.applied.narrationAssetId).toBe("aiVoice");
 });
 
 test("human narration is uploaded separately and transcription is requested before assembling captions", async ({ page }) => {
@@ -149,10 +154,55 @@ test("AI narration uses the reviewed script and the resulting audio asset is sel
   await page.getByLabel("Upload videos and photos", { exact: true }).setInputFiles({ name: "photo.png", mimeType: "image/png", buffer: photo });
   await page.getByRole("button", { name: "Make my storyboard" }).click();
   await expect(page.getByLabel("Or type what to say")).toHaveValue("Jesus truly saves.");
-  await page.getByRole("button", { name: "Add this voice-over", exact: true }).click();
-  await expect(page.getByLabel("Narration", { exact: true })).toHaveValue("aiVoice");
+  await page.getByRole("button", { name: "Preview AI narration", exact: true }).click();
+  await expect(page.getByLabel("Narration", { exact: true })).toHaveValue("__ai");
   await page.getByRole("button", { name: "Assemble this story" }).click();
   await expect(page.getByLabel("Live preview of the edit")).toBeVisible();
   expect(state.voiceRequests).toBe(1); expect(state.applied.narrationAssetId).toBe("aiVoice");
   expect(state.assets.find(a => a.id === "aiVoice").metadata.script).toBe("Jesus truly saves.");
+});
+
+
+async function ideaWithPhoto(page: Page) {
+  const state = await setup(page);
+  await page.getByRole("button", { name: "New video", exact: true }).click();
+  await page.getByRole("button", { name: /^Create from an idea or script/ }).click();
+  await page.getByLabel("Your brief").fill("A hopeful narrated photo story");
+  await page.getByLabel("Upload videos and photos", { exact: true }).setInputFiles({ name: "photo.png", mimeType: "image/png", buffer: photo });
+  await page.getByRole("button", { name: "Make my storyboard" }).click();
+  return state;
+}
+
+test("idea mode generates the reviewed AI narration automatically, preserves it across assembly failure, and regenerates edited words", async ({ page }) => {
+  const state = await ideaWithPhoto(page);
+  await expect(page.getByLabel("Narration preference", { exact: true })).toHaveValue("ai");
+  state.voiceFails = true;
+  await page.getByRole("button", { name: "Assemble this story" }).click();
+  await expect(page.getByRole("alert")).toHaveText("AI narration temporarily unavailable");
+  expect(state.applyRequests).toBe(0);
+  state.voiceFails = false; state.applyFailures = 2;
+  await page.getByRole("button", { name: "Assemble this story" }).click();
+  await expect(page.getByRole("alert")).toHaveText("Assembly temporarily unavailable");
+  expect(state.voiceRequests).toBe(2);
+  await page.reload();
+  await expect(page.getByLabel("Narration preference", { exact: true })).toHaveValue("ai");
+  await page.getByRole("button", { name: "Assemble this story" }).click();
+  await expect(page.getByRole("alert")).toHaveText("Assembly temporarily unavailable");
+  expect(state.voiceRequests).toBe(2);
+  await page.getByLabel("Or type what to say").fill("Jesus truly saves. Choose freedom today.");
+  await page.getByRole("button", { name: "Assemble this story" }).click();
+  await expect(page.getByLabel("Live preview of the edit")).toBeVisible();
+  expect(state.voiceRequests).toBe(3);
+  expect(state.applied.narrationAssetId).toBe("aiVoice3");
+  expect(state.assets.find(a => a.id === "aiVoice3").metadata.script).toBe("Jesus truly saves. Choose freedom today.");
+});
+
+test("an explicit no-narration choice survives reload and never calls AI speech", async ({ page }) => {
+  const state = await ideaWithPhoto(page);
+  await page.getByLabel("Narration preference", { exact: true }).selectOption("none");
+  await page.reload();
+  await expect(page.getByLabel("Narration preference", { exact: true })).toHaveValue("none");
+  await page.getByRole("button", { name: "Assemble this story" }).click();
+  await expect(page.getByLabel("Live preview of the edit")).toBeVisible();
+  expect(state.voiceRequests).toBe(0); expect(state.applied.narrationAssetId).toBe("");
 });

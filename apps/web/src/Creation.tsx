@@ -6,7 +6,8 @@ export type CreationMode = "footage" | "story" | "idea";
 type Asset = { id: string; kind: string; durationUs?: number; metadata: Record<string, string | number | boolean> };
 type Scene = { assetId: string; startS: number; durationS: number; text: string; visual: string };
 type Plan = { summary: string; script: string; scenes: Scene[]; source: "ai" | "rules"; note?: string };
-type Draft = { brief: string; seconds: number; platform: string; selected: string[]; plan: Plan | null; narrationId: string; music: boolean; sceneText: boolean; captions: boolean };
+type NarrationMode = "ai" | "existing" | "none";
+type Draft = { narrationMode: NarrationMode; voice: string; voiceStyle: string; narrationFingerprint: string; brief: string; seconds: number; platform: string; selected: string[]; plan: Plan | null; narrationId: string; music: boolean; sceneText: boolean; captions: boolean };
 type Props = {
   projectId: string; revision: number; mode: CreationMode; assets: Asset[]; apiBase: string; token: string;
   request(path: string, init?: RequestInit): Promise<any>;
@@ -17,20 +18,20 @@ type Props = {
 const nameOf = (a: Asset) => a.kind === "image" && typeof a.metadata.prompt === "string" ? "Generated · " + a.metadata.prompt.slice(0, 60) : String(a.metadata.filename ?? a.kind);
 const message = (e: unknown) => e instanceof Error ? e.message : "The action failed. Your draft is kept; try again.";
 const keyOf = (id: string) => "videocraft.story.v1." + id;
-function readDraft(id: string): Draft {
-  const empty: Draft = { brief: "", seconds: 30, platform: "tiktok", selected: [], plan: null, narrationId: "", music: true, sceneText: true, captions: true };
+function readDraft(id: string, mode: CreationMode): Draft {
+  const empty: Draft = { narrationMode: mode === "idea" ? "ai" : "none", voice: "marin", voiceStyle: "", narrationFingerprint: "", brief: "", seconds: 30, platform: "tiktok", selected: [], plan: null, narrationId: "", music: true, sceneText: true, captions: true };
   try {
     const saved = JSON.parse(localStorage.getItem(keyOf(id)) ?? "null");
     if (!saved || typeof saved.brief !== "string" || !Array.isArray(saved.selected)) return empty;
     const plan = saved.plan;
     if (plan && (typeof plan.summary !== "string" || typeof plan.script !== "string" || !["ai", "rules"].includes(plan.source) || !Array.isArray(plan.scenes) || plan.scenes.length > 40 || !plan.scenes.every((s: Scene) => s && typeof s.assetId === "string" && typeof s.text === "string" && typeof s.visual === "string" && Number.isFinite(s.startS) && Number.isFinite(s.durationS)))) return empty;
-    return { brief: saved.brief.slice(0, 2000), seconds: Number.isFinite(saved.seconds) ? saved.seconds : 30, platform: ["tiktok", "youtube", "square"].includes(saved.platform) ? saved.platform : "tiktok", selected: saved.selected.filter((s: unknown) => typeof s === "string").slice(0, 40), plan: plan ?? null, narrationId: typeof saved.narrationId === "string" ? saved.narrationId : "", music: saved.music !== false, sceneText: saved.sceneText !== false, captions: saved.captions !== false };
+    return { narrationMode: ["ai", "existing", "none"].includes(saved.narrationMode) ? saved.narrationMode : saved.narrationId ? "existing" : empty.narrationMode, voice: typeof saved.voice === "string" ? saved.voice : "marin", voiceStyle: typeof saved.voiceStyle === "string" ? saved.voiceStyle.slice(0, 200) : "", narrationFingerprint: typeof saved.narrationFingerprint === "string" ? saved.narrationFingerprint : "", brief: saved.brief.slice(0, 2000), seconds: Number.isFinite(saved.seconds) ? saved.seconds : 30, platform: ["tiktok", "youtube", "square"].includes(saved.platform) ? saved.platform : "tiktok", selected: saved.selected.filter((s: unknown) => typeof s === "string").slice(0, 40), plan: plan ?? null, narrationId: typeof saved.narrationId === "string" ? saved.narrationId : "", music: saved.music !== false, sceneText: saved.sceneText !== false, captions: saved.captions !== false };
   } catch { return empty; }
 }
 
 /** The storyboard is a draft until the creator assembles it. Uploads stay available after a failed step. */
 export function Creation({ projectId, revision, mode, assets, apiBase, token, request, onAsset, onReady, onWorking }: Props) {
-  const [draft, setDraft] = useState<Draft>(() => readDraft(projectId));
+  const [draft, setDraft] = useState<Draft>(() => readDraft(projectId, mode));
   const [working, setWorking] = useState("");
   const [notice, setNotice] = useState("");
   const [images, setImages] = useState(false);
@@ -93,7 +94,7 @@ export function Creation({ projectId, revision, mode, assets, apiBase, token, re
           onAsset(r.asset); added.push(r.asset);
         } catch (e) { failed.push(file.name + ": " + message(e)); }
       }
-      if (audio && added[0]) patch({ narrationId: added[0].id });
+      if (audio && added[0]) patch({ narrationId: added[0].id, narrationMode: "existing", narrationFingerprint: "" });
       else {
         patch({ selected: [...new Set([...draft.selected, ...added.map(a => a.id)])] });
         if (added[0] && sceneIndex !== null) scenePatch(sceneIndex, { assetId: added[0].id, startS: 0, durationS: Math.min(draft.plan?.scenes[sceneIndex]?.durationS ?? 5, added[0].kind === "video" ? (added[0].durationUs ?? 5e6) / 1e6 : 60) });
@@ -109,8 +110,21 @@ export function Creation({ projectId, revision, mode, assets, apiBase, token, re
   }
   async function assemble() {
     await run("Assembling your edit…", async () => {
-      if (draft.narrationId && draft.captions) await request("/v1/projects/" + projectId + "/assets/" + draft.narrationId + "/transcript", { method: "POST" });
-      const result = await request("/v1/projects/" + projectId + "/creation/apply", { method: "POST", body: JSON.stringify({ revision, scenes: draft.plan?.scenes, narrationAssetId: draft.narrationId, music: draft.music, sceneText: draft.sceneText, captions: draft.captions, brief: draft.brief, platform: draft.platform }) });
+      let narrationId = draft.narrationMode === "none" ? "" : draft.narrationId;
+      if (draft.narrationMode === "ai") {
+        const script = draft.plan?.script.trim() ?? "";
+        if (!script) throw new Error("Write or generate a narration script before assembling with an AI voice.");
+        const fingerprint = JSON.stringify([script, draft.voice, draft.voiceStyle.trim()]);
+        if (!narrationId || !assets.some(a => a.id === narrationId) || draft.narrationFingerprint !== fingerprint) {
+          setWorking("Generating AI narration…");
+          const result = await request("/v1/projects/" + projectId + "/voiceover/speech", { method: "POST", body: JSON.stringify({ text: script, voice: draft.voice, ...(draft.voiceStyle.trim() ? { style: draft.voiceStyle.trim() } : {}) }) });
+          narrationId = result.asset.id; onAsset(result.asset);
+          patch({ narrationId, narrationFingerprint: fingerprint });
+        }
+      } else if (draft.narrationMode === "existing" && !narrationId) throw new Error("Record, upload, or select your narration first.");
+      if (narrationId && draft.captions) { setWorking("Transcribing narration…"); await request("/v1/projects/" + projectId + "/assets/" + narrationId + "/transcript", { method: "POST" }); }
+      setWorking("Assembling your edit…");
+      const result = await request("/v1/projects/" + projectId + "/creation/apply", { method: "POST", body: JSON.stringify({ revision, scenes: draft.plan?.scenes, narrationAssetId: narrationId, music: draft.music, sceneText: draft.sceneText, captions: draft.captions, brief: draft.brief, platform: draft.platform }) });
       onReady(result);
     });
   }
@@ -121,6 +135,8 @@ export function Creation({ projectId, revision, mode, assets, apiBase, token, re
     <section className="card stack" aria-label="Story brief">
       <h2>1. Describe the result</h2>
       <label>Your brief<textarea rows={3} maxLength={2000} value={draft.brief} disabled={busy} onChange={e => patch({ brief: e.target.value })} placeholder="What is it about, who is it for, and what should viewers take away?" /></label>
+      <label>Narration preference<select aria-label="Narration preference" value={draft.narrationMode} disabled={busy} onChange={e => patch({ narrationMode: e.target.value as NarrationMode })}><option value="ai">AI-generated narration</option><option value="existing">Record or upload my narration</option><option value="none">Keep original sound / no narration</option></select></label>
+      {draft.narrationMode === "ai" && <p className="muted small">AI drafts the narration script with your storyboard. Review the words and voice below; assembling generates and adds the audio automatically.</p>}
       <div className="row-2"><label>Target length (seconds)<input type="number" min={5} max={600} value={draft.seconds} disabled={busy} onChange={e => patch({ seconds: Number(e.target.value) })} /></label>
         <label>Format<select value={draft.platform} disabled={busy} onChange={e => patch({ platform: e.target.value })}><option value="tiktok">Reel / Short · 9:16</option><option value="youtube">YouTube · 16:9</option><option value="square">Feed · 1:1</option></select></label></div>
     </section>
@@ -156,11 +172,13 @@ export function Creation({ projectId, revision, mode, assets, apiBase, token, re
       </section>}
       <section className="card stack" aria-label="Story narration"><h2>4. Choose narration</h2>
         <p className="muted small">Keep the original sound, or add one narration track for the whole story. With narration, source speech is muted and visuals extend to include the complete recording.</p>
-        <label>Narration<select aria-label="Narration" value={draft.narrationId} disabled={busy} onChange={e => patch({ narrationId: e.target.value })}><option value="">Keep original sound / no narration</option>{assets.filter(a => a.kind === "audio" && !a.metadata.mood).map(a => <option key={a.id} value={a.id}>{nameOf(a)}</option>)}</select></label>
+        <label>Narration<select aria-label="Narration" value={draft.narrationMode === "ai" ? "__ai" : draft.narrationMode === "none" ? "__none" : draft.narrationId} disabled={busy} onChange={e => patch(e.target.value === "__ai" ? { narrationMode: "ai" } : e.target.value === "__none" ? { narrationMode: "none" } : { narrationMode: "existing", narrationId: e.target.value })}><option value="__ai">AI voice from the reviewed script</option><option value="__none">Keep original sound / no narration</option><option value="" disabled>Choose a recording</option>{assets.filter(a => a.kind === "audio" && !a.metadata.mood).map(a => <option key={a.id} value={a.id}>{nameOf(a)}</option>)}</select></label>
         <label className="btn file-btn">Upload human narration<input type="file" accept="audio/*" disabled={busy} onChange={e => void upload(e.currentTarget, true)} /></label>
-        {narration && urls[narration.id] && <audio controls src={urls[narration.id]} />}
-        <VoiceOver projectId={projectId} apiBase={apiBase} token={token} request={request} disabled={Boolean(working)} initialScript={draft.plan.script} placement="story" onWorking={setVoiceWorking} onScriptChange={script => patch({ plan: { ...draft.plan!, script } })} onRecording={setRecording} onAdd={a => { onAsset(a); patch({ narrationId: a.id }); }} />
-        {draft.narrationId && <label className="checkbox"><input type="checkbox" checked={draft.captions} disabled={busy} onChange={e => patch({ captions: e.target.checked })} />Transcribe narration and add speech captions</label>}
+        {draft.narrationMode === "ai" && <p className="note">Your AI voice is generated automatically when you assemble. You can preview it first with the button below. Editing the script, voice, or delivery makes a new recording.</p>}
+        {narration && draft.narrationMode !== "none" && <p className="muted small">Selected audio: {nameOf(narration)}</p>}
+        {narration && draft.narrationMode !== "none" && urls[narration.id] && <audio controls src={urls[narration.id]} />}
+        <VoiceOver projectId={projectId} apiBase={apiBase} token={token} request={request} disabled={Boolean(working)} initialScript={draft.plan.script} initialVoice={draft.voice} initialStyle={draft.voiceStyle} onVoiceChange={voice => patch({ voice })} onStyleChange={voiceStyle => patch({ voiceStyle })} placement="story" onWorking={setVoiceWorking} onScriptChange={script => patch({ plan: { ...draft.plan!, script } })} onRecording={setRecording} onAdd={a => { onAsset(a); const ai = a.metadata.voiceover === true; patch({ narrationId: a.id, narrationMode: ai ? "ai" : "existing", narrationFingerprint: ai ? JSON.stringify([draft.plan!.script.trim(), draft.voice, draft.voiceStyle.trim()]) : "" }); }} />
+        {draft.narrationMode !== "none" && <label className="checkbox"><input type="checkbox" checked={draft.captions} disabled={busy} onChange={e => patch({ captions: e.target.checked })} />Transcribe narration and add speech captions</label>}
         <label className="checkbox"><input type="checkbox" checked={draft.music} disabled={busy} onChange={e => patch({ music: e.target.checked })} />Add background music</label>
         <label className="checkbox"><input type="checkbox" checked={draft.sceneText} disabled={busy} onChange={e => patch({ sceneText: e.target.checked })} />Include approved scene text</label>
       </section>
