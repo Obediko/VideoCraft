@@ -308,6 +308,7 @@ export function App() {
     flushSync(() => setPreviewMode("source"));
     const player = playerRef.current;
     if (!player) { setStatus("The source preview is unavailable. Reload the footage and try again."); return; }
+    player.scrollIntoView({ block: "nearest" });
     const at = selectedClip.sourceStartUs / 1_000_000;
     const seek = () => { if (playerRef.current === player) player.currentTime = at; };
     if (player.readyState >= 1) seek(); else player.addEventListener("loadedmetadata", seek, { once: true });
