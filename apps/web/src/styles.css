@@ -353,3 +353,11 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 @media (max-width: 600px) { .creation .row-2 { grid-template-columns: 1fr; } .creation .actions { flex-wrap: wrap; } }
 
 [aria-label="Story pieces"] .btn { white-space: normal; overflow-wrap: anywhere; max-width: 100%; }
+
+.effect-library { border-bottom: 1px solid var(--line, #393832); padding-bottom: 1rem; }
+.effect-preset-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .45rem; }
+.effect-preset { display: flex; flex-direction: column; align-items: flex-start; white-space: normal; text-align: left; min-width: 0; padding: .65rem; }
+.effect-preset.selected { outline: 2px solid #a8c49a; outline-offset: -2px; }
+.live-thinking { position: absolute; inset: 0; pointer-events: none; container-type: size; }
+.live-thinking span { position: absolute; white-space: nowrap; font-family: "DejaVu Sans", sans-serif; font-size: 4.7cqmin; line-height: 1.2; font-weight: 400; text-shadow: 0 1px 2px #000, 1px 0 2px #000; }
+@media(max-width: 380px) { .effect-preset-grid { grid-template-columns: minmax(0, 1fr); } }

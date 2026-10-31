@@ -1,5 +1,7 @@
 import { flushSync } from "react-dom";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { EffectLibrary } from "./EffectLibrary.js";
+import { effectRecipeOperations, type EffectRecipe } from "@videocraft/domain";
 import { Creation, type CreationMode } from "./Creation.js";
 import { LivePreview, type LivePreviewHandle } from "./LivePreview.js";
 import { StockSearch } from "./StockSearch.js";
@@ -35,7 +37,7 @@ const PLAN_GROUPS: Array<{ name: string; kinds: string[] }> = [
   { name: "Story", kinds: ["cut"] },
   { name: "Text on screen", kinds: ["title", "callout", "lower-third", "progress", "captions", "color"] },
   { name: "Cutaways", kinds: ["broll", "stock"] },
-  { name: "Look", kinds: ["look", "background", "zooms"] },
+  { name: "Look", kinds: ["effect", "look", "background", "zooms"] },
   { name: "Sound", kinds: ["music", "sfx", "volume", "voiceover"] },
   { name: "Taking out", kinds: ["remove"] },
   { name: "Pacing", kinds: ["transitions"] },
@@ -344,6 +346,15 @@ export function App() {
     const anchor = anchorPoint();
     if (!anchor) { setStatus("Add a video clip first"); return; }
     void applyEdit([{ type: "add-broll", assetId, anchorAssetId: anchor.anchorAssetId, ...(anchor.anchorClipId ? { anchorClipId: anchor.anchorClipId } : {}), anchorSourceUs: anchor.anchorSourceUs, durationUs: Math.round(brollSeconds * 1_000_000), mode: brollMode }], "Cutaway added " + anchor.where);
+  }
+  async function addCreativeTreatment(recipe: EffectRecipe) {
+    const anchor = anchorPoint();
+    const host = anchor && videoClips.find(c => (!anchor.anchorClipId || c.id === anchor.anchorClipId) && c.assetId === anchor.anchorAssetId && anchor.anchorSourceUs >= c.sourceStartUs && anchor.anchorSourceUs < c.sourceEndUs);
+    if (!anchor || !host) throw new Error("Select a clip or a moment in the edit first");
+    const available = (host.sourceEndUs - anchor.anchorSourceUs) / 1e6;
+    const clipTreatment = ["focus", "impact", "smooth-reveal"].includes(recipe.presetId);
+    if (!clipTreatment && available < recipe.durationS) throw new Error("This moment has " + available.toFixed(1) + " s left in the piece. Shorten the treatment or choose an earlier moment.");
+    return applyEdit(effectRecipeOperations(recipe, { ...anchor, anchorClipId: host.id }), "Creative treatment added " + anchor.where);
   }
   function addSoundEffect() {
     const anchor = anchorPoint();
@@ -1213,6 +1224,7 @@ export function App() {
     : mode === "visuals" ? <section className="pane" aria-label="Visuals">
       <div className="pane-head"><h2>Visuals</h2></div>
       <div className="pad stack broll-panel effects-panel">
+        <EffectLibrary request={request} disabled={busy || revision === 0} onUse={addCreativeTreatment} />
         <h3>Look</h3>
         <label>Look for the whole video<select value={wholeLook} disabled={busy || revision === 0} onChange={(event) => { if (event.target.value !== "mixed") void applyEdit([{ type: "set-look", look: event.target.value }], "Look: " + (LOOK_LABEL[event.target.value] ?? event.target.value)); }}>{wholeLook === "mixed" && <option value="mixed">Mixed (set per clip)</option>}{Object.entries(LOOK_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
         <p className="muted small">Zooms and transitions are set per clip: select a clip on the timeline.</p>

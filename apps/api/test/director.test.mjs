@@ -308,3 +308,15 @@ test("a storyboard readability fix applies to an owned photo and resolves its fi
     assert.equal(final.json().issues.some(i => i.kind === "too-fast"), false);
   } finally { close(); }
 });
+
+test('accepting a creative Director suggestion saves a reusable recipe after the edit succeeds',async()=>{
+  const saved=[];const library={list:async()=>[],save:async(userId,e)=>saved.push({userId,...e}),remove:async()=>{}};
+  const state=await setup(new RuleDirector(),{extra:{effects:library}});
+  try{
+    const plan={source:'ai',summary:'A quiet emphasis',suggestions:[{id:'effect',kind:'effect',presetId:'key-point',text:'Real projects',atS:1,durationS:2}]};
+    const r=await state.server.inject({method:'POST',url:'/v1/projects/'+state.projectId+'/director/apply',payload:{revision:1,plan,accepted:['effect']}});
+    assert.equal(r.statusCode,201,r.body);assert.equal(saved.length,1);assert.equal(saved[0].userId,'u');assert.equal(saved[0].recipe.text,'Real projects');
+    assert.ok(r.json().revision.timeline.tracks.flatMap(t=>t.clips).some(c=>c.transform?.text==='Real projects'));
+    const stale=await state.server.inject({method:'POST',url:'/v1/projects/'+state.projectId+'/director/apply',payload:{revision:1,plan,accepted:['effect']}});assert.equal(stale.statusCode,409);assert.equal(saved.length,1);
+  }finally{await state.server.close();state.close();}
+});

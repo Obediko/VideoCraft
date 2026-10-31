@@ -4,14 +4,16 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { applyTimelineOperations, parseTimelineOperations, type ProjectRevision, type TranscriptSegment, type UUID } from "@videocraft/domain";
+import { applyTimelineOperations, parseTimelineOperations, type EffectLibraryRepository, type ProjectRevision, type TranscriptSegment, type UUID } from "@videocraft/domain";
 import type { AssetRepository, ProjectRepository, RevisionRepository } from "@videocraft/application";
 import type { ObjectStorage } from "@videocraft/storage";
 import { RuleDirector, briefHints, checkEdit, effectOperations, parseMediaSignals, planOperations, sanitizePlan, type CheckIssue, type Director, type DirectorInput, type DirectorPlan, type MediaSignals } from "@videocraft/director";
 import { findCandidates } from "@videocraft/strategies";
+import { savedEffect } from "./effects.js";
 import { composeMusicAsset } from "./music-routes.js";
 
 export interface DirectorRouteDependencies {
+  effects?: EffectLibraryRepository;
   projects: ProjectRepository; assets: AssetRepository; revisions: RevisionRepository; storage: ObjectStorage;
   transcripts: { listForAsset(assetId: UUID): Promise<TranscriptSegment[]> };
   director: Director;
@@ -142,6 +144,11 @@ export function registerDirectorRoutes(server: FastifyInstance, dependencies: Di
       projectId: ctx.projectId, createdBy: ctx.principal.userId, timeline, acceptedProposalIds: ctx.revision.acceptedProposalIds,
       tailoring: ctx.body.keepTailoring === true && ctx.revision.tailoring ? ctx.revision.tailoring : { intent: plan.profile.intent, audience: plan.profile.audience, channel: plan.profile.channel, ...(plan.profile.tone ? { tone: plan.profile.tone } : {}), targetDurationUs: plan.profile.targetSeconds * 1_000_000, constraints: [] },
     });
+    if (dependencies.effects) for (const s of plan.suggestions) if (s.kind === "effect" && accepted.has(s.id)) {
+      const host = timeline.tracks.filter(t => t.kind === "video").flatMap(t => t.clips).find(c => c.assetId === ctx.main.id && s.atS * 1e6 >= c.sourceStartUs && c.sourceEndUs - s.atS * 1e6 >= 1_000_000);
+      if (host) try { await dependencies.effects.save(ctx.principal.userId, savedEffect(s.recipe)); }
+      catch (caught) { request.log.warn({ err: caught }, "Effect library save failed"); notes.push("Your edit was saved, but this treatment could not be added to your library. Save it from Visuals to retry."); }
+    }
     const platform = plan.suggestions.find((s) => s.kind === "platform" && accepted.has(s.id));
     return reply.code(201).send({ revision, ...(platform && platform.kind === "platform" ? { platform: platform.platform } : {}), ...(music ? { music } : {}), ...(notes.length ? { notes } : {}) });
   });
@@ -309,6 +316,7 @@ async function directorInputFor(dependencies: DirectorRouteDependencies, ctx: No
   }
   const frames = await sampleFrames(dependencies, ctx.main.storageKey, ctx.durationS, 8).catch((caught) => { request.log.warn({ err: caught }, "Frame sampling failed; planning from words only"); return []; });
   return {
+    ...(dependencies.effects ? { effects: (await dependencies.effects.list(ctx.principal.userId)).map(e => e.recipe) } : {}),
     brief, durationS: ctx.durationS, frame: { width: Number(ctx.main.metadata.width) || 1080, height: Number(ctx.main.metadata.height) || 1920 },
     transcript: ctx.transcript.map((s) => ({ startS: s.startUs / 1e6, endS: s.endUs / 1e6, text: s.text })), candidates, frames, assets: ctx.others,
   };

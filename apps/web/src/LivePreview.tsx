@@ -1,3 +1,4 @@
+import { THINKING_EQUATIONS } from "@videocraft/domain";
 import type React from "react";
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { generateSoundEffect, type SoundEffectKind } from "../../../packages/music/src/index.js";
@@ -315,6 +316,16 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
       {broll.filter((c) => c.transform?.mode !== "behind").map((c) => { const url = urls[c.assetId]; const pip = c.transform?.mode === "pip"; return url ? <Cutaway key={c.id} clip={c} url={url} still={stills?.[c.assetId] === true} tUs={tUs} playing={playing} pip={pip} /> : <span key={c.id} className={"live-broll placeholder" + (pip ? " pip" : "")}>Cutaway</span>; })}
       {progress && <span className="live-progress" style={{ width: (100 * tUs) / Math.max(1, durationUs) + "%", background: String(progress.transform?.color ?? "#A8C49A") }} />}
       {graphics.map((g) => { const kind = String(g.transform?.kind ?? "title"); const pos = String(g.transform?.position ?? (kind === "lower-third" ? "bottom" : "center")); const color = String(g.transform?.color ?? "#A8C49A");
+        if (kind === "thinking") {
+          const duration = (g.timelineEndUs - g.timelineStartUs) / 1e6;
+          return <div key={g.id} className="live-thinking" aria-label="Thinking equations effect">{THINKING_EQUATIONS.map((equation, i) => {
+            const elapsed = (tUs - g.timelineStartUs) / 1e6 - equation.delay * duration;
+            const length = duration * (1 - equation.delay);
+            const opacity = Math.max(0, Math.min(1, elapsed / 0.16, (length - elapsed) / 0.2));
+            const y = equation.y + 0.016 - 0.032 * Math.max(0, Math.min(1, elapsed / length));
+            return <span key={i} style={{ left: equation.x * 100 + "%", top: y * 100 + "%", color, opacity, transform: "translate(-50%, -50%) rotate(" + (-equation.angle) + "deg)" }}>{equation.text}</span>;
+          })}</div>;
+        }
         const face = faceOver(g.timelineStartUs, g.timelineEndUs);
         let lowerBottom = 0.22;
         if (kind === "lower-third" && face && face.x0 < 0.6 && 1 - lowerBottom > face.y0 - 0.02 && 1 - lowerBottom - 0.12 < face.y1 + 0.02) {

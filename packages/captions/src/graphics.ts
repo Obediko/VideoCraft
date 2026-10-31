@@ -1,6 +1,7 @@
+import { THINKING_EQUATIONS } from "@videocraft/domain";
 import { assTime, escapeAss } from "./index.js";
 
-export interface GraphicItem { kind: "title" | "callout" | "lower-third"; text: string; subtitle?: string; startUs: number; endUs: number; position?: "top" | "center" | "bottom"; color?: string;
+export interface GraphicItem { kind: "title" | "callout" | "lower-third" | "thinking"; text: string; subtitle?: string; startUs: number; endUs: number; position?: "top" | "center" | "bottom"; color?: string;
   /** The speaker's face during this graphic (output pixels): the graphic moves so it does not cover it. */
   face?: { x0: number; y0: number; x1: number; y1: number };
   /** The caption band during this graphic, when it differs from the default `avoid` band. */
@@ -55,6 +56,16 @@ export function renderGraphicsAss(items: GraphicItem[], progress: ProgressBar | 
     const accent = assColour(item.color);
     const durationMs = Math.round((item.endUs - item.startUs) / 1000);
     const fadeOut = Math.min(250, Math.round(durationMs / 4));
+    if (item.kind === "thinking") {
+      const size = Math.round(base * 0.047);
+      for (const equation of THINKING_EQUATIONS) {
+        const start = item.startUs + Math.round(equation.delay * (item.endUs - item.startUs));
+        const ms = Math.round((item.endUs - start) / 1000);
+        const x = Math.round(W * equation.x), y = Math.round(H * equation.y), drift = Math.round(H * 0.016);
+        lines.push(event(2, start, item.endUs, "Name", "{\\an5\\fs" + size + "\\b0\\1c&H" + accent + "&\\frz" + equation.angle + "\\move(" + x + "," + (y + drift) + "," + x + "," + (y - drift) + ",0," + ms + ")\\fad(160,200)}" + escapeAss(equation.text)));
+      }
+      continue;
+    }
     if (item.kind === "lower-third") {
       const margin = Math.round(W * 0.06);
       // Sit just above the caption band when captions are burned in, so the two never overlap.

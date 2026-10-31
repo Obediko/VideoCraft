@@ -1,3 +1,4 @@
+import {applyTimelineOperations,parseEffectRecipe} from "@videocraft/domain";
 import {test,expect, type Page} from '@playwright/test';
 import {execFileSync} from 'node:child_process';
 import {mkdtempSync,readFileSync,rmSync} from 'node:fs';
@@ -13,7 +14,8 @@ try {
 } finally {rmSync(fixtureDir,{recursive:true,force:true});}
 
 async function editor(page:Page, screen='export', resume=false) {
-  const state={revision:2,status:'queued',offline:false,calls:0,links:0,submissions:0,submissionKeys:[] as string[],loseNextSubmission:false,expired:false,uploadCalls:0,uploadExpired:false,uploadTypes:[] as string[],withTranscript:false,planApplied:false,assetLists:0,mediaFails:false,linkFails:false,mediaRequests:0,playbackRequests:0};
+  let editedTimeline:any;
+  const state={savedEffects:[] as any[],libraryFails:false,editOps:[] as any[],revision:2,status:'queued',offline:false,calls:0,links:0,submissions:0,submissionKeys:[] as string[],loseNextSubmission:false,expired:false,uploadCalls:0,uploadExpired:false,uploadTypes:[] as string[],withTranscript:false,planApplied:false,assetLists:0,mediaFails:false,linkFails:false,mediaRequests:0,playbackRequests:0};
   const timeline=(seconds:number):any=>({durationUs:seconds*1e6,tracks:[{id:'v',kind:'video',clips:[{id:'c',assetId:'a',sourceStartUs:0,sourceEndUs:seconds*1e6,timelineStartUs:0,timelineEndUs:seconds*1e6}]}]});
   await page.addInitScript(({screen,resume})=>{
     localStorage.setItem('videocraft.lastProject','p');localStorage.setItem('videocraft.lastScreen',screen);
@@ -21,7 +23,7 @@ async function editor(page:Page, screen='export', resume=false) {
   },{screen,resume});
   await page.route('http://localhost:8080/**',async route=>{
     const req=route.request(), path=new URL(req.url()).pathname;
-    const headers={'access-control-allow-origin':req.headers()['origin']??'http://127.0.0.1:5173','access-control-allow-credentials':'true','access-control-allow-methods':'GET, POST, OPTIONS','access-control-allow-headers':'authorization, content-type, range'};
+    const headers={'access-control-allow-origin':req.headers()['origin']??'http://127.0.0.1:5173','access-control-allow-credentials':'true','access-control-allow-methods':'GET, POST, DELETE, OPTIONS','access-control-allow-headers':'authorization, content-type, range'};
     if(req.method()==='OPTIONS'){await route.fulfill({status:204,headers});return;}
     if(path==='/stock.png'){await route.fulfill({status:200,headers,contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=','base64')});return;}
     if(path==='/export.mp4'||path==='/fixture.mp4'){
@@ -33,6 +35,13 @@ async function editor(page:Page, screen='export', resume=false) {
     let body:any={}; let status=200;
     if(state.expired){await route.fulfill({status:401,headers,contentType:'application/json',body:JSON.stringify({error:{message:'Session expired'}})});return;}
     if(path==='/auth/refresh')body={accessToken:'test',user:{email:'test@example.com'}};
+    else if(path==='/v1/me/effects'){
+      if(state.libraryFails){status=503;body={error:{message:'Temporary library failure'}};}
+      else if(req.method()==='POST'){const recipe=parseEffectRecipe(req.postDataJSON());const id=Buffer.from(JSON.stringify(recipe)).toString('hex').slice(0,64);const effect={id,recipe,updatedAt:new Date().toISOString()};state.savedEffects=[effect,...state.savedEffects.filter(e=>e.id!==id)];body={effect};status=201;}
+      else body={saved:state.savedEffects};
+    }
+    else if(path.startsWith('/v1/me/effects/')&&req.method()==='DELETE'){state.savedEffects=state.savedEffects.filter(e=>e.id!==path.split('/').at(-1));body={};}
+    else if(path.endsWith('/edit')&&req.method()==='POST'){state.editOps=req.postDataJSON().operations;editedTimeline=applyTimelineOperations(editedTimeline??timeline(2),state.editOps);state.revision++;body={revision:{revision:state.revision,timeline:editedTimeline}};}
     else if(path==='/v1/projects')body={projects:[{id:'p',name:'Recovery test',revision:state.revision,createdAt:'2026-01-01',updatedAt:'2026-01-01'}]};
     else if(path.endsWith('/assets/upload')){state.uploadCalls++;state.uploadTypes.push(req.headers()['content-type']??'');if(state.uploadExpired&&state.uploadCalls===1){status=401;body={error:{message:'Access expired'}};}else body={asset:{id:'photo',kind:'image',metadata:{filename:'photo.png'}}};}
     else if(path.endsWith('/assets')){state.assetLists++;body={assets:[{id:'a',kind:'video',durationUs:2e6,metadata:{filename:'Test.mp4',width:640,height:360}},...(state.planApplied?[{id:'stock-photo',kind:'image',metadata:{filename:'Approved.png',width:1,height:1}}]:[])]};}
@@ -46,7 +55,7 @@ async function editor(page:Page, screen='export', resume=false) {
       if(expected!==state.revision){status=409;body={error:{message:'Newer edit'}};}
       else{const target=Number(path.split('/').at(-2));state.revision++;body={revision:{revision:state.revision,timeline:timeline(target===1?1:2)}};}
     }
-    else if(/\/revisions\/\d+$/.test(path))body={revision:{revision:state.revision,timeline:timeline(2)}};
+    else if(/\/revisions\/\d+$/.test(path))body={revision:{revision:state.revision,timeline:editedTimeline??timeline(2)}};
     else if(path.endsWith('/renders/job')){state.calls++;if(state.offline){status=503;body={error:{message:'Temporary outage'}};}else body={job:{id:'job',status:state.status,progress:state.status==='succeeded'?100:5}};}
     else if(path.endsWith('/download-url')){state.links++;body={url:'/export.mp4?version='+state.links,expires:Math.floor(Date.now()/1000)+300};}
     else if(path.endsWith('/renders')&&req.method()==='POST'){
@@ -205,4 +214,42 @@ test('Play clip opens the original player and starts it from the editor without 
   await expect.poll(()=>page.locator('.preview-screen video').evaluate((v:HTMLVideoElement)=>v.paused)).toBe(false);
   await expect.poll(()=>page.locator('.preview-screen video').evaluate((v:HTMLVideoElement)=>v.currentTime)).toBeGreaterThan(0);
   expect(state.revision).toBe(2);
+});
+
+
+test('creative library supports composing, applying, saving, reload reuse and private deletion',async({page})=>{
+  const state=await editor(page,'edit');
+  await page.goto('/');
+  await page.getByRole('button',{name:'Visuals',exact:true}).click();
+  const library=page.getByRole('region',{name:'Creative effects library'});
+  await library.getByRole('button',{name:'Realization pop',exact:false}).click();
+  await library.getByLabel('Treatment text',{exact:true}).fill('It clicks');
+  await library.getByRole('button',{name:'Add treatment at this moment',exact:true}).click();
+  await expect.poll(()=>state.revision).toBe(3);
+  await expect.poll(()=>state.savedEffects.length).toBe(1);
+  expect(state.editOps.some(o=>o.type==='add-graphic'&&o.text==='It clicks')).toBe(true);
+  expect(state.editOps.some(o=>o.type==='add-sfx'&&o.kind==='pop')).toBe(true);
+  await expect(page.locator('.live-title.callout')).toContainText('It clicks');
+  await page.reload();await page.getByRole('button',{name:'Visuals',exact:true}).click();
+  await expect(library.getByRole('button',{name:'Realization pop · It clicks',exact:true})).toBeVisible();
+  await library.getByRole('button',{name:'Realization pop · It clicks',exact:true}).click();
+  await expect(library.getByLabel('Treatment text',{exact:true})).toHaveValue('It clicks');
+  await library.getByRole('button',{name:'Delete saved treatment It clicks',exact:true}).click();
+  await expect.poll(()=>state.savedEffects.length).toBe(0);
+  expect(state.revision).toBe(3);
+});
+
+test('a library outage leaves the edit usable and a failed save can be retried without duplicating timeline effects',async({page})=>{
+  const state=await editor(page,'edit');state.libraryFails=true;
+  await page.goto('/');await page.getByRole('button',{name:'Visuals',exact:true}).click();
+  const library=page.getByRole('region',{name:'Creative effects library'});
+  await expect(library.getByRole('alert')).toContainText('could not be loaded');
+  await library.getByRole('button',{name:'Realization pop',exact:false}).click();
+  await library.getByRole('button',{name:'Add treatment at this moment',exact:true}).click();
+  await expect(library.getByRole('status')).toContainText('Library save failed');
+  expect(state.revision).toBe(3);state.libraryFails=false;
+  await library.getByRole('button',{name:'Retry library',exact:true}).click();
+  await expect(library.getByRole('alert')).toHaveCount(0);
+  await library.getByRole('button',{name:'Save treatment',exact:true}).click();
+  await expect.poll(()=>state.savedEffects.length).toBe(1);expect(state.revision).toBe(3);
 });
