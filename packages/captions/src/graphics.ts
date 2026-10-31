@@ -1,6 +1,7 @@
+import { THINKING_EQUATIONS } from "@videocraft/domain";
 import { assTime, escapeAss } from "./index.js";
 
-export interface GraphicItem { kind: "title" | "callout" | "lower-third"; text: string; subtitle?: string; startUs: number; endUs: number; position?: "top" | "center" | "bottom"; color?: string;
+export interface GraphicItem { kind: "title" | "callout" | "lower-third" | "thinking"; text: string; subtitle?: string; startUs: number; endUs: number; position?: "top" | "center" | "bottom"; color?: string;
   /** The speaker's face during this graphic (output pixels): the graphic moves so it does not cover it. */
   face?: { x0: number; y0: number; x1: number; y1: number };
   /** The caption band during this graphic, when it differs from the default `avoid` band. */
@@ -13,6 +14,26 @@ const DEFAULT_ACCENT = "#F5A524";
 export function assColour(hex: string | undefined): string {
   const value = /^#[0-9a-fA-F]{6}$/.test(hex ?? "") ? hex! : DEFAULT_ACCENT;
   return (value.slice(5, 7) + value.slice(3, 5) + value.slice(1, 3)).toUpperCase();
+}
+
+export function graphicPlacement(item: GraphicItem, frame: { width: number; height: number }, avoidBand?: { topY: number; bottomY: number }): { y: number; fontSize: number; pad: number } {
+  const { width: W, height: H } = frame;
+  const vertical = H > W, base = Math.min(W, H);
+  const titleSize = Math.round(base * (vertical ? 0.085 : 0.075));
+  const calloutSize = Math.round(titleSize * 0.7), pad = Math.round(base * 0.025);
+  const half = Math.round((item.kind === "title" ? titleSize * (item.subtitle ? 1.9 : 1.2) : calloutSize * 1.2) / 2) + pad;
+  const avoid = item.avoid ?? avoidBand;
+  const slots = { top: Math.round(H * 0.18), center: Math.round(H * 0.42), bottom: Math.round(H * (vertical ? 0.64 : 0.74)) };
+  const wanted = item.position ?? "center";
+  const inBand = (y: number) => avoid !== undefined && y + half > avoid.topY && y - half < avoid.bottomY;
+  const onFace = (y: number) => item.face !== undefined && y + half > item.face.y0 && y - half < item.face.y1;
+  // The chosen position first; if it covers the face or the captions, the nearest other slot that covers neither.
+  const order = wanted === "top" ? ["top", "center", "bottom"] : wanted === "bottom" ? ["bottom", "center", "top"] : ["center", "top", "bottom"];
+  const clear = order.map((key) => slots[key as keyof typeof slots]).find((y) => !inBand(y) && !onFace(y));
+  let y = clear ?? slots[wanted];
+  // Keep text graphics out of the caption band: move above it when they would overlap.
+  if (clear === undefined && avoid && inBand(y)) y = Math.max(half, avoid.topY - half);
+  return { y, fontSize: item.kind === "title" ? titleSize : calloutSize, pad: item.kind === "title" ? pad : Math.round(pad * 0.8) };
 }
 
 /**
@@ -55,6 +76,16 @@ export function renderGraphicsAss(items: GraphicItem[], progress: ProgressBar | 
     const accent = assColour(item.color);
     const durationMs = Math.round((item.endUs - item.startUs) / 1000);
     const fadeOut = Math.min(250, Math.round(durationMs / 4));
+    if (item.kind === "thinking") {
+      const size = Math.round(base * 0.047);
+      for (const equation of THINKING_EQUATIONS) {
+        const start = item.startUs + Math.round(equation.delay * (item.endUs - item.startUs));
+        const ms = Math.round((item.endUs - start) / 1000);
+        const x = Math.round(W * equation.x), y = Math.round(H * equation.y), drift = Math.round(H * 0.016);
+        lines.push(event(2, start, item.endUs, "Name", "{\\an5\\fs" + size + "\\b0\\1c&H" + accent + "&\\frz" + equation.angle + "\\move(" + x + "," + (y + drift) + "," + x + "," + (y - drift) + ",0," + ms + ")\\fad(160,200)}" + escapeAss(equation.text)));
+      }
+      continue;
+    }
     if (item.kind === "lower-third") {
       const margin = Math.round(W * 0.06);
       // Sit just above the caption band when captions are burned in, so the two never overlap.
@@ -81,18 +112,7 @@ export function renderGraphicsAss(items: GraphicItem[], progress: ProgressBar | 
       if (item.subtitle?.trim()) lines.push(event(2, item.startUs, item.endUs, "Role", "{\\an7\\move(" + (-W / 2) + "," + (top + Math.round(pad / 2) + nameSize + Math.round(pad * 0.4)) + "," + textX + "," + (top + Math.round(pad / 2) + nameSize + Math.round(pad * 0.4)) + ",120,390)\\fad(0," + fadeOut + ")}" + escapeAss(item.subtitle.trim())));
       continue;
     }
-    const half = Math.round((item.kind === "title" ? titleSize * (item.subtitle ? 1.9 : 1.2) : calloutSize * 1.2) / 2) + pad;
-    const avoid = item.avoid ?? options.avoid;
-    const slots = { top: Math.round(H * 0.18), center: Math.round(H * 0.42), bottom: Math.round(H * (vertical ? 0.64 : 0.74)) };
-    const wanted = item.position ?? "center";
-    const inBand = (y: number) => avoid !== undefined && y + half > avoid.topY && y - half < avoid.bottomY;
-    const onFace = (y: number) => item.face !== undefined && y + half > item.face.y0 && y - half < item.face.y1;
-    // The chosen position first; if it covers the face or the captions, the nearest other slot that covers neither.
-    const order = wanted === "top" ? ["top", "center", "bottom"] : wanted === "bottom" ? ["bottom", "center", "top"] : ["center", "top", "bottom"];
-    const clear = order.map((key) => slots[key as keyof typeof slots]).find((y) => !inBand(y) && !onFace(y));
-    let y = clear ?? slots[wanted];
-    // Keep text graphics out of the caption band: move above it when they would overlap.
-    if (clear === undefined && avoid && inBand(y)) y = Math.max(half, avoid.topY - half);
+    const { y } = graphicPlacement(item, frame, options.avoid);
     const style = item.kind === "title" ? "Title" : "Callout";
     // Pop: scale up from 70% with a quick fade in, then fade out at the end.
     const pop = "\\fscx70\\fscy70\\t(0,220,\\fscx100\\fscy100)\\fad(160," + fadeOut + ")";

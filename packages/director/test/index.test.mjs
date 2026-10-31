@@ -113,3 +113,16 @@ test("applying a plan: words are not clipped, captions are rebuilt once, graphic
   assert.ok(overlays.some((c) => c.transform.role === "progress"));
   assert.ok(!overlays.some((c) => c.transform.text === "not accepted"), "unaccepted suggestions are not applied");
 });
+
+test('creative treatments are bounded, grounded in retained footage and compile after a cut',async()=>{
+  const {parseEffectRecipe}=await import('@videocraft/domain');
+  const {effectOperations,sanitizePlan}=await import('../dist/index.js');
+  const input={brief:'Explain thoughtfully',durationS:20,frame:{width:640,height:360},transcript:[],candidates:[],frames:[],assets:[]};
+  const plan=sanitizePlan({suggestions:[{id:'good',kind:'effect',presetId:'chapter',text:'Next step',atS:10,durationS:2},{id:'too-close',kind:'effect',presetId:'thinking',atS:11},{id:'bad',kind:'effect',presetId:'download-code',atS:15}]},input,'ai');
+  assert.equal(plan.suggestions.length,1);
+  const timeline={durationUs:4e6,tracks:[{id:'v',kind:'video',clips:[{id:'kept',assetId:'a',sourceStartUs:10e6,sourceEndUs:14e6,timelineStartUs:0,timelineEndUs:4e6}]}]};
+  const ops=effectOperations(plan,new Set(['good']),timeline,'a');assert.equal(ops.length,1);assert.equal(ops[0].anchorClipId,'kept');
+  plan.suggestions[0].atS=8;assert.equal(effectOperations(plan,new Set(['good']),timeline,'a').length,0,'cut-away moments get no unrelated effect');
+  const rules=await new RuleDirector().ask({...input,instruction:'add a quiet focus here',playheadS:10,current:{pieces:[{startS:10,endS:14,text:'reflect'}],graphics:[],look:'none',music:'none',seconds:4,extras:''}});
+  assert.ok(rules.suggestions.some(s=>s.kind==='effect'&&s.recipe.presetId==='focus'));
+});

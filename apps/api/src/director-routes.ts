@@ -4,14 +4,17 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { applyTimelineOperations, parseTimelineOperations, type ProjectRevision, type TranscriptSegment, type UUID } from "@videocraft/domain";
+import { applyTimelineOperations, parseTimelineOperations, parseEffectRecipe, type EffectRecipe, type EffectLibraryRepository, type ProjectRevision, type TranscriptSegment, type UUID } from "@videocraft/domain";
 import type { AssetRepository, ProjectRepository, RevisionRepository } from "@videocraft/application";
 import type { ObjectStorage } from "@videocraft/storage";
 import { RuleDirector, briefHints, checkEdit, effectOperations, parseMediaSignals, planOperations, sanitizePlan, type CheckIssue, type Director, type DirectorInput, type DirectorPlan, type MediaSignals } from "@videocraft/director";
 import { findCandidates } from "@videocraft/strategies";
+import { registerCreativeRoutes } from "./creative.js";
+import { savedEffect } from "./effects.js";
 import { composeMusicAsset } from "./music-routes.js";
 
 export interface DirectorRouteDependencies {
+  effects?: EffectLibraryRepository;
   projects: ProjectRepository; assets: AssetRepository; revisions: RevisionRepository; storage: ObjectStorage;
   transcripts: { listForAsset(assetId: UUID): Promise<TranscriptSegment[]> };
   director: Director;
@@ -35,6 +38,7 @@ export function registerDirectorRoutes(server: FastifyInstance, dependencies: Di
   const context = contextOf(dependencies);
   const directorInput = (ctx: NonNullable<Awaited<ReturnType<typeof context>>>, brief: string, request: FastifyRequest) => directorInputFor(dependencies, ctx, brief, request);
   registerCheckRoutes(server, dependencies, context);
+  registerCreativeRoutes(server, dependencies);
 
   server.post("/v1/projects/:projectId/director/plan", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } } as never, async (request: FastifyRequest, reply: FastifyReply) => {
     const ctx = await context(request, reply);
@@ -109,6 +113,7 @@ export function registerDirectorRoutes(server: FastifyInstance, dependencies: Di
     }
     // Free stock cutaways and typed voice-overs need the network, so they are made here, after the cut.
     const notes: string[] = [];
+    const stockRecipes: EffectRecipe[] = [];
     const kept = timeline.tracks.filter((t) => t.kind === "video").flatMap((t) => t.clips).filter((c) => c.assetId === ctx.main.id);
     const anchorAt = (atS: number) => { const at = Math.round(atS * 1e6); if (kept.some((c) => at >= c.sourceStartUs && at < c.sourceEndUs)) return at; const near = [...kept].sort((a, b) => Math.abs(a.sourceStartUs - at) - Math.abs(b.sourceStartUs - at))[0]; return near ? near.sourceStartUs + 100_000 : at; };
     const frame = ctx.revision.tailoring?.channel === "youtube" ? "landscape" : "portrait";
@@ -121,6 +126,7 @@ export function registerDirectorRoutes(server: FastifyInstance, dependencies: Di
           if (!dependencies.findStock && !dependencies.importStock) { notes.push("Stock search is not set up on the server, so \"" + s.query + "\" was skipped."); continue; }
           if (!asset) { notes.push("No free stock matched \"" + s.query + "\"."); continue; }
           timeline = applyTimelineOperations(timeline, [{ type: "add-broll", assetId: asset.id, anchorAssetId: ctx.main.id, anchorSourceUs: anchorAt(s.atS), durationUs: Math.round(s.durationS * 1e6), mode: s.mode }]);
+          if (s.pick && /^[0-9]{1,20}$/.test(s.pick.id) && ["pexels", "pixabay"].includes(s.pick.provider) && s.assetKind !== "gif") stockRecipes.push(parseEffectRecipe({ presetId: "stock-cutaway", text: s.query.slice(0, 80), durationS: Math.max(1, Math.min(6, s.durationS)), stock: { provider: s.pick.provider, id: s.pick.id, kind: s.assetKind, mode: s.mode } }));
         } else if (s.kind === "voiceover") {
           if (!dependencies.speak) { notes.push("Typed voice-overs need the OpenAI key; record yours in Audio → Voice-over."); continue; }
           const asset = await dependencies.speak(ctx.projectId, s.text);
@@ -142,6 +148,15 @@ export function registerDirectorRoutes(server: FastifyInstance, dependencies: Di
       projectId: ctx.projectId, createdBy: ctx.principal.userId, timeline, acceptedProposalIds: ctx.revision.acceptedProposalIds,
       tailoring: ctx.body.keepTailoring === true && ctx.revision.tailoring ? ctx.revision.tailoring : { intent: plan.profile.intent, audience: plan.profile.audience, channel: plan.profile.channel, ...(plan.profile.tone ? { tone: plan.profile.tone } : {}), targetDurationUs: plan.profile.targetSeconds * 1_000_000, constraints: [] },
     });
+    if (dependencies.effects) for (const s of plan.suggestions) if (s.kind === "effect" && accepted.has(s.id)) {
+      const host = timeline.tracks.filter(t => t.kind === "video").flatMap(t => t.clips).find(c => c.assetId === ctx.main.id && s.atS * 1e6 >= c.sourceStartUs && c.sourceEndUs - s.atS * 1e6 >= 1_000_000);
+      if (host) try { await dependencies.effects.save(ctx.principal.userId, savedEffect(s.recipe)); }
+      catch (caught) { request.log.warn({ err: caught }, "Effect library save failed"); notes.push("Your edit was saved, but this treatment could not be added to your library. Save it from Visuals to retry."); }
+    }
+    if (dependencies.effects) for (const recipe of stockRecipes) {
+      try { await dependencies.effects.save(ctx.principal.userId, savedEffect(recipe)); }
+      catch (caught) { request.log.warn({ err: caught }, "Stock treatment library save failed"); notes.push("The stock cutaway is in your edit, but could not be saved for reuse."); }
+    }
     const platform = plan.suggestions.find((s) => s.kind === "platform" && accepted.has(s.id));
     return reply.code(201).send({ revision, ...(platform && platform.kind === "platform" ? { platform: platform.platform } : {}), ...(music ? { music } : {}), ...(notes.length ? { notes } : {}) });
   });
@@ -220,20 +235,31 @@ export function registerCheckRoutes(server: FastifyInstance, dependencies: Direc
     const target = ctx.revision.tailoring?.targetDurationUs ? Math.round(ctx.revision.tailoring.targetDurationUs / 1e6) : undefined;
     const overlays = timeline.tracks.filter((t) => t.kind === "overlay").flatMap((t) => t.clips);
     const graphics = overlays.filter((c) => c.transform?.role === "graphic").sort((a, b) => a.timelineStartUs - b.timelineStartUs);
-    // Source moments worth looking at: each piece's first second and each graphic, labelled with their place in the edit.
-    const looks = [
-      ...mine.slice(0, 8).map((c, i) => ({ sourceS: c.sourceStartUs / 1e6 + Math.min(0.8, (c.sourceEndUs - c.sourceStartUs) / 2e6), atS: c.timelineStartUs / 1e6, label: "Start of piece #" + i })),
-      ...graphics.slice(0, 4).map((g, i) => ({ sourceS: Number(g.transform?.anchorSourceUs ?? 0) / 1e6 + 0.5, atS: g.timelineStartUs / 1e6, label: "Under on-screen text #" + i })),
-    ];
+    const reviewAssets = await dependencies.assets.listForProject(ctx.projectId);
+    // Every frame carries its own source identity. A card's source time is never a time in the original talk.
+    const sampledPieces = pieces.length > 8 ? [...pieces.slice(0, 7), pieces[pieces.length - 1]!] : pieces;
+    const looks = sampledPieces.map(c => ({ assetId: c.assetId, sourceS: c.sourceStartUs / 1e6 + Math.min(0.8, (c.sourceEndUs - c.sourceStartUs) / 2e6), atS: c.timelineStartUs / 1e6, label: "Start of piece #" + pieces.indexOf(c) }));
+    for (const [i, g] of graphics.slice(0, 4).entries()) {
+      const host = pieces.find(c => c.timelineStartUs <= g.timelineStartUs && c.timelineEndUs > g.timelineStartUs);
+      if (host) looks.push({ assetId: host.assetId, sourceS: (host.sourceStartUs + g.timelineStartUs - host.timelineStartUs) / 1e6 + Math.min(0.5, (host.timelineEndUs - g.timelineStartUs) / 2e6), atS: g.timelineStartUs / 1e6, label: "Under on-screen text #" + i });
+    }
     const brief = typeof ctx.body.brief === "string" && ctx.body.brief.trim() ? ctx.body.brief.trim().slice(0, 2000) : ctx.revision.tailoring?.intent ?? "";
     let media: MediaSignals | undefined; let frames: Array<{ atS: number; label: string; jpegBase64: string }> = [];
     await withSource(dependencies, ctx.main.storageKey, async (input, directory) => {
       media = await scanPicture(dependencies, input, mine.map((c) => ({ startUs: c.sourceStartUs, endUs: c.sourceEndUs }))).catch((caught) => { request.log.warn({ err: caught }, "Picture scan failed"); return undefined; });
-      if (dependencies.director.review) {
-        const shots = await framesAt(dependencies, input, directory, looks.map((l) => l.sourceS)).catch(() => []);
-        frames = shots.map((shot, i) => ({ atS: looks[i]!.atS, label: looks[i]!.label, jpegBase64: shot.jpegBase64 }));
-      }
     }).catch((caught) => request.log.warn({ err: caught }, "Could not open the source for the check"));
+    if (dependencies.director.review) for (const assetId of new Set(looks.map(l => l.assetId))) {
+      const asset = reviewAssets.find(a => a.id === assetId);
+      if (!asset || !["video", "image"].includes(asset.kind)) continue;
+      const group = looks.filter(l => l.assetId === assetId);
+      await withSource(dependencies, asset.storageKey, async (input, directory) => {
+        // Extract separately so one unavailable frame cannot shift the labels of later frames.
+        for (const look of group) {
+          const shots = await framesAt(dependencies, input, directory, [asset.kind === "image" ? 0 : look.sourceS]).catch(() => []);
+          if (shots[0]) frames.push({ atS: look.atS, label: look.label + " (source frame, overlays described separately)", jpegBase64: shots[0].jpegBase64 });
+        }
+      }).catch(caught => request.log.warn({ err: caught, assetId }, "Review source unavailable"));
+    }
     const issues: CheckIssue[] = checkEdit({ timeline, assetId: ctx.main.id, words, sourceDurationUs: ctx.main.durationUs ?? Math.round(ctx.durationS * 1e6), platform, ...(target ? { targetSeconds: target } : {}), ...(media ? { media } : {}) });
     let note: string | undefined; let ai = false;
     if (dependencies.director.review) {
@@ -243,7 +269,7 @@ export function registerCheckRoutes(server: FastifyInstance, dependencies: Direc
       try {
         const reviewed = await dependencies.director.review({
           brief, platform, frames,
-          pieces: pieces.map((c) => ({ clipId: c.id, startS: c.timelineStartUs / 1e6, endS: c.timelineEndUs / 1e6, text: c.assetId === ctx.main.id ? textOf(c.sourceStartUs, c.sourceEndUs) : "(other footage)" })),
+          pieces: pieces.map((c) => ({ clipId: c.id, startS: c.timelineStartUs / 1e6, endS: c.timelineEndUs / 1e6, text: c.assetId === ctx.main.id ? textOf(c.sourceStartUs, c.sourceEndUs) : reviewAssets.find(a => a.id === c.assetId)?.metadata.endCard === true ? "Intentional narrated end card: " + graphics.filter(g => g.timelineStartUs < c.timelineEndUs && g.timelineEndUs > c.timelineStartUs).map(g => String(g.transform?.text ?? "")).join(" ") : "(other footage)" })),
           graphics: graphics.map((g) => ({ clipId: g.id, kind: String(g.transform?.kind ?? "title"), text: String(g.transform?.text ?? ""), atS: g.timelineStartUs / 1e6, durationS: (g.timelineEndUs - g.timelineStartUs) / 1e6 })),
           cutaways: overlays.filter((c) => c.transform?.role === "broll").map((c) => ({ atS: c.timelineStartUs / 1e6, durationS: (c.timelineEndUs - c.timelineStartUs) / 1e6, name: ctx.others.find((o) => o.id === c.assetId)?.name ?? "media" })),
           ...(musicAsset ? { music: String(musicAsset.metadata.description ?? musicAsset.metadata.mood ?? musicAsset.metadata.filename ?? "music") } : {}),
@@ -309,6 +335,7 @@ async function directorInputFor(dependencies: DirectorRouteDependencies, ctx: No
   }
   const frames = await sampleFrames(dependencies, ctx.main.storageKey, ctx.durationS, 8).catch((caught) => { request.log.warn({ err: caught }, "Frame sampling failed; planning from words only"); return []; });
   return {
+    ...(dependencies.effects ? { effects: (await dependencies.effects.list(ctx.principal.userId).catch(caught => { request.log.warn({ err: caught }, "Effect library unavailable; using built-in treatments"); return []; })).slice(0, 24).map(e => e.recipe) } : {}),
     brief, durationS: ctx.durationS, frame: { width: Number(ctx.main.metadata.width) || 1080, height: Number(ctx.main.metadata.height) || 1920 },
     transcript: ctx.transcript.map((s) => ({ startS: s.startUs / 1e6, endS: s.endUs / 1e6, text: s.text })), candidates, frames, assets: ctx.others,
   };

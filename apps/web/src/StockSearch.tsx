@@ -50,6 +50,7 @@ export function StockSearch({ projectId, request, orientation, disabled, onWorki
     try {
       const result = await request("/v1/projects/" + projectId + "/stock/import", { method: "POST", body: JSON.stringify({ provider: item.provider, kind: item.kind, id: item.id }) });
       onUse(result.asset);
+      if (result.libraryNote) setNote(result.libraryNote);
     } catch (caught) { setNote(caught instanceof Error ? caught.message : "Could not add it"); }
     finally { setWorking(""); }
   }

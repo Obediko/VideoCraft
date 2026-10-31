@@ -17,6 +17,7 @@ function release(options={}){
 printf '%s\\n' "$*" >> "$MOCK_DIR/commands"
 if [[ "$1" = inspect ]]; then
   if [[ "$*" = *'.Image'* ]]; then printf 'sha256:${'1'.repeat(64)}\\n'; else echo true; fi
+elif [[ "$*" = *'migrate.js'* && '${options.migrationFails ? 'yes' : 'no'}' = yes ]]; then exit 12;
 elif [[ "$*" = *'ps -q'* ]]; then echo mock-container;
 fi
 `,{mode:0o755});
@@ -53,4 +54,17 @@ test('version mismatch rolls back exact prior app images and restores configurat
     assert.equal(readFileSync(join(f.app,'.env'),'utf8'),f.oldEnv);
     assert.equal(readFileSync(join(f.app,'docker-compose.yml'),'utf8'),f.oldCompose);
   }finally{rmSync(f.dir,{recursive:true,force:true});}
+});
+
+
+test('release migrates the pinned image before app replacement and aborts without replacing apps on migration failure',()=>{
+  const ok=release();const failed=release({migrationFails:true});
+  try{
+    assert.equal(ok.result.status,0,ok.result.stderr);
+    const commands=ok.commands();assert.match(commands,/run --rm --no-deps api node packages\/persistence\/dist\/migrate.js/);
+    assert.ok(commands.indexOf('migrate.js')<commands.indexOf('up -d --no-deps api web render-worker'));
+    assert.notEqual(failed.result.status,0);assert.doesNotMatch(failed.commands(),/up -d/);
+    assert.equal(readFileSync(join(failed.app,'.env'),'utf8'),failed.oldEnv);
+    assert.equal(readFileSync(join(failed.app,'docker-compose.yml'),'utf8'),failed.oldCompose);
+  }finally{for(const f of [ok,failed])rmSync(f.dir,{recursive:true,force:true});}
 });

@@ -42,6 +42,8 @@ trap rollback ERR
 install -m 600 "$source_dir/docker-compose.yml" "$app_dir/docker-compose.yml"
 export VIDEOCRAFT_RELEASE_SHA="$release_sha"
 docker compose --project-directory "$app_dir" -f "$app_dir/docker-compose.yml" pull "${services[@]}"
+# Run additive migrations with the pinned API image before replacing any running app.
+docker compose --project-directory "$app_dir" -f "$app_dir/docker-compose.yml" run --rm --no-deps api node packages/persistence/dist/migrate.js
 changed=1
 docker compose --project-directory "$app_dir" -f "$app_dir/docker-compose.yml" up -d --no-deps "${services[@]}"
 ready=0

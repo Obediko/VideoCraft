@@ -1,4 +1,5 @@
 import { buildCues, cueOperations } from "@videocraft/captions";
+import { EFFECT_PRESETS, parseEffectRecipe, effectRecipeOperations, type EffectRecipe } from "@videocraft/domain";
 import type { ColourLook, Timeline, TimelineOperation, TranscriptWord } from "@videocraft/domain";
 import type { CheckIssue } from "./check.js";
 import { ruleRequests } from "./requests.js";
@@ -18,6 +19,7 @@ export const DIRECTOR_TRANSITIONS = ["dip-black", "dip-white", "flash", "dissolv
 export const REMOVABLE = ["music", "sfx", "progress", "graphics", "cutaways", "voiceovers", "captions", "background", "look", "zooms", "transitions"] as const;
 
 export interface DirectorInput {
+  effects?: EffectRecipe[];
   brief: string;
   durationS: number;
   frame: { width: number; height: number };
@@ -30,6 +32,7 @@ export interface DirectorInput {
 }
 
 export type Suggestion =
+  | { id: string; kind: "effect"; title: string; reason: string; recipe: EffectRecipe; atS: number }
   | { id: string; kind: "cut"; title: string; reason: string; segments: Array<{ startS: number; endS: number }> }
   | { id: string; kind: "title" | "callout" | "lower-third"; title: string; reason: string; text: string; subtitle?: string; atS: number; durationS: number; position?: "top" | "center" | "bottom" }
   | { id: string; kind: "music"; title: string; reason: string; mood: (typeof MOODS)[number] }
@@ -173,6 +176,14 @@ export function sanitizePlan(raw: unknown, input: DirectorInput, source: Directo
         ? { provider: p.provider, id: p.id, thumbUrl: p.thumbUrl, ...(text(p.credit, 80) ? { credit: text(p.credit, 80) } : {}) } as StockPick : undefined;
       if (suggestions.filter((e) => e.kind === "stock").length >= 5) return;
       suggestions.push({ ...base(s, index), kind: "stock", query, assetKind, atS, durationS: clamp(num(s.durationS) || 3, 0.5, 10), mode: s.mode === "pip" ? "pip" : s.mode === "behind" ? "behind" : "full", ...(pick ? { pick } : {}) });
+    } else if (kind === "effect") {
+      try {
+        const recipe = parseEffectRecipe(s.recipe ?? { presetId: s.presetId, ...(s.text ? { text: s.text } : {}), ...(s.color ? { color: s.color } : {}), ...(s.durationS ? { durationS: s.durationS } : {}), ...(s.effectSound ? { sound: s.effectSound } : {}), ...(s.style ? { zoom: s.style } : {}) });
+        if (recipe.stock) return;
+        const atS = num(s.atS);
+        if (!(atS >= 0 && atS < input.durationS) || suggestions.filter(e => e.kind === "effect").length >= 3 || suggestions.some(e => e.kind === "effect" && Math.abs(e.atS - atS) < 4)) return;
+        suggestions.push({ ...base(s, index), kind: "effect", recipe, atS });
+      } catch { /* Unknown recipes cannot reach the timeline. */ }
     } else if (kind === "voiceover") {
       const t = text(s.text, 1500); const atS = s.afterVideo === true ? 0 : num(s.atS);
       if (!t || !(atS >= 0 && atS < input.durationS)) return;
@@ -230,6 +241,8 @@ export class RuleDirector implements Director {
       const cut = base.suggestions.find((x) => x.kind === "cut");
       if (cut) { raw.push({ ...cut, title: "Make it about " + target + " seconds", reason: "You asked for a " + (shorter ? "shorter" : longer ? "longer" : target + "-second") + " cut; these are the strongest moments that fit." }); summary = "A new cut of about " + target + " seconds."; }
     }
+    const requestedEffect = /thinking equation|confused math|floating equation/.test(t) ? "thinking" : /realization pop|aha effect/.test(t) ? "realization" : /quiet focus|slow push.in/.test(t) ? "focus" : /impact beat/.test(t) ? "impact" : /smooth reveal/.test(t) ? "smooth-reveal" : /chapter reveal/.test(t) ? "chapter" : /question beat/.test(t) ? "question" : /key.point (effect|callout)/.test(t) ? "key-point" : undefined;
+    if (requestedEffect && !/\b(remove|delete|without|no)\b/.test(t)) raw.push({ id: "effect", kind: "effect", title: EFFECT_PRESETS.find(p => p.id === requestedEffect)!.name, reason: "The treatment you requested, anchored to this moment.", presetId: requestedEffect, atS: input.playheadS ?? input.current.pieces[0]?.startS ?? 0 });
     const removing = /\b(remove|delete|take (?:out|off|away)|get rid of|drop|no more|without|turn off|hide|clear)\b/.test(t);
     const look = removing ? undefined : LOOKS.find((l) => t.includes(l)) ?? (/black and white|b&w|monochrome|grey/.test(t) ? "mono" : /warm/.test(t) ? "warm" : /colou?rful|punchy|bright/.test(t) ? "vivid" : /film|moody/.test(t) ? "cinematic" : undefined);
     if (look) raw.push({ id: "look", kind: "look", title: (look === "mono" ? "Black and white" : look[0]!.toUpperCase() + look.slice(1)) + " look", reason: "As you asked.", look });
@@ -315,6 +328,7 @@ Propose a complete edit as a list of suggestions the creator can accept or rejec
 Rules:
 - "cut": choose the moments to keep, as segments (startS/endS in source seconds) taken from the candidates or exact sentence boundaries in the transcript. Respect the length the creator asks for; otherwise 20-45 s for short-form, 60-180 s for YouTube.
 - "title", "callout", "lower-third": text on screen at a source time (atS) INSIDE a kept segment. Titles max ~6 words. Lower thirds name a person (text) and role (subtitle) only if the transcript or brief makes them clear.
+- "effect": optional reusable creative treatment. presetId is one of thinking, realization, key-point, focus, impact, smooth-reveal, chapter, question. Use at most 3, separated by at least 4 source seconds. Supply atS inside a kept segment, durationS 1-6, text (at most 80 characters), color (#RRGGBB). Choose from meaning and tone, cite the exact evidence, and omit when it adds no value. Thinking is only for a clearly puzzled/playful moment. Focus is a slow push across that clip, impact tightens that clip plus a quiet hit, smooth-reveal dissolves into that clip; others are short graphics. Never put playful reactions over serious or sensitive statements unless requested. Saved creator treatments are available below; reuse appropriate ones before inventing variations. You may invent a treatment by varying the recipe text, color, duration, optional effectSound (none, whoosh, pop, hit, riser) and style (punch or push for clip motion). A motion style affects the entire host clip, not just the overlay duration. Use subtle sound; do not add one to every moment. All recipes are original procedural graphics, not downloaded memes.
 - "music": one mood from: upbeat, calm, inspiring, serious, playful.
 - "broll": only with assetId values from the project media list; place at a source time inside a kept segment where the words describe it.
 - "stock": up to 3 free stock cutaways where the words describe something concrete and visual that the footage does not show (a place, an object, an activity), and no project media fits: query is 2-5 plain English words a stock library would match (e.g. "students studying library", "city skyline night"), assetKind "video" (or "photo"; "gif" only for playful reactions), atS inside a kept segment, durationS 2-4, mode "full" (or "behind" to put it behind the person). Not over the hook, not over a face-to-camera key point.
@@ -341,9 +355,11 @@ const SCHEMA = {
     summary: { type: "string" },
     profile: { type: "object", additionalProperties: false, required: ["intent", "audience", "channel", "tone", "targetSeconds"], properties: { intent: { type: "string" }, audience: { type: "string" }, channel: { type: "string" }, tone: { type: "string" }, targetSeconds: { type: "number" } } },
     suggestions: { type: "array", items: { type: "object", additionalProperties: false,
-      required: ["id", "kind", "title", "reason", "segments", "text", "subtitle", "atS", "durationS", "position", "mood", "assetId", "mode", "platform", "look", "style", "transition", "background", "color", "target", "changeDb", "query", "assetKind", "afterVideo"],
+      required: ["id", "kind", "title", "reason", "segments", "text", "subtitle", "atS", "durationS", "position", "mood", "assetId", "mode", "platform", "look", "style", "transition", "background", "color", "target", "changeDb", "query", "assetKind", "afterVideo", "presetId", "effectSound"],
       properties: {
-        id: { type: "string" }, kind: { type: "string", enum: ["cut", "title", "callout", "lower-third", "music", "broll", "progress", "platform", "look", "zooms", "transitions", "sfx", "background", "volume", "remove", "captions", "color", "stock", "voiceover", "advice"] },
+        effectSound: { type: "string", enum: ["none", "whoosh", "pop", "hit", "riser", ""] },
+        presetId: { type: "string", enum: [...EFFECT_PRESETS.map(p => p.id), ""] },
+        id: { type: "string" }, kind: { type: "string", enum: ["effect", "cut", "title", "callout", "lower-third", "music", "broll", "progress", "platform", "look", "zooms", "transitions", "sfx", "background", "volume", "remove", "captions", "color", "stock", "voiceover", "advice"] },
         title: { type: "string" }, reason: { type: "string" },
         segments: { type: "array", items: { type: "object", additionalProperties: false, required: ["startS", "endS"], properties: { startS: { type: "number" }, endS: { type: "number" } } } },
         text: { type: "string" }, subtitle: { type: "string" }, atS: { type: "number" }, durationS: { type: "number" },
@@ -446,7 +462,7 @@ export class OpenAiDirector implements Director {
     const candidates = input.candidates.slice(0, 16).map((c) => c.id + " [" + c.startS.toFixed(1) + "-" + c.endS.toFixed(1) + "] score " + c.score.toFixed(2) + ": " + c.text.slice(0, 300)).join("\n");
     const media = input.assets.length ? input.assets.map((a) => a.id + " (" + a.kind + "): " + a.name).join("\n") : "(none)";
     const content: Array<Record<string, unknown>> = [
-      { type: "input_text", text: "Creator's description:\n" + input.brief.slice(0, 2000) + "\n\nVideo: " + input.durationS.toFixed(1) + " s, " + input.frame.width + "x" + input.frame.height + "\n\nTranscript:\n" + lines + "\n\nCandidate moments:\n" + candidates + "\n\nProject media:\n" + media + extra + "\n\nFrames follow, each labelled with its time." },
+      { type: "input_text", text: "Creator's description:\n" + input.brief.slice(0, 2000) + "\n\nVideo: " + input.durationS.toFixed(1) + " s, " + input.frame.width + "x" + input.frame.height + "\n\nTranscript:\n" + lines + "\n\nCandidate moments:\n" + candidates + "\n\nProject media:\n" + media + "\n\nSaved creator treatments:\n" + JSON.stringify(input.effects ?? []) + extra + "\n\nFrames follow, each labelled with its time." },
     ];
     for (const frame of input.frames.slice(0, 10)) {
       content.push({ type: "input_text", text: "Frame at " + frame.atS.toFixed(1) + " s:" });
@@ -490,6 +506,14 @@ export function effectOperations(plan: DirectorPlan, accepted: Set<string>, time
   const ops: TimelineOperation[] = [];
   const pieces = timeline.tracks.filter((t) => t.kind === "video").flatMap((t) => t.clips).sort((a, b) => a.timelineStartUs - b.timelineStartUs);
   if (pieces.length === 0) return ops;
+  for (const s of chosen) if (s.kind === "effect") {
+    const atUs = Math.round(s.atS * 1e6);
+    const host = pieces.find(c => c.assetId === assetId && atUs >= c.sourceStartUs && atUs < c.sourceEndUs);
+    // Do not move an effect onto unrelated footage when its moment was cut out.
+    if (!host || host.sourceEndUs - atUs < 1_000_000) continue;
+    const recipe = { ...s.recipe, durationS: Math.min(s.recipe.durationS, Math.floor((host.sourceEndUs - atUs) / 10_000) / 100) };
+    ops.push(...effectRecipeOperations(recipe, { anchorAssetId: assetId, anchorClipId: host.id, anchorSourceUs: atUs }));
+  }
   const look = chosen.find((s): s is Extract<Suggestion, { kind: "look" }> => s.kind === "look");
   if (look) ops.push({ type: "set-look", look: look.look });
   // Whole kinds taken out.
