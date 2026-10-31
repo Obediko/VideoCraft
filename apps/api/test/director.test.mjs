@@ -292,3 +292,19 @@ test('after-video narration appends a real end-card asset and keeps the full aud
 
   } finally { close(); rmSync(voiceDir, { recursive: true, force: true }); }
 });
+
+test("a storyboard readability fix applies to an owned photo and resolves its finding", async () => {
+  const { server, projectId, close } = await setup(new RuleDirector());
+  try {
+    const timeline = { durationUs: 3_000_000, tracks: [{ id: "video", kind: "video", clips: [{ id: "photo-part", assetId: "pic", sourceStartUs: 0, sourceEndUs: 3_000_000, timelineStartUs: 0, timelineEndUs: 3_000_000 }] }, { id: "graphics", kind: "overlay", clips: [{ id: "title", assetId: "generated:graphic", sourceStartUs: 0, sourceEndUs: 1_000_000, timelineStartUs: 2_000_000, timelineEndUs: 3_000_000, transform: { role: "graphic", kind: "title", text: "Choose Freedom", position: "center", anchorAssetId: "pic", anchorClipId: "photo-part", anchorSourceUs: 2_000_000, durationUs: 1_000_000 } }] }] };
+    const saved = await server.inject({ method: "POST", url: "/v1/projects/" + projectId + "/revisions", payload: { timeline, tailoring: { intent: "Story", audience: "", channel: "tiktok", targetDurationUs: 3e6, constraints: ["creation:story"] } } });
+    assert.equal(saved.statusCode, 201, saved.body);
+    const checked = await server.inject({ method: "POST", url: "/v1/projects/" + projectId + "/director/check", payload: { revision: 2 } });
+    assert.equal(checked.statusCode, 200, checked.body);
+    const issue = checked.json().issues.find(i => i.kind === "too-fast"); assert.ok(issue?.fix);
+    const fixed = await server.inject({ method: "POST", url: "/v1/projects/" + projectId + "/director/fix", payload: { revision: 2, fixes: [{ title: issue.title, atS: issue.atS, operations: issue.fix.operations }] } });
+    assert.equal(fixed.statusCode, 201, fixed.body); assert.equal(fixed.json().applied.length, 1, fixed.body);
+    const final = await server.inject({ method: "POST", url: "/v1/projects/" + projectId + "/director/check", payload: { revision: fixed.json().revision.revision } });
+    assert.equal(final.json().issues.some(i => i.kind === "too-fast"), false);
+  } finally { close(); }
+});

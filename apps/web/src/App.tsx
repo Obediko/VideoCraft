@@ -1,3 +1,4 @@
+import { flushSync } from "react-dom";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Creation, type CreationMode } from "./Creation.js";
 import { LivePreview, type LivePreviewHandle } from "./LivePreview.js";
@@ -301,10 +302,16 @@ export function App() {
     if (now - lastLiveReport.current > 120) { lastLiveReport.current = now; setLiveUs(us); }
   }
   function playSelectedClip() {
+    if (!selectedClip) { setStatus("Select a clip to play it"); return; }
+    liveRef.current?.pause(); exportPlayer.current?.pause();
+    // Mount the source player inside the click gesture before calling play (mobile activation).
+    flushSync(() => setPreviewMode("source"));
     const player = playerRef.current;
-    if (!player || !selectedClip) { setStatus("Select a clip to play it"); return; }
-    player.currentTime = selectedClip.sourceStartUs / 1_000_000;
-    void player.play().catch(() => undefined);
+    if (!player) { setStatus("The source preview is unavailable. Reload the footage and try again."); return; }
+    const at = selectedClip.sourceStartUs / 1_000_000;
+    const seek = () => { if (playerRef.current === player) player.currentTime = at; };
+    if (player.readyState >= 1) seek(); else player.addEventListener("loadedmetadata", seek, { once: true });
+    void player.play().catch(() => setStatus("The clip could not start. Reload the footage, then tap Play clip again."));
   }
   function stopAtClipEnd() {
     const player = playerRef.current;

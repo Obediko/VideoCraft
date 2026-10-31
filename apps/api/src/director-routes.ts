@@ -280,8 +280,9 @@ export function registerCheckRoutes(server: FastifyInstance, dependencies: Direc
       try {
         const ops = parseTimelineOperations(fix.operations);
         for (const op of ops) {
-          if (op.type === "insert-clip" && owned.get(op.assetId) !== "video") throw new Error("foreign asset");
-          if ((op.type === "add-graphic" || op.type === "add-broll" || op.type === "add-caption-cue") && owned.get("anchorAssetId" in op ? op.anchorAssetId : op.assetId) !== "video") throw new Error("foreign asset");
+          if (op.type === "insert-clip" && !["video", "image"].includes(owned.get(op.assetId) ?? "")) throw new Error("foreign asset");
+          if ((op.type === "add-graphic" || op.type === "add-broll") && !["video", "image"].includes(owned.get(op.anchorAssetId) ?? "")) throw new Error("foreign asset");
+          if (op.type === "add-caption-cue" && owned.get(op.assetId) !== "video") throw new Error("foreign asset");
           if (op.type === "add-broll" && !["video", "image"].includes(owned.get(op.assetId) ?? "")) throw new Error("foreign asset");
           if (op.type === "set-music" && !["audio", "video"].includes(owned.get(op.assetId) ?? "")) throw new Error("foreign asset");
         }

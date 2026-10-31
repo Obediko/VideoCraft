@@ -444,7 +444,8 @@ export class FfmpegCommandPlanner {
     }
     args.push("-r", String(fps), "-c:v", settings.videoCodec, "-threads:v", "2");
     if (settings.videoCodec === "libx264") args.push("-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p");
-    if (externalAudio || audioLabel) args.push("-c:a", settings.audioCodec);
+    // loudnorm upsamples internally; constrain the final AAC/other audio output for device playback.
+    if (externalAudio || audioLabel) args.push("-c:a", settings.audioCodec, "-ar", "48000", "-ac", "2");
     args.push("-movflags", "+faststart", outputPath);
     return { args, outputPath, files };
   }

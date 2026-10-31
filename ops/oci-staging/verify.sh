@@ -111,6 +111,8 @@ if [ "$c" = 201 ] && [ "$c2" = 201 ]; then
         curl -s -L -o "$TMP/vertical.mp4" "$D2"
         dims="$(docker exec -i videocraft-render-worker ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 - < "$TMP/vertical.mp4" 2>/dev/null)"
         [ "$dims" = "540,960" ] && ok "9:16 export with music, graphics and b-roll rendered ($dims)" || bad "vertical export dims=$dims"
+        audio="$(docker exec -i videocraft-render-worker ffprobe -v error -select_streams a:0 -show_entries stream=codec_name,sample_rate,channels -of csv=p=0 - < "$TMP/vertical.mp4" 2>/dev/null)"
+        [ "$audio" = "aac,48000,2" ] && ok "vertical export audio is stereo AAC at 48 kHz" || bad "vertical export audio=$audio"
         # Stream metadata alone does not prove a decoded picture: reject audio-only or undecodable exports.
         if docker exec -i videocraft-render-worker ffmpeg -v error -xerror -i pipe:0 -map 0:v:0 -frames:v 25 -an -f null - < "$TMP/vertical.mp4" >/dev/null 2>"$TMP/decode.err"; then
           ok "vertical export video frames decode successfully"
