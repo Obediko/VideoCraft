@@ -199,8 +199,8 @@ test('a failed preview-link request is visible and can be retried',async({page})
 test('Play clip opens the original player and starts it from the editor without changing the edit',async({page})=>{
   const state=await editor(page,'edit');
   await page.goto('/');
-  await page.getByRole('button',{name:'Test.mp4, 2.0s',exact:true}).click();
-  await page.getByRole('button',{name:'Play clip',exact:true}).click();
+  await test.step('select the timeline clip',()=>page.getByRole('button',{name:'Test.mp4, 2.0s',exact:true}).click({timeout:10000}));
+  await test.step('tap Play clip',()=>page.getByRole('button',{name:'Play clip',exact:true}).click({timeout:10000}));
   await expect(page.getByRole('tab',{name:'Original',exact:true})).toHaveAttribute('aria-selected','true');
   await expect.poll(()=>page.locator('.preview-screen video').evaluate((v:HTMLVideoElement)=>v.paused)).toBe(false);
   await expect.poll(()=>page.locator('.preview-screen video').evaluate((v:HTMLVideoElement)=>v.currentTime)).toBeGreaterThan(0);
