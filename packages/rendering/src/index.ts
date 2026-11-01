@@ -357,7 +357,7 @@ export class FfmpegCommandPlanner {
       return { ...(face ? { face } : {}), ...(avoid ? { avoid } : {}) };
     };
     const graphics: GraphicItem[] = overlayClips.filter((clip) => clip.transform?.role === "graphic" && typeof clip.transform.text === "string").map((clip) => ({
-      kind: clip.transform!.kind === "lower-third" ? "lower-third" : clip.transform!.kind === "callout" ? "callout" : "title",
+      kind: clip.transform!.kind === "thinking" ? "thinking" : clip.transform!.kind === "lower-third" ? "lower-third" : clip.transform!.kind === "callout" ? "callout" : "title",
       text: String(clip.transform!.text).slice(0, 120), startUs: clip.timelineStartUs, endUs: clip.timelineEndUs,
       ...(typeof clip.transform!.subtitle === "string" ? { subtitle: clip.transform!.subtitle.slice(0, 120) } : {}),
       ...(clip.transform!.position === "top" || clip.transform!.position === "bottom" || clip.transform!.position === "center" ? { position: clip.transform!.position } : {}),

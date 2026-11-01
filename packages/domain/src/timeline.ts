@@ -393,7 +393,7 @@ export function parseTimelineOperations(value: unknown): TimelineOperation[] {
       case "clear-music":
         return { type: "clear-music" };
       case "add-graphic": {
-        if (op.kind !== "title" && op.kind !== "callout" && op.kind !== "lower-third") return fail("add-graphic kind must be title, callout or lower-third");
+        if (op.kind !== "title" && op.kind !== "callout" && op.kind !== "lower-third" && op.kind !== "thinking") return fail("add-graphic kind must be title, callout, lower-third or thinking");
         if (!isGraphicText(op.text)) return fail("add-graphic text must be 1-120 characters");
         if (op.subtitle !== undefined && op.subtitle !== "" && !isGraphicText(op.subtitle)) return fail("add-graphic subtitle must be at most 120 characters");
         if (!isId(op.anchorAssetId) || !isUs(op.anchorSourceUs) || !isUs(op.durationUs) || (op.durationUs as number) < 300_000 || (op.durationUs as number) > 600_000_000) return fail("add-graphic needs anchorAssetId, anchorSourceUs and a duration of 0.3s-10min");

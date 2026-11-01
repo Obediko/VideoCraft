@@ -441,3 +441,23 @@ test("AAC exports keep stereo 48 kHz after loudness normalization and when norma
     }
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
+
+test('all creative treatments render and decode across tall, square and wide formats', async()=>{
+  const {EFFECT_PRESETS,parseEffectRecipe,effectRecipeOperations,applyTimelineOperations}=await import('@videocraft/domain');
+  const dir=mkdtempSync(join(tmpdir(),'vc-effects-'));
+  try{
+    const source=join(dir,'source.mp4');execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','color=c=0x202830:s=320x240:r=15:d=3','-c:v','libx264','-pix_fmt','yuv420p',source]);
+    const planner=new FfmpegCommandPlanner({resolve:async()=>source,hasAudio:async()=>false});
+    for(const [width,height] of [[360,640],[480,480],[640,360]])for(const preset of EFFECT_PRESETS){
+      const base=revision([clip('host',0,3e6,0)]);const recipe=parseEffectRecipe({presetId:preset.id,durationS:2});
+      const timeline=applyTimelineOperations(base.timeline,effectRecipeOperations(recipe,{anchorAssetId:'asset',anchorClipId:'host',anchorSourceUs:0}));
+      const out=join(dir,`${preset.id}-${width}.mp4`),plan=await planner.plan({...base,timeline},{...settings,width,height,frameRate:15},out);
+      await new FfmpegProcess().run(plan);execFileSync('ffmpeg',['-v','error','-xerror','-i',out,'-f','null','-']);
+      if(preset.id==='thinking'){
+        assert.match(plan.files.find(f=>f.path.endsWith('.graphics.ass')).content,/x² \+ y²/);
+        const pixels=execFileSync('ffmpeg',['-v','error','-ss','0.8','-i',out,'-frames:v','1','-f','rawvideo','-pix_fmt','rgb24','-']);
+        assert.ok([...pixels].filter(v=>v>170).length>100,'decorative equations must be visible, not just an ASS file');
+      }
+    }
+  }finally{rmSync(dir,{recursive:true,force:true});}
+});

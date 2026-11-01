@@ -26,12 +26,12 @@ function fakeFetch(calls) {
   };
 }
 
-async function setup(keys) {
+async function setup(keys, effects) {
   const root = mkdtempSync(join(tmpdir(), "vc-stock-"));
   const saved = []; const calls = [];
   const server = Fastify();
   registerStockRoutes(server, {
-    keys, fetch: fakeFetch(calls),
+    keys, fetch: fakeFetch(calls), ...(effects ? {effects} : {}),
     assets: { listForProject: async () => saved, save: async (a) => { saved.push(a); } },
     storage: { resolve: (k) => join(root, k), putFile: async (from, key) => { mkdirSync(dirname(join(root, key)), { recursive: true }); copyFileSync(from, join(root, key)); return { key, checksumSha256: "x" }; }, remove: async () => {} },
     inspector: async () => ({ durationUs: 9_000_000, formatName: "mp4", sizeBytes: 16, hasVideo: true, hasAudio: false, width: 1920, height: 1080 }),
@@ -115,4 +115,19 @@ test("face track route serves a stored track and says when tracking is not set u
     assert.equal((await server.inject({ url: issued.json().url.replace(/signature=[^&]+/, "signature=bad") })).statusCode, 401);
     assert.equal((await server.inject({ url: "/v1/projects/p1/assets/a2/matte-url", headers: auth })).statusCode, 503, "no matte and no matting set up");
   } finally { await server.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("imported stock grows the private reusable library; cache reuse avoids another media download",async()=>{
+  const records=new Map();const effects={list:async()=>[...records.values()],save:async(uid,e)=>records.set(uid+':'+e.id,e),remove:async()=>{}};
+  const s=await setup({pexels:'PKEY'},effects);
+  try{
+    for(let i=0;i<2;i++){
+      const r=await s.server.inject({method:'POST',url:'/v1/projects/p1/stock/import',headers:auth,payload:{provider:'pexels',kind:'video',id:'11'}});
+      assert.ok([200,201].includes(r.statusCode),r.body);assert.equal(r.json().asset.metadata.credit,'Ana on Pexels');
+    }
+    assert.equal(records.size,1);assert.equal([...records.keys()][0].startsWith('u:'),true);
+    const recipe=[...records.values()][0].recipe;assert.deepEqual(recipe.stock,{provider:'pexels',id:'11',kind:'video',mode:'full'});
+    assert.equal(s.calls.filter(c=>c.url==='https://cdn.pexels.com/11-hd.mp4').length,1);
+  }finally{await s.close();}
 });

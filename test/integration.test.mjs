@@ -173,3 +173,17 @@ test("deleting a project removes its rows everywhere and leaves other projects a
     await new PostgresProjectRepository(pool).delete(ids[1]);
   } finally { await pool.end(); }
 });
+
+test('effect library survives repository recreation and isolates PostgreSQL owners', {skip},async()=>{
+  const {randomUUID}=await import('node:crypto');const {PostgresEffectLibraryRepository}=await import('@videocraft/persistence');const {savedEffect}=await import('../apps/api/dist/effects.js');
+  const pool=new Pool({connectionString:databaseUrl});const a=randomUUID(),b=randomUUID();
+  try{
+    await migrateDatabase(pool);
+    for(const id of [a,b])await pool.query('INSERT INTO users(id,email,password_hash) VALUES($1,$2,$3)',[id,id+'@test.invalid','not-a-login']);
+    const repo=new PostgresEffectLibraryRepository(pool),effect=savedEffect({presetId:'chapter',text:'Next step',color:'#395B75',durationS:3});
+    await repo.save(a,effect);await repo.save(a,effect);
+    assert.equal((await new PostgresEffectLibraryRepository(pool).list(a)).length,1);
+    assert.equal((await repo.list(b)).length,0);await repo.remove(b,effect.id);assert.equal((await repo.list(a)).length,1);
+    await repo.remove(a,effect.id);assert.equal((await repo.list(a)).length,0);
+  }finally{await pool.query('DELETE FROM users WHERE id = ANY($1::uuid[])',[[a,b]]);await pool.end();}
+});

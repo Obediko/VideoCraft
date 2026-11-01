@@ -3,7 +3,7 @@ import rateLimit from "@fastify/rate-limit";
 import { Queue } from "bullmq";
 import { Redis } from "ioredis";
 import type { FastifyRequest } from "fastify";
-import { createDatabase, createPool, PostgresAssetRepository, PostgresProjectMemberRepository, PostgresProjectRepository, PostgresProposalStore, PostgresSceneRepository, PostgresRevisionRepository, PostgresTranscriptStore, PostgresRenderJobRepository, PostgresFeedbackRepository, PostgresPreferenceRepository, PostgresAuditRepository, type Database } from "@videocraft/persistence";
+import { createDatabase, createPool, PostgresAssetRepository, PostgresProjectMemberRepository, PostgresProjectRepository, PostgresProposalStore, PostgresSceneRepository, PostgresRevisionRepository, PostgresTranscriptStore, PostgresRenderJobRepository, PostgresFeedbackRepository, PostgresPreferenceRepository, PostgresAuditRepository, PostgresEffectLibraryRepository, type Database } from "@videocraft/persistence";
 import { BullMqMediaQueue, BullMqRenderQueue, CloudflareMediaQueue, CloudflareQueueRenderQueue, type MediaQueuePort } from "@videocraft/jobs";
 import { ProjectService } from "@videocraft/application";
 import { FasterWhisperWorker } from "@videocraft/transcription";
@@ -22,6 +22,7 @@ import { registerRenderRoutes } from "./render-routes.js";
 import { registerMediaRoutes } from "./media-routes.js";
 import { findStock, importStock, previewStock, registerStockRoutes } from "./stock.js";
 import { registerVoiceoverRoutes, speak, voiceFetcher } from "./voiceover.js";
+import { registerEffectRoutes } from "./effects.js";
 import { registerPreferenceRoutes } from "./learning.js";
 import { registerMusicRoutes } from "./music-routes.js";
 import { registerCreationRoutes, storyboardPlanner } from "./creation.js";
@@ -132,6 +133,7 @@ const timelineService = new ProjectService(projects, assets, revisions, { next: 
 const transcripts = new PostgresTranscriptStore(db);
 const feedback = new PostgresFeedbackRepository(db);
 const preferences = new PostgresPreferenceRepository(db);
+const effects = new PostgresEffectLibraryRepository(db);
 const audit = new PostgresAuditRepository(db);
 const intentProviderMode = secretEnvironment.INTENT_PROVIDER_MODE ?? (secretEnvironment.INTENT_PROVIDER_API_KEY ? "external" : "rule-based");
 const intentAnalyzer = intentProviderMode === "external"
@@ -182,6 +184,7 @@ const director = secretEnvironment.OPENAI_API_KEY && secretEnvironment.DIRECTOR_
   ? new OpenAiDirector({ apiKey: secretEnvironment.OPENAI_API_KEY, model: secretEnvironment.DIRECTOR_MODEL ?? "gpt-6.1-sol", ...(secretEnvironment.OPENAI_BASE_URL ? { endpoint: secretEnvironment.OPENAI_BASE_URL } : {}) })
   : new RuleDirector();
 const stockDependencies = {
+  effects,
   keys: { ...(secretEnvironment.PEXELS_API_KEY ? { pexels: secretEnvironment.PEXELS_API_KEY } : {}), ...(secretEnvironment.PIXABAY_API_KEY ? { pixabay: secretEnvironment.PIXABAY_API_KEY } : {}), ...(secretEnvironment.GIPHY_API_KEY ? { giphy: secretEnvironment.GIPHY_API_KEY } : {}) },
   assets, storage, authorize: authorizer, authenticate: (request: FastifyRequest) => authenticator.authenticate(request), clock: () => new Date().toISOString(),
   inspector: (path: string) => probeMedia(path, secretEnvironment.FFPROBE_BIN ? { executable: secretEnvironment.FFPROBE_BIN } : {}),
@@ -193,7 +196,8 @@ const voiceDependencies = {
   inspector: (path: string) => probeMedia(path, secretEnvironment.FFPROBE_BIN ? { executable: secretEnvironment.FFPROBE_BIN } : {}),
 };
 const hasStock = Object.keys(stockDependencies.keys).length > 0;
-registerDirectorRoutes(server, { projects, assets, revisions, storage, transcripts, director, ...(hasStock ? {
+registerEffectRoutes(server, { effects, authenticate: request => authenticator.authenticate(request) });
+registerDirectorRoutes(server, { effects, projects, assets, revisions, storage, transcripts, director, ...(hasStock ? {
   findStock: (projectId: string, query: string, kind: "video" | "photo" | "gif", orientation?: "portrait" | "landscape" | "square") => findStock(stockDependencies, projectId, query, kind, orientation),
   previewStock: (query: string, kind: "video" | "photo" | "gif", orientation?: "portrait" | "landscape" | "square") => previewStock(stockDependencies, query, kind, orientation),
   importStock: async (projectId: string, provider: "pexels" | "pixabay" | "giphy", kind: "video" | "photo" | "gif", id: string) => (await importStock(stockDependencies, (url, init) => fetch(url, init) as never, projectId, provider, kind, id)).asset,

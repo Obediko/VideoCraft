@@ -26,7 +26,7 @@ export interface CreationDependencies {
 }
 
 /** Bounded samples, not a claim to have watched every second. Unknown/large uploads are explicitly skipped. */
-export async function sampleStoryFrames(d: Pick<CreationDependencies, "storage" | "ffmpeg">, assets: Asset[]): Promise<StoryFrame[]> {
+export async function sampleStoryFrames(d: Pick<CreationDependencies, "storage" | "ffmpeg">, assets: Asset[], moments?: Array<{ assetId: string; atS: number }>): Promise<StoryFrame[]> {
   const frames: StoryFrame[] = []; let bytes = 0;
   const signal = AbortSignal.timeout(15_000);
   for (const asset of assets.slice(0, 12)) {
@@ -38,7 +38,7 @@ export async function sampleStoryFrames(d: Pick<CreationDependencies, "storage" 
     try {
       const path = d.storage.downloadToFile ? join(directory, "source.media") : d.storage.resolve(asset.storageKey);
       if (d.storage.downloadToFile) await d.storage.downloadToFile(asset.storageKey, path, { signal });
-      const times = asset.kind === "image" ? [0] : [0, Math.max(0, (asset.durationUs ?? 0) / 2e6)];
+      const times = moments ? [...new Set(moments.filter(m => m.assetId === asset.id && Number.isFinite(m.atS) && m.atS >= 0).slice(0, 2).map(m => asset.kind === "image" ? 0 : m.atS))] : asset.kind === "image" ? [0] : [0, Math.max(0, (asset.durationUs ?? 0) / 2e6)];
       for (const atS of times) {
         const jpeg = await new Promise<Buffer>((resolve, reject) => {
           execFile(d.ffmpeg ?? "ffmpeg", ["-v", "error", "-threads", "1", "-filter_threads", "1", "-ss", atS.toFixed(3), "-i", path, "-frames:v", "1", "-vf", "scale=512:512:force_original_aspect_ratio=decrease", "-q:v", "7", "-threads", "1", "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1"], { timeout: 10_000, maxBuffer: 1024 ** 2, signal, encoding: "buffer" }, (err, stdout) => err ? reject(err) : resolve(stdout));

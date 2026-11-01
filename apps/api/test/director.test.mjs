@@ -308,3 +308,43 @@ test("a storyboard readability fix applies to an owned photo and resolves its fi
     assert.equal(final.json().issues.some(i => i.kind === "too-fast"), false);
   } finally { close(); }
 });
+
+test('accepting a creative Director suggestion saves a reusable recipe after the edit succeeds',async()=>{
+  const saved=[];const library={list:async()=>[],save:async(userId,e)=>saved.push({userId,...e}),remove:async()=>{}};
+  const state=await setup(new RuleDirector(),{extra:{effects:library}});
+  try{
+    const plan={source:'ai',summary:'A quiet emphasis',suggestions:[{id:'effect',kind:'effect',presetId:'key-point',text:'Real projects',atS:1,durationS:2}]};
+    const r=await state.server.inject({method:'POST',url:'/v1/projects/'+state.projectId+'/director/apply',payload:{revision:1,plan,accepted:['effect']}});
+    assert.equal(r.statusCode,201,r.body);assert.equal(saved.length,1);assert.equal(saved[0].userId,'u');assert.equal(saved[0].recipe.text,'Real projects');
+    assert.ok(r.json().revision.timeline.tracks.flatMap(t=>t.clips).some(c=>c.transform?.text==='Real projects'));
+    const stale=await state.server.inject({method:'POST',url:'/v1/projects/'+state.projectId+'/director/apply',payload:{revision:1,plan,accepted:['effect']}});assert.equal(stale.statusCode,409);assert.equal(saved.length,1);
+  }finally{await state.server.close();state.close();}
+});
+
+test('AI review samples end-card graphics from the end-card asset instead of original source zero',async()=>{
+  let seen;const director={plan:new RuleDirector().plan,review:async input=>{seen=input;return [];}};
+  const state=await setup(director);
+  try{
+    const cardKey='projects/'+state.projectId+'/assets/end-card.mp4';const path=state.storage.resolve(cardKey);
+    const {mkdirSync}=await import('node:fs');const {dirname}=await import('node:path');mkdirSync(dirname(path),{recursive:true});
+    execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','color=c=0x1F2A24:s=160x240:r=15:d=2','-c:v','libx264','-pix_fmt','yuv420p',path]);
+    await state.assets.save({id:'end-card',projectId:state.projectId,kind:'video',storageKey:cardKey,checksumSha256:'c'.repeat(64),durationUs:2e6,metadata:{endCard:true},createdAt:new Date().toISOString()});
+    const durationUs=state.durationUs;
+    const timeline={durationUs:durationUs+2e6,tracks:[{id:'v',kind:'video',clips:[{id:'talk-piece',assetId:'talk',sourceStartUs:0,sourceEndUs:durationUs,timelineStartUs:0,timelineEndUs:durationUs},{id:'card-piece',assetId:'end-card',sourceStartUs:0,sourceEndUs:2e6,timelineStartUs:durationUs,timelineEndUs:durationUs+2e6}]},{id:'graphics',kind:'overlay',clips:[{id:'closing',assetId:'generated:graphic',sourceStartUs:0,sourceEndUs:2e6,timelineStartUs:durationUs,timelineEndUs:durationUs+2e6,transform:{role:'graphic',kind:'title',text:'Jesus truly saves',anchorAssetId:'end-card',anchorClipId:'card-piece',anchorSourceUs:0,durationUs:2e6}}]}]};
+    const saved=await state.server.inject({method:'POST',url:'/v1/projects/'+state.projectId+'/revisions',payload:{timeline}});assert.equal(saved.statusCode,201,saved.body);
+    const checked=await state.server.inject({method:'POST',url:'/v1/projects/'+state.projectId+'/director/check',payload:{revision:2}});assert.equal(checked.statusCode,200,checked.body);
+    const frame=seen.frames.find(f=>f.label.startsWith('Under on-screen text #0'));assert.ok(frame,'closing frame must be sampled');
+    const rgb=execFileSync('ffmpeg',['-v','error','-i','pipe:0','-vf','scale=1:1','-frames:v','1','-f','rawvideo','-pix_fmt','rgb24','-'],{input:Buffer.from(frame.jpegBase64,'base64')});
+    [31,42,36].forEach((v,i)=>assert.ok(Math.abs(rgb[i]-v)<10,`card colour channel ${i}: ${rgb[i]}`));
+    assert.equal(frame.atS,durationUs/1e6);assert.match(seen.pieces[1].text,/Intentional narrated end card: Jesus truly saves/);
+  }finally{await state.server.close();state.close();}
+});
+
+test('accepted sourced visuals add provider recipes to the library after the revision is saved',async()=>{
+  const saved=[];const state=await setup(new RuleDirector(),{extra:{effects:{list:async()=>[],save:async(uid,e)=>saved.push({uid,...e}),remove:async()=>{}},importStock:async()=>({id:'pic'})}});
+  try{
+    const plan={source:'ai',suggestions:[{id:'stock',kind:'stock',query:'campus gardens',assetKind:'photo',atS:1,durationS:3,mode:'pip',pick:{provider:'pexels',id:'11',thumbUrl:'https://images.pexels.com/11.jpg'}}]};
+    const r=await state.server.inject({method:'POST',url:'/v1/projects/'+state.projectId+'/director/apply',payload:{revision:1,plan,accepted:['stock']}});
+    assert.equal(r.statusCode,201,r.body);assert.equal(saved.length,1);assert.equal(saved[0].uid,'u');assert.deepEqual(saved[0].recipe.stock,{provider:'pexels',id:'11',kind:'photo',mode:'pip'});
+  }finally{await state.server.close();state.close();}
+});

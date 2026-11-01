@@ -25,7 +25,7 @@ export type TimelineOperation =
    * so it moves with that moment through cuts and reorders. "full" covers the frame, "pip" is a corner inset.
    */
   /** Animated text graphics anchored to a moment like b-roll: a title card, a callout, or a lower third (name + role). */
-  | { type: "add-graphic"; kind: "title" | "callout" | "lower-third"; text: string; subtitle?: string; anchorAssetId: UUID; anchorClipId?: UUID; anchorSourceUs: Microseconds; durationUs: Microseconds; position?: "top" | "center" | "bottom"; color?: string }
+  | { type: "add-graphic"; kind: "title" | "callout" | "lower-third" | "thinking"; text: string; subtitle?: string; anchorAssetId: UUID; anchorClipId?: UUID; anchorSourceUs: Microseconds; durationUs: Microseconds; position?: "top" | "center" | "bottom"; color?: string }
   | { type: "update-graphic"; clipId: string; text?: string; subtitle?: string; color?: string }
   /** A bar filling across the top of the frame over the whole cut. */
   | { type: "set-progress-bar"; enabled: boolean; color?: string }
@@ -109,3 +109,5 @@ export function validateProposal(proposal: EditingProposal): void { if (proposal
 export * from "./timeline.js";
 export * from "./learning.js";
 export * from "./transitions.js";
+
+export * from "./effects.js";
