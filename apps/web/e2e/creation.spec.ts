@@ -109,7 +109,7 @@ test("an idea with no uploads requires an approved visual; stock and generated i
   await page.getByLabel("Your brief").fill("A hopeful sunrise story");
   await page.getByRole("button", { name: "Make my storyboard" }).click();
   await expect(page.getByRole("button", { name: "Assemble this story" })).toBeDisabled();
-  await page.getByRole("button", { name: "Preview / find visuals for scene 1" }).click();
+  await page.getByRole("button", { name: "Find visuals for scene 1" }).click();
   await page.getByLabel("Search stock").fill("sunrise");
   await page.getByRole("button", { name: "Search", exact: true }).click();
   await page.getByRole("button", { name: "Add Sunrise from Pexels" }).click();
