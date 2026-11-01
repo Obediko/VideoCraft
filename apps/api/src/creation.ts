@@ -1,3 +1,4 @@
+import { artificialPhrases, DIRECTOR_CRAFT } from "./craft.js";
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -173,7 +174,7 @@ export function registerCreationRoutes(server: FastifyInstance, d: CreationDepen
 }
 
 /** Same structured Responses API used by AI Director; provider failures are an explicit fallback. */
-export function storyboardPlanner(options: { apiKey: string; model: string; endpoint?: string }) {
+export function storyboardPlanner(options: { apiKey: string; model: string; endpoint?: string; rewrite?: boolean }) {
   return async (input: StoryInput): Promise<unknown> => {
     const { frames, ...description } = input;
     const content: Array<Record<string, unknown>> = [{ type: "input_text", text: JSON.stringify(description) }];
