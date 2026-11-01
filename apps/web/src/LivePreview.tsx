@@ -233,19 +233,26 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
 
   const current = clips[clipAt(tUs)];
   const look = current ? LOOK_CSS[String(current.transform?.look ?? "")] : undefined;
+  const correction = current ? [
+    Number(current.transform?.exposure ?? 0) !== 0 ? "brightness(" + Math.pow(2, Number(current.transform?.exposure)).toFixed(3) + ")" : "",
+    Number(current.transform?.contrast ?? 1) !== 1 ? "contrast(" + Number(current.transform?.contrast).toFixed(3) + ")" : "",
+    Number(current.transform?.saturation ?? 1) !== 1 ? "saturate(" + Number(current.transform?.saturation).toFixed(3) + ")" : "",
+    Number(current.transform?.temperature ?? 0) !== 0 ? "sepia(" + (Math.abs(Number(current.transform?.temperature)) * 0.16).toFixed(3) + ") hue-rotate(" + (Number(current.transform?.temperature) < 0 ? 185 : -8) + "deg)" : "",
+  ].filter(Boolean).join(" ") : "";
+  const finishFilter = [look, correction].filter(Boolean).join(" ") || undefined;
   const zoom = zoomAt(current, tUs);
   const veil = veilAt(clips, tUs, durationUs);
   const blend = blendAt(clips, tUs);
   const blendStyle = ((): React.CSSProperties | undefined => {
     if (!blend || blend.index !== snapFor.current) return undefined;
     const p = Math.min(1, Math.max(0, blend.progress));
-    const base: React.CSSProperties = { objectFit: fit, ...(look ? { filter: look } : {}) };
+    const base: React.CSSProperties = { objectFit: fit, ...(finishFilter ? { filter: finishFilter } : {}) };
     if (blend.kind === "dissolve") return { ...base, opacity: 1 - p };
     if (blend.kind === "push") return { ...base, transform: "translateX(" + (-p * 100).toFixed(2) + "%)" };
     if (blend.kind === "slide-up") return { ...base, transform: "translateY(" + (-p * 100).toFixed(2) + "%)" };
     if (blend.kind === "wipe") return { ...base, clipPath: "inset(0 " + (p * 100).toFixed(2) + "% 0 0)" };
     if (blend.kind === "circle") { const mask = "radial-gradient(circle at 50% 50%, transparent " + (p * 75).toFixed(1) + "%, #000 " + (p * 75 + 1).toFixed(1) + "%)"; return { ...base, maskImage: mask, WebkitMaskImage: mask }; }
-    if (blend.kind === "blur") return { ...base, opacity: 1 - p, filter: (look ? look + " " : "") + "blur(" + (p * 16).toFixed(1) + "px)" };
+    if (blend.kind === "blur") return { ...base, opacity: 1 - p, filter: (finishFilter ? finishFilter + " " : "") + "blur(" + (p * 16).toFixed(1) + "px)" };
     return undefined;
   })();
   const cue = cues.find((c) => tUs >= c.timelineStartUs && tUs < c.timelineEndUs);
@@ -308,9 +315,9 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
         setPlaying(false); music.current?.pause();
         const code = el.error.code;
         setPlaybackError(mediaFailure(code));
-      }} muted={false} playsInline preload="auto" style={{ ...(stills?.[current?.assetId ?? ""] ? { visibility: "hidden" } : {}), objectFit: fit, ...(currentFocus ? { objectPosition: (currentFocus.x * 100).toFixed(1) + "% " + (currentFocus.y * 100).toFixed(1) + "%" } : {}), transform: zoom !== 1 ? "scale(" + zoom.toFixed(4) + ")" : undefined, transformOrigin: "50% 40%", filter: look, ...(compositing ? { opacity: 0 } : {}) }} />
-      {current && stills?.[current.assetId] && urls[current.assetId] && <img ref={photo} key={urls[current.assetId] + ":" + mediaAttempt} className="live-video live-photo" src={urls[current.assetId]} alt="Storyboard photo" onLoad={() => setPlaybackError("")} onError={() => { setPlaying(false); music.current?.pause(); setPlaybackError("The photo could not be loaded. Reload footage to retry."); }} style={{ objectFit: fit, filter: look, transform: zoom !== 1 ? "scale(" + zoom.toFixed(4) + ")" : undefined }} />}
-      {compositing && <BackgroundLayer video={videoEl} matteUrl={matteUrl!} spec={background!} fit={fit} focus={currentFocus} zoom={zoom} filter={look} onError={() => setCutoutFailed(true)} />}
+      }} muted={false} playsInline preload="auto" style={{ ...(stills?.[current?.assetId ?? ""] ? { visibility: "hidden" } : {}), objectFit: fit, ...(currentFocus ? { objectPosition: (currentFocus.x * 100).toFixed(1) + "% " + (currentFocus.y * 100).toFixed(1) + "%" } : {}), transform: zoom !== 1 ? "scale(" + zoom.toFixed(4) + ")" : undefined, transformOrigin: "50% 40%", filter: finishFilter, ...(compositing ? { opacity: 0 } : {}) }} />
+      {current && stills?.[current.assetId] && urls[current.assetId] && <img ref={photo} key={urls[current.assetId] + ":" + mediaAttempt} className="live-video live-photo" src={urls[current.assetId]} alt="Storyboard photo" onLoad={() => setPlaybackError("")} onError={() => { setPlaying(false); music.current?.pause(); setPlaybackError("The photo could not be loaded. Reload footage to retry."); }} style={{ objectFit: fit, filter: finishFilter, transform: zoom !== 1 ? "scale(" + zoom.toFixed(4) + ")" : undefined }} />}
+      {compositing && <BackgroundLayer video={videoEl} matteUrl={matteUrl!} spec={background!} fit={fit} focus={currentFocus} zoom={zoom} filter={finishFilter} onError={() => setCutoutFailed(true)} />}
       <canvas ref={snapRef} className="live-snap" aria-hidden="true" style={blendStyle ?? { display: "none" }} />
       {background && (!matteUrl || cutoutFailed) && <span className="live-note">{cutoutExpired || cutoutFailed ? <>Cutout preview unavailable. Showing the original footage. <button type="button" onClick={() => { setCutoutFailed(false); setCutoutExpired(false); setCutoutAttempt((n) => n + 1); onRetryMatte?.(); }}>Retry cutout</button></> : "Cutting you out for the preview…"}</span>}
       {!urls[current?.assetId ?? ""] && <span className="live-empty">Preparing the footage…</span>}

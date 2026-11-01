@@ -44,6 +44,12 @@ export type TimelineOperation =
    * Fields left out are unchanged; "none" / "cut" clears.
    */
   | { type: "set-clip-effects"; clipId: UUID; zoom?: ClipZoom; look?: ColourLook; transitionIn?: Transition; transitionOut?: Transition; transitionSeconds?: number }
+  /** Precise, non-destructive primary colour correction for one shot. Zero/one values clear back to neutral. */
+  | { type: "set-colour-grade"; clipId: UUID; exposure?: number; contrast?: number; saturation?: number; temperature?: number }
+  /** Dialogue cleanup on the source sound carried by one video clip. */
+  | { type: "set-dialogue-finish"; clipId: UUID; denoise?: boolean; voiceEnhance?: boolean; deEss?: boolean }
+  /** Switch one timeline piece to a synchronized camera source without moving the edit. */
+  | { type: "switch-camera"; clipId: UUID; assetId: UUID; sourceStartUs: Microseconds; sourceEndUs: Microseconds; camera?: string }
   /** One colour look on every video clip ("none" clears). */
   | { type: "set-look"; look: ColourLook }
   /** A short generated sound effect anchored to a moment of a source video, like graphics. */

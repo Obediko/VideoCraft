@@ -60,7 +60,10 @@ export type Suggestion =
   /** Make a kind of sound louder or quieter by changeDb (negative = quieter): the music, sound effects or voice-overs. */
   | { id: string; kind: "volume"; title: string; reason: string; target: "music" | "sfx" | "voiceover"; changeDb: number }
   /** What is behind the person in the whole video: blurred, or a plain colour (the person is cut out and kept). */
-  | { id: string; kind: "background"; title: string; reason: string; background: "blur" | "color"; color?: string };
+  | { id: string; kind: "background"; title: string; reason: string; background: "blur" | "color"; color?: string }
+  | { id: string; kind: "grade"; title: string; reason: string; exposure: number; contrast: number; saturation: number; temperature: number }
+  | { id: string; kind: "dialogue"; title: string; reason: string; denoise: boolean; voiceEnhance: boolean; deEss: boolean }
+  | { id: string; kind: "camera"; title: string; reason: string; assetId: string; atS: number };
 
 /** The stock item found for a suggestion, shown before applying so the creator sees what they get. */
 export interface StockPick { provider: "pexels" | "pixabay" | "giphy"; id: string; thumbUrl: string; credit?: string }
@@ -196,6 +199,13 @@ export function sanitizePlan(raw: unknown, input: DirectorInput, source: Directo
       const background = s.background === "color" ? "color" : s.background === "blur" ? "blur" : undefined;
       const color = typeof s.color === "string" && /^#[0-9a-fA-F]{6}$/.test(s.color) ? s.color : undefined;
       if (background && !suggestions.some((e) => e.kind === "background")) suggestions.push({ ...base(s, index), kind: "background", background, ...(background === "color" && color ? { color } : {}) });
+    } else if (kind === "grade") {
+      if (!suggestions.some(e => e.kind === "grade")) suggestions.push({ ...base(s, index), kind: "grade", exposure: clamp(num(s.exposure) || 0, -2, 2), contrast: clamp(num(s.contrast) || 1, 0.5, 1.5), saturation: clamp(num(s.saturation) || 1, 0, 2), temperature: clamp(num(s.temperature) || 0, -1, 1) });
+    } else if (kind === "dialogue") {
+      if (!suggestions.some(e => e.kind === "dialogue")) suggestions.push({ ...base(s, index), kind: "dialogue", denoise: s.denoise !== false, voiceEnhance: s.voiceEnhance !== false, deEss: s.deEss === true });
+    } else if (kind === "camera") {
+      const assetId = text(s.assetId, 80); const atS = num(s.atS);
+      if (assetIds.has(assetId) && atS >= 0 && atS < input.durationS) suggestions.push({ ...base(s, index), kind: "camera", assetId, atS });
     } else if (kind === "zooms") {
       if ((s.style === "punch" || s.style === "push") && !suggestions.some((e) => e.kind === "zooms")) suggestions.push({ ...base(s, index), kind: "zooms", style: s.style });
     } else if (kind === "transitions") {
@@ -265,6 +275,10 @@ export class RuleDirector implements Director {
     if (!removing && blendWanted) raw.push({ id: "transitions", kind: "transitions", title: (blendWanted === "dissolve" ? "Dissolve" : blendWanted === "push" ? "Push" : blendWanted === "slide-up" ? "Slide up" : blendWanted === "wipe" ? "Wipe" : blendWanted === "circle" ? "Circle reveal" : "Blur") + " between parts, fade at the ends", reason: "As you asked.", transition: blendWanted });
     else if (!removing && /transition|fade|dip|flash/.test(t)) raw.push({ id: "transitions", kind: "transitions", title: /flash/.test(t) ? "Flash between topics" : /white/.test(t) ? "Dip to white between topics" : "Fade in and out, dip to black between topics", reason: "As you asked.", transition: /flash/.test(t) ? "flash" : /white/.test(t) ? "dip-white" : "dip-black" });
     if (/youtube|16:9|landscape|square|1:1|vertical|9:16|reel|tiktok|short/.test(t) && !shorter) raw.push({ id: "platform", kind: "platform", title: "Export for " + hints.platform, reason: "As you asked.", platform: hints.platform });
+    if (/clean (up )?(the )?(dialogue|voice|speech)|denoise|remove (the )?(background )?noise|de-?ess|voice clarity/.test(t)) raw.push({ id: "dialogue", kind: "dialogue", title: "Finish the dialogue", reason: "Reduce noise and improve speech clarity across the cut.", denoise: true, voiceEnhance: true, deEss: /de-?ess|harsh s|sibil/.test(t) });
+    if (/colou?r grade|correct (the )?colou?r|white balance|too dark|too bright|cooler|warmer/.test(t)) raw.push({ id: "grade", kind: "grade", title: "Correct the colour", reason: "A restrained primary correction, kept separate from the creative look.", exposure: /too dark|brighten/.test(t) ? 0.3 : /too bright|darken/.test(t) ? -0.3 : 0, contrast: 1.05, saturation: 1, temperature: /cooler/.test(t) ? -0.2 : /warmer/.test(t) ? 0.2 : 0 });
+    const cameraAsset = input.assets.find(asset => asset.kind === "video" && t.includes(asset.name.toLowerCase()));
+    if (cameraAsset && /camera|angle|wide|close|shot|switch/.test(t)) raw.push({ id: "camera", kind: "camera", title: "Switch camera angle", reason: "Use the requested synchronized recording without moving the cut.", assetId: cameraAsset.id, atS: input.playheadS ?? input.current.pieces[0]?.startS ?? 0 });
     // Everything else the editor can add, change or take out.
     for (const r of ruleRequests(input.instruction, { pieces: input.current.pieces, assets: input.assets, ...(input.playheadS !== undefined ? { playheadS: input.playheadS } : {}) })) if (!raw.some((x) => x.id === r.id)) raw.push(r);
     const plan = sanitizePlan({ summary: summary || "Changes for your request.", profile: { intent: input.brief, targetSeconds: target ?? input.current.seconds }, suggestions: raw }, input, "rules");
@@ -345,6 +359,9 @@ Rules:
 - "voiceover": narration read by a voice: text (the exact words) and atS.
 - "volume": when the creator says something is too loud or quiet: target "music" (also called the background sound or background volume), "sfx" or "voiceover", and changeDb (negative = quieter; about -6 to -10 when music competes with the voice). Current levels are in the edit summary.
 - "background": only when the creator asks: "blur" (keep the person sharp, blur what is behind) or "color" with a calm #RRGGBB colour (field color).
+- "grade": primary colour correction across the cut: exposure -2..2, contrast 0.5..1.5, saturation 0..2, temperature -1..1. Keep it restrained and only use it when requested or frames clearly need correction.
+- "dialogue": spoken-audio cleanup across the cut: denoise, voiceEnhance and deEss booleans.
+- "camera": switch the clip at atS to another synchronized project video using its assetId. Only use listed project media and only when the creator identifies the angle.
 - "sfx": subtle whooshes on transitions and pops when text appears; only for energetic short-form.
 - "advice": what you see in the frames that the creator could improve that you cannot change (lighting, framing, background, sound), kindly and concretely.
 Every suggestion needs a short title and a reason that cites what you saw or heard. Never invent facts, names, numbers or quotes.`;
@@ -355,11 +372,11 @@ const SCHEMA = {
     summary: { type: "string" },
     profile: { type: "object", additionalProperties: false, required: ["intent", "audience", "channel", "tone", "targetSeconds"], properties: { intent: { type: "string" }, audience: { type: "string" }, channel: { type: "string" }, tone: { type: "string" }, targetSeconds: { type: "number" } } },
     suggestions: { type: "array", items: { type: "object", additionalProperties: false,
-      required: ["id", "kind", "title", "reason", "segments", "text", "subtitle", "atS", "durationS", "position", "mood", "assetId", "mode", "platform", "look", "style", "transition", "background", "color", "target", "changeDb", "query", "assetKind", "afterVideo", "presetId", "effectSound"],
+      required: ["id", "kind", "title", "reason", "segments", "text", "subtitle", "atS", "durationS", "position", "mood", "assetId", "mode", "platform", "look", "style", "transition", "background", "color", "target", "changeDb", "query", "assetKind", "afterVideo", "presetId", "effectSound", "exposure", "contrast", "saturation", "temperature", "denoise", "voiceEnhance", "deEss"],
       properties: {
         effectSound: { type: "string", enum: ["none", "whoosh", "pop", "hit", "riser", ""] },
         presetId: { type: "string", enum: [...EFFECT_PRESETS.map(p => p.id), ""] },
-        id: { type: "string" }, kind: { type: "string", enum: ["effect", "cut", "title", "callout", "lower-third", "music", "broll", "progress", "platform", "look", "zooms", "transitions", "sfx", "background", "volume", "remove", "captions", "color", "stock", "voiceover", "advice"] },
+        id: { type: "string" }, kind: { type: "string", enum: ["effect", "cut", "title", "callout", "lower-third", "music", "broll", "progress", "platform", "look", "zooms", "transitions", "sfx", "background", "volume", "remove", "captions", "color", "stock", "voiceover", "grade", "dialogue", "camera", "advice"] },
         title: { type: "string" }, reason: { type: "string" },
         segments: { type: "array", items: { type: "object", additionalProperties: false, required: ["startS", "endS"], properties: { startS: { type: "number" }, endS: { type: "number" } } } },
         text: { type: "string" }, subtitle: { type: "string" }, atS: { type: "number" }, durationS: { type: "number" },
@@ -369,6 +386,7 @@ const SCHEMA = {
         background: { type: "string", enum: ["blur", "color", ""] }, color: { type: "string" },
         target: { type: "string", enum: ["music", "sfx", "voiceover", ...REMOVABLE, ""] }, changeDb: { type: "number" },
         afterVideo: { type: "boolean" }, query: { type: "string" }, assetKind: { type: "string", enum: ["video", "photo", "gif", ""] },
+        exposure: { type: "number" }, contrast: { type: "number" }, saturation: { type: "number" }, temperature: { type: "number" }, denoise: { type: "boolean" }, voiceEnhance: { type: "boolean" }, deEss: { type: "boolean" },
       } } },
   },
 };
@@ -548,6 +566,14 @@ export function effectOperations(plan: DirectorPlan, accepted: Set<string>, time
   }
   const background = chosen.find((s): s is Extract<Suggestion, { kind: "background" }> => s.kind === "background");
   if (background) ops.push({ type: "set-background", background: background.background, ...(background.color ? { color: background.color } : {}) });
+  const grade = chosen.find((s): s is Extract<Suggestion, { kind: "grade" }> => s.kind === "grade");
+  if (grade) for (const piece of pieces) ops.push({ type: "set-colour-grade", clipId: piece.id, exposure: grade.exposure, contrast: grade.contrast, saturation: grade.saturation, temperature: grade.temperature });
+  const dialogue = chosen.find((s): s is Extract<Suggestion, { kind: "dialogue" }> => s.kind === "dialogue");
+  if (dialogue) for (const piece of pieces) ops.push({ type: "set-dialogue-finish", clipId: piece.id, denoise: dialogue.denoise, voiceEnhance: dialogue.voiceEnhance, deEss: dialogue.deEss });
+  for (const camera of chosen.filter((s): s is Extract<Suggestion, { kind: "camera" }> => s.kind === "camera")) {
+    const atUs = Math.round(camera.atS * 1e6); const piece = pieces.find(p => atUs >= p.sourceStartUs && atUs < p.sourceEndUs);
+    if (piece) ops.push({ type: "switch-camera", clipId: piece.id, assetId: camera.assetId, sourceStartUs: piece.sourceStartUs, sourceEndUs: piece.sourceEndUs, camera: camera.title });
+  }
   const zooms = chosen.find((s): s is Extract<Suggestion, { kind: "zooms" }> => s.kind === "zooms");
   const transitions = chosen.find((s): s is Extract<Suggestion, { kind: "transitions" }> => s.kind === "transitions");
   const sfx = chosen.some((s) => s.kind === "sfx");

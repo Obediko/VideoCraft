@@ -3,7 +3,7 @@ import rateLimit from "@fastify/rate-limit";
 import { Queue } from "bullmq";
 import { Redis } from "ioredis";
 import type { FastifyRequest } from "fastify";
-import { createDatabase, createPool, PostgresAssetRepository, PostgresProjectMemberRepository, PostgresProjectRepository, PostgresProposalStore, PostgresSceneRepository, PostgresRevisionRepository, PostgresTranscriptStore, PostgresRenderJobRepository, PostgresFeedbackRepository, PostgresPreferenceRepository, PostgresAuditRepository, PostgresEffectLibraryRepository, type Database } from "@videocraft/persistence";
+import { createDatabase, createPool, PostgresAssetRepository, PostgresProjectMemberRepository, PostgresProjectRepository, PostgresProposalStore, PostgresSceneRepository, PostgresRevisionRepository, PostgresTranscriptStore, PostgresRenderJobRepository, PostgresFeedbackRepository, PostgresPreferenceRepository, PostgresAuditRepository, PostgresEffectLibraryRepository, PostgresReviewRepository, type Database } from "@videocraft/persistence";
 import { BullMqMediaQueue, BullMqRenderQueue, CloudflareMediaQueue, CloudflareQueueRenderQueue, type MediaQueuePort } from "@videocraft/jobs";
 import { ProjectService } from "@videocraft/application";
 import { FasterWhisperWorker } from "@videocraft/transcription";
@@ -32,6 +32,7 @@ import { OpenAiDirector, RuleDirector } from "@videocraft/director";
 import { registerIntentRoutes } from "./intent-routes.js";
 import { registerFeedbackRoutes } from "./feedback-routes.js";
 import { registerTimelineRoutes } from "./timeline-routes.js";
+import { registerReviewRoutes } from "./review-routes.js";
 import { JwtAuthenticator, PostgresProjectAuthorizer } from "./auth.js";
 import { validateProductionConfiguration } from "./config.js";
 import { parseAllowedEmails, registerAuthRoutes } from "./auth-routes.js";
@@ -135,6 +136,7 @@ const feedback = new PostgresFeedbackRepository(db);
 const preferences = new PostgresPreferenceRepository(db);
 const effects = new PostgresEffectLibraryRepository(db);
 const audit = new PostgresAuditRepository(db);
+const reviews = new PostgresReviewRepository(db);
 const intentProviderMode = secretEnvironment.INTENT_PROVIDER_MODE ?? (secretEnvironment.INTENT_PROVIDER_API_KEY ? "external" : "rule-based");
 const intentAnalyzer = intentProviderMode === "external"
   ? new OpenAiCompatibleIntentAnalyzer({ endpoint: required("INTENT_PROVIDER_URL"), apiKey: required("INTENT_PROVIDER_API_KEY"), model: required("INTENT_PROVIDER_MODEL") })
@@ -175,6 +177,7 @@ registerAuthRoutes(server, {
   ...(secretEnvironment.AUTH_AUDIENCE ? { audience: secretEnvironment.AUTH_AUDIENCE } : {}),
 });
 registerTimelineRoutes(server, { projects, revisions, preferences, assets, authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, saveRevision: (input) => timelineService.saveRevision(input) });
+registerReviewRoutes(server, { reviews, authenticate: request => authenticator.authenticate(request), authorize: authorizer, now: () => new Date().toISOString() });
 registerFeedbackRoutes(server, { feedback, revisions, proposals: new PostgresProposalStore(db), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, now: () => new Date().toISOString() });
 registerIntentRoutes(server, { analyzer: intentAnalyzer, assets, transcripts, quota: providerQuota, providerRateLimitMax: boundedInteger("INTENT_PROVIDER_MAX_PER_MINUTE", 20, 1, 1_000), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
 registerRenderRoutes(server, { jobs: renderJobs, storage, signingSecret: requiredSecret("DOWNLOAD_SIGNING_SECRET"), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer });
