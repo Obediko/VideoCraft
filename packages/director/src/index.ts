@@ -347,7 +347,8 @@ Rules:
 - "background": only when the creator asks: "blur" (keep the person sharp, blur what is behind) or "color" with a calm #RRGGBB colour (field color).
 - "sfx": subtle whooshes on transitions and pops when text appears; only for energetic short-form.
 - "advice": what you see in the frames that the creator could improve that you cannot change (lighting, framing, background, sound), kindly and concretely.
-Every suggestion needs a short title and a reason that cites what you saw or heard. Never invent facts, names, numbers or quotes.`;
+Every suggestion needs a short title and a reason that cites what you saw or heard. Never invent facts, names, numbers or quotes.
+Writing on screen and in voice-overs: plain, specific everyday words a person would say; short; no hype, no slogans, no rhetorical questions, and never words like journey, tapestry, testament, unlock, empower, elevate, vibrant, seamless, transformative, embark, beacon, resonate, foster, navigate, delve, harness, game-changer, "in a world where", "more than just", "it's not just X, it's Y".`;
 
 const SCHEMA = {
   type: "object", additionalProperties: false, required: ["summary", "profile", "suggestions"],

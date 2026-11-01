@@ -9,15 +9,19 @@ type Props = {
   orientation: "portrait" | "landscape" | "square";
   disabled: boolean;
   onWorking?(working: boolean): void;
+  /** Words to search for straight away (a storyboard scene's search words). */
+  initialQuery?: string;
+  /** What clicking a result does, shown under the results. */
+  hint?: string;
   /** Called with the stored asset; the editor adds it as a cutaway. */
   onUse(asset: { id: string; kind: string; metadata: Record<string, string | number | boolean> } & Record<string, unknown>): void;
 };
 const LIBRARY: Record<string, string> = { pexels: "Pexels", pixabay: "Pixabay", giphy: "GIPHY" };
 
-export function StockSearch({ projectId, request, orientation, disabled, onWorking, onUse }: Props) {
+export function StockSearch({ projectId, request, orientation, disabled, onWorking, onUse, initialQuery, hint }: Props) {
   const [sources, setSources] = useState<Sources | null>(null);
   const [kind, setKind] = useState<"video" | "photo" | "gif">("video");
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery ?? "");
   const [items, setItems] = useState<Item[]>([]);
   const [note, setNote] = useState("");
   const [working, setWorking] = useState("");
@@ -29,19 +33,27 @@ export function StockSearch({ projectId, request, orientation, disabled, onWorki
     return () => { cancelled = true; };
   }, [projectId]);
 
+  // Search straight away for a scene's words (videos first; photos when there are no videos).
+  useEffect(() => {
+    if (!sources || !initialQuery?.trim()) return;
+    const type = sources.video.length ? "video" : sources.photo.length ? "photo" : undefined;
+    if (!type) return;
+    setQuery(initialQuery); setKind(type); void search(undefined, initialQuery, type);
+  }, [sources, initialQuery]);
+
   if (!sources) return null;
   const available = sources[kind];
   const any = sources.video.length + sources.photo.length + sources.gif.length > 0;
   if (!any) return <p className="muted small">Stock search is off: add a free Pexels, Pixabay or GIPHY key on the server to search them here.</p>;
 
-  async function search(event?: { preventDefault(): void }) {
+  async function search(event?: { preventDefault(): void }, words = query, type = kind) {
     event?.preventDefault();
-    if (!query.trim()) return;
+    if (!words.trim()) return;
     setWorking("search"); setNote("");
     try {
-      const result = await request("/v1/projects/" + projectId + "/stock/search?kind=" + kind + "&orientation=" + orientation + "&q=" + encodeURIComponent(query.trim()));
+      const result = await request("/v1/projects/" + projectId + "/stock/search?kind=" + type + "&orientation=" + orientation + "&q=" + encodeURIComponent(words.trim()));
       setItems(result.items ?? []);
-      if (!result.items?.length) setNote("Nothing found. Try other words.");
+      if (!result.items?.length) setNote("Nothing found for “" + words.trim() + "”. Try fewer or simpler words (who, what, where).");
     } catch (caught) { setItems([]); setNote(caught instanceof Error ? caught.message : "Search failed"); }
     finally { setWorking(""); }
   }
@@ -73,6 +85,6 @@ export function StockSearch({ projectId, request, orientation, disabled, onWorki
         </button>
       </li>; })}
     </ul>}
-    <p className="muted small">{available.map((p) => LIBRARY[p]).join(" and ")}{kind === "gif" ? " · Powered by GIPHY" : " · free to use, credit appreciated"}. Click one to add it at the playhead or the selected words.</p>
+    <p className="muted small">{available.map((p) => LIBRARY[p]).join(" and ")}{kind === "gif" ? " · Powered by GIPHY" : " · free to use, credit appreciated"}. {hint ?? "Click one to add it at the playhead or the selected words."}</p>
   </div>;
 }
