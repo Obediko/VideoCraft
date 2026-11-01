@@ -31,14 +31,15 @@ const PLATFORMS: Record<string, { label: string; short: string; width: number; h
   square: { label: "Feed · 1:1", short: "Feed 1:1", width: 1080, height: 1080, fit: "cover", captionStyle: "clean" },
   preview: { label: "Quick preview · 720p", short: "Preview 720p", width: 1280, height: 720, fit: "contain", captionStyle: "clean" },
 };
-type Suggestion = { id: string; kind: string; title: string; reason: string; text?: string; subtitle?: string; afterVideo?: boolean; atS?: number; durationS?: number; segments?: Array<{ startS: number; endS: number }>; mood?: string; platform?: string; assetId?: string; mode?: string; changeDb?: number; target?: string; query?: string; color?: string; pick?: { provider: string; id: string; thumbUrl: string; credit?: string } };
+type Suggestion = { id: string; kind: string; title: string; reason: string; text?: string; subtitle?: string; afterVideo?: boolean; atS?: number; durationS?: number; segments?: Array<{ startS: number; endS: number }>; mood?: string; platform?: string; assetId?: string; mode?: string; changeDb?: number; target?: string; query?: string; color?: string; exposure?: number; contrast?: number; saturation?: number; temperature?: number; denoise?: boolean; voiceEnhance?: boolean; deEss?: boolean; pick?: { provider: string; id: string; thumbUrl: string; credit?: string } };
 type DirectorPlan = { summary: string; profile: { intent: string; audience: string; channel: string; tone: string; targetSeconds: number }; suggestions: Suggestion[]; source: "ai" | "rules"; model?: string; note?: string };
 const PLAN_GROUPS: Array<{ name: string; kinds: string[] }> = [
   { name: "Story", kinds: ["cut"] },
   { name: "Text on screen", kinds: ["title", "callout", "lower-third", "progress", "captions", "color"] },
   { name: "Cutaways", kinds: ["broll", "stock"] },
   { name: "Look", kinds: ["effect", "look", "background", "zooms"] },
-  { name: "Sound", kinds: ["music", "sfx", "volume", "voiceover"] },
+  { name: "Finish", kinds: ["grade", "camera"] },
+  { name: "Sound", kinds: ["music", "sfx", "volume", "voiceover", "dialogue"] },
   { name: "Taking out", kinds: ["remove"] },
   { name: "Pacing", kinds: ["transitions"] },
   { name: "Format", kinds: ["platform"] },
@@ -64,6 +65,7 @@ function rulerTicks(durationUs: number): number[] {
 }
 type CheckIssue = { id: string; severity: "fix" | "warn" | "info"; kind: string; title: string; detail: string; atS?: number; fix?: { label: string; operations: Array<Record<string, unknown>> }; source: "rules" | "ai" };
 type CheckResult = { issues: CheckIssue[]; ai: boolean; scanned: boolean; note?: string; revision: number };
+type Review = { comments: Array<{ id: string; userId: string; atUs?: number; body: string; resolvedAt?: string; createdAt: string }>; decisions: Array<{ userId: string; decision: "approved" | "changes_requested"; note?: string; createdAt: string }> };
 type Project = { id: string; name: string; revision: number; createdAt: string; updatedAt: string };
 type Asset = { id: string; kind: string; storageKey: string; durationUs?: number; metadata: Record<string, string | number | boolean> };
 type Segment = { id: string; startUs: number; endUs: number; text: string; words: Word[] };
@@ -148,6 +150,8 @@ export function App() {
   const [planText, setPlanText] = useState<Record<string, string>>({});
   const [check, setCheck] = useState<CheckResult | null>(null);
   const [fixPicked, setFixPicked] = useState<Record<string, boolean>>({});
+  const [review, setReview] = useState<Review>({ comments: [], decisions: [] });
+  const [reviewDraft, setReviewDraft] = useState("");
   const [segments, setSegments] = useState<Segment[]>([]);
   const [segmentsFor, setSegmentsFor] = useState("");
   const [transcribing, setTranscribing] = useState<{ assetId: string; promise: Promise<void> } | null>(null);
@@ -412,6 +416,22 @@ export function App() {
     if (!response.ok) throw new Error(body.error?.message ?? "Request failed");
     return body;
   }
+
+  async function loadReview() {
+    if (!projectId || revision < 1) return;
+    try { setReview(await request("/v1/projects/" + projectId + "/reviews/" + revision)); }
+    catch (error) { setStatus(errorMessage(error)); }
+  }
+  async function addReviewComment() {
+    const body = reviewDraft.trim(); if (!body) return;
+    try { await request("/v1/projects/" + projectId + "/reviews/" + revision + "/comments", { method: "POST", body: JSON.stringify({ body, atUs: Math.round(liveUsRef.current) }) }); setReviewDraft(""); await loadReview(); setStatus("Review note added to revision " + revision); }
+    catch (error) { setStatus(errorMessage(error)); }
+  }
+  async function reviewDecision(decision: "approved" | "changes_requested") {
+    try { await request("/v1/projects/" + projectId + "/reviews/" + revision + "/decision", { method: "PUT", body: JSON.stringify({ decision }) }); await loadReview(); setStatus(decision === "approved" ? "Revision approved" : "Changes requested"); }
+    catch (error) { setStatus(errorMessage(error)); }
+  }
+  useEffect(() => { if (screen === "check" && token && projectId && revision > 0) void loadReview(); }, [screen, token, projectId, revision]);
 
   async function authenticate() {
     setBusy(true);
@@ -987,12 +1007,12 @@ export function App() {
 
   if (screen === "choose") return <div className="app-shell" data-release={import.meta.env.VITE_RELEASE_SHA ?? "development"}>
     <header className="topbar"><button className="btn" onClick={() => setScreen("projects")} disabled={busy}>Back to your videos</button><span className="brand">VideoCraft</span><div className="spacer" />{statusPill}</header>
-    <main className="page"><h1>What do you want to create?</h1><p className="muted">Choose a starting point. You can refine the result in the editor.</p>
+    <main className="page choose-page"><span className="eyebrow">New video</span><h1>Where should we begin?</h1><p className="muted lead">Three ways in. One Director and one editing experience from the first thought to the finished film.</p>
       <div className="creation-choices">{([
-        ["footage", "Edit my footage", "Start with a talk, interview, vlog, or existing video. Find highlights and improve the edit."],
-        ["story", "Tell a story", "Combine videos and photos. Add AI or human narration, stock visuals, music, and text."],
-        ["idea", "Create from an idea or script", "Describe your message. Review a storyboard, then choose stock, generated images, or your own visuals."],
-      ] as const).map(([id, title, description]) => <button type="button" className="card creation-choice" key={id} disabled={busy} onClick={() => void createProject(id)}><strong>{title}</strong><span className="muted">{description}</span></button>)}</div>
+        ["footage", "I have footage", "Find the story already inside a talk, interview, vlog, or recording."],
+        ["story", "I have media", "Shape selected videos and photos around one clear message."],
+        ["idea", "I have an idea", "Develop the words, scenes and visual choices from a simple brief."],
+      ] as const).map(([id, title, description], index) => <button type="button" className="card creation-choice" key={id} aria-label={title} disabled={busy} onClick={() => void createProject(id)}><span className="choice-number" aria-hidden="true">0{index + 1}</span><strong>{title}</strong><span className="muted">{description}</span><span className="choice-arrow" aria-hidden="true">→</span></button>)}</div>
     </main></div>;
 
   // ── Videos (projects) ─────────────────────────────────────────────────────────────────────
@@ -1087,6 +1107,14 @@ export function App() {
             <button className="btn" onClick={editMyself} disabled={busy || !mainVideo}>Edit it myself</button>
             {((plan && !planApplied) || proposal?.status === "proposed") && <button className="link" onClick={() => setScreen("plan")}>Back to the suggestions</button>}
           </div>
+          <section className="card stack" aria-label="Team review">
+            <div className="row-between"><h2>Team review</h2><span className="tag">Revision {revision}</span></div>
+            <p className="muted small">Notes and decisions stay attached to this exact revision, even after the edit changes.</p>
+            <label>Review note<textarea value={reviewDraft} maxLength={2000} placeholder="What should change?" onChange={(event) => setReviewDraft(event.target.value)} /></label>
+            <div className="actions"><button className="btn" disabled={busy || !reviewDraft.trim()} onClick={() => void addReviewComment()}>Add at {formatSeconds(liveUs)}</button><button className="primary" disabled={busy} onClick={() => void reviewDecision("approved")}>Approve revision</button><button className="btn" disabled={busy} onClick={() => void reviewDecision("changes_requested")}>Request changes</button></div>
+            {review.decisions.length > 0 && <p className="small"><strong>{review.decisions.filter(item => item.decision === "approved").length} approved</strong> · {review.decisions.filter(item => item.decision === "changes_requested").length} requested changes</p>}
+            {review.comments.length > 0 && <ul className="item-list">{review.comments.map(comment => <li key={comment.id} className={comment.resolvedAt ? "muted" : ""}><span>{typeof comment.atUs === "number" ? <button className="link" onClick={() => { setScreen("edit"); setPreviewMode("edit"); liveRef.current?.seek(comment.atUs!); }}>{formatSeconds(comment.atUs)}</button> : null} {comment.body}<small>{new Date(comment.createdAt).toLocaleString()}{comment.resolvedAt ? " · resolved" : ""}</small></span></li>)}</ul>}
+          </section>
         </section>
       </main>
     </div>;
@@ -1328,6 +1356,32 @@ export function App() {
         {selectedClip.transform?.transitionIn && selectedClip.transform.transitionIn !== "cut" && <label>Transition length ({Number(selectedClip.transform?.transitionSeconds ?? (["dip-black", "dip-white"].includes(String(selectedClip.transform.transitionIn)) ? 0.5 : selectedClip.transform.transitionIn === "flash" ? 0.12 : 0.5)).toFixed(2)} s)<input type="range" min={0.1} max={2} step={0.05} defaultValue={Number(selectedClip.transform?.transitionSeconds ?? 0.5)} key={selectedClip.id + String(selectedClip.transform?.transitionSeconds)} disabled={busy} onPointerUp={(event) => void applyEdit([{ type: "set-clip-effects", clipId: selectedClip.id, transitionSeconds: Number((event.target as HTMLInputElement).value) }], "Transition length " + Number((event.target as HTMLInputElement).value).toFixed(2) + " s")} onKeyUp={(event) => void applyEdit([{ type: "set-clip-effects", clipId: selectedClip.id, transitionSeconds: Number((event.target as HTMLInputElement).value) }], "Transition length " + Number((event.target as HTMLInputElement).value).toFixed(2) + " s")} /></label>}
         {selectedClip.id === videoClips.at(-1)?.id && <label>Ending<select value={String(selectedClip.transform?.transitionOut ?? "cut")} disabled={busy} onChange={(event) => void applyEdit([{ type: "set-clip-effects", clipId: selectedClip.id, transitionOut: event.target.value }], "Ending: " + (TRANSITION_LABEL[event.target.value] ?? event.target.value))}><option value="cut">Hard end</option><option value="dip-black">Fade to black</option><option value="dip-white">Fade to white</option></select></label>}
         <label>Look<select value={String(selectedClip.transform?.look ?? "none")} disabled={busy} onChange={(event) => void applyEdit([{ type: "set-clip-effects", clipId: selectedClip.id, look: event.target.value }], "Clip look: " + (LOOK_LABEL[event.target.value] ?? event.target.value))}>{Object.entries(LOOK_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+        <details className="card finishing-controls">
+          <summary>Colour grade</summary>
+          <p className="muted small">Precise corrections for this shot. The creative look stays separate.</p>
+          {([
+            ["Exposure", "exposure", -2, 2, 0.05, 0],
+            ["Contrast", "contrast", 0.5, 1.5, 0.02, 1],
+            ["Saturation", "saturation", 0, 2, 0.02, 1],
+            ["Temperature", "temperature", -1, 1, 0.05, 0],
+          ] as const).map(([label, key, min, max, step, neutral]) => <label key={key}>{label} ({Number(selectedClip.transform?.[key] ?? neutral).toFixed(2)})<input type="range" min={min} max={max} step={step} defaultValue={Number(selectedClip.transform?.[key] ?? neutral)} key={selectedClip.id + key + String(selectedClip.transform?.[key])} disabled={busy} onPointerUp={(event) => void applyEdit([{ type: "set-colour-grade", clipId: selectedClip.id, [key]: Number((event.target as HTMLInputElement).value) }], label + " corrected")} onKeyUp={(event) => void applyEdit([{ type: "set-colour-grade", clipId: selectedClip.id, [key]: Number((event.target as HTMLInputElement).value) }], label + " corrected")} /></label>)}
+          <button className="btn" disabled={busy} onClick={() => void applyEdit([{ type: "set-colour-grade", clipId: selectedClip.id, exposure: 0, contrast: 1, saturation: 1, temperature: 0 }], "Colour corrections reset")}>Reset corrections</button>
+        </details>
+        <details className="card finishing-controls">
+          <summary>Dialogue finish</summary>
+          <p className="muted small">Clean spoken audio before final loudness mastering.</p>
+          {([ ["Reduce background noise", "denoise", "dialogueDenoise"], ["Enhance voice clarity", "voiceEnhance", "voiceEnhance"], ["Soften harsh s sounds", "deEss", "deEss"] ] as const).map(([label, operationKey, transformKey]) => <label className="check" key={operationKey}><input type="checkbox" checked={selectedClip.transform?.[transformKey] === true} disabled={busy} onChange={(event) => void applyEdit([{ type: "set-dialogue-finish", clipId: selectedClip.id, [operationKey]: event.target.checked }], label + (event.target.checked ? " on" : " off"))} />{label}</label>)}
+        </details>
+        {assets.filter((asset) => asset.kind === "video").length > 1 && <details className="card finishing-controls">
+          <summary>Camera angle</summary>
+          <p className="muted small">Replace this shot with the same synchronized moment from another camera. The cut length does not move.</p>
+          <label>Angle<select value={selectedClip.assetId} disabled={busy} onChange={(event) => {
+            const asset = assets.find((item) => item.id === event.target.value); if (!asset) return;
+            const length = selectedClip.sourceEndUs - selectedClip.sourceStartUs;
+            const start = Math.min(selectedClip.sourceStartUs, Math.max(0, (asset.durationUs ?? length) - length));
+            void applyEdit([{ type: "switch-camera", clipId: selectedClip.id, assetId: asset.id, sourceStartUs: start, sourceEndUs: start + length, camera: assetName(asset.id) }], "Camera: " + assetName(asset.id));
+          }}>{assets.filter((asset) => asset.kind === "video" && (asset.durationUs ?? 0) >= selectedClip.sourceEndUs - selectedClip.sourceStartUs).map((asset) => <option key={asset.id} value={asset.id}>{assetName(asset.id)}</option>)}</select></label>
+        </details>}
       </div>
       <button className="btn danger-outline" onClick={() => removeSelectedClip()} disabled={busy}>Remove clip</button>
     </div> : <>

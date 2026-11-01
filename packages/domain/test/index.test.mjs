@@ -227,3 +227,21 @@ test("blend transitions take a length; endings stay colour fades", async () => {
   t = apply(t, parse([{ type: "set-clip-effects", clipId: second.id, transitionIn: "cut" }]));
   assert.equal(t.tracks[0].clips[1].transform, undefined, "a cut drops the length too");
 });
+
+test("professional finishing operations preserve the edit while changing its finish", async () => {
+  const { applyTimelineOperations: apply, parseTimelineOperations: parse } = await import("../dist/index.js");
+  let t = apply({ durationUs: 0, tracks: [] }, [{ type: "insert-clip", assetId: "camera-a", sourceStartUs: 2_000_000, sourceEndUs: 6_000_000, reason: "take" }]);
+  const clip = t.tracks[0].clips[0];
+  t = apply(t, parse([
+    { type: "set-colour-grade", clipId: clip.id, exposure: 0.35, contrast: 1.12, saturation: 0.9, temperature: -0.2 },
+    { type: "set-dialogue-finish", clipId: clip.id, denoise: true, voiceEnhance: true, deEss: true },
+    { type: "switch-camera", clipId: clip.id, assetId: "camera-b", sourceStartUs: 8_000_000, sourceEndUs: 12_000_000, camera: "Wide" },
+  ]));
+  const finished = t.tracks[0].clips[0];
+  assert.deepEqual([finished.assetId, finished.sourceStartUs, finished.sourceEndUs, finished.timelineStartUs, finished.timelineEndUs], ["camera-b", 8_000_000, 12_000_000, 0, 4_000_000]);
+  assert.deepEqual(finished.transform, { exposure: 0.35, contrast: 1.12, saturation: 0.9, temperature: -0.2, dialogueDenoise: true, voiceEnhance: true, deEss: true, camera: "Wide" });
+  t = apply(t, [{ type: "set-colour-grade", clipId: clip.id, exposure: 0, contrast: 1, saturation: 1, temperature: 0 }, { type: "set-dialogue-finish", clipId: clip.id, denoise: false, voiceEnhance: false, deEss: false }]);
+  assert.deepEqual(t.tracks[0].clips[0].transform, { camera: "Wide" }, "neutral finishing values are removed");
+  assert.throws(() => apply(t, [{ type: "switch-camera", clipId: clip.id, assetId: "camera-c", sourceStartUs: 0, sourceEndUs: 3_000_000 }]), /preserve the clip duration/);
+  assert.throws(() => parse([{ type: "set-colour-grade", clipId: clip.id, exposure: 3 }]), /exposure/);
+});

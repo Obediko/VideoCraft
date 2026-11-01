@@ -281,7 +281,8 @@ export class FfmpegCommandPlanner {
       if (useEmbeddedAudio) {
         if (audioPresent.get(clip.assetId) && clip.transform?.muteSource !== true) {
           const fade = Math.min(0.015, length / 4).toFixed(3);
-          filters.push("[" + (embeddedAudioInputs.get(index) ?? index) + ":a]asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,atrim=duration=" + length.toFixed(6) + ",afade=t=in:d=" + fade + ",afade=t=out:st=" + Math.max(0, length - Number(fade)).toFixed(3) + ":d=" + fade + "[a" + index + "]");
+          const dialogue = [clip.transform?.dialogueDenoise === true ? "afftdn=nr=12:nf=-35" : "", clip.transform?.voiceEnhance === true ? "highpass=f=80,lowpass=f=12000,acompressor=threshold=-18dB:ratio=3:attack=15:release=180:makeup=2" : "", clip.transform?.deEss === true ? "equalizer=f=6500:t=q:w=1.5:g=-4" : ""].filter(Boolean).join(",");
+          filters.push("[" + (embeddedAudioInputs.get(index) ?? index) + ":a]asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,atrim=duration=" + length.toFixed(6) + (dialogue ? "," + dialogue : "") + ",afade=t=in:d=" + fade + ",afade=t=out:st=" + Math.max(0, length - Number(fade)).toFixed(3) + ":d=" + fade + "[a" + index + "]");
         } else {
           filters.push("anullsrc=r=48000:cl=stereo,atrim=duration=" + length.toFixed(6) + ",asetpts=PTS-STARTPTS[a" + index + "]");
         }
@@ -524,6 +525,9 @@ export function clipFinish(clips: TimelineClip[], index: number, lengthS: number
   const parts: string[] = [];
   const look = typeof t.look === "string" ? LOOK_FILTERS[t.look] : undefined;
   if (look) parts.push(look);
+  const exposure = clampNumber(Number(t.exposure ?? 0), -2, 2); const contrast = clampNumber(Number(t.contrast ?? 1), 0.5, 1.5); const saturation = clampNumber(Number(t.saturation ?? 1), 0, 2); const temperature = clampNumber(Number(t.temperature ?? 0), -1, 1);
+  if (exposure || contrast !== 1 || saturation !== 1) parts.push("eq=brightness=" + (exposure * 0.08).toFixed(3) + ":contrast=" + contrast.toFixed(3) + ":saturation=" + saturation.toFixed(3));
+  if (temperature) parts.push("lutyuv=u='val" + (temperature > 0 ? "-" : "+") + Math.abs(Math.round(temperature * 10)) + "':v='val" + (temperature > 0 ? "+" : "-") + Math.abs(Math.round(temperature * 10)) + "'");
   // Colour dips and the flash fade inside the clip (shared with the live preview, so both match); blends are joined later.
   const fades = dipFades(clips, index);
   if (fades.in) parts.push("fade=t=in:st=0:d=" + fades.in.seconds.toFixed(3) + ":color=" + fades.in.color);

@@ -156,10 +156,17 @@ test("story planning sends real labelled photo/video samples to the model and sk
   const http = createServer((req, res) => {
     let raw = ""; req.on("data", chunk => { raw += chunk; }); req.on("end", () => {
       const body = JSON.parse(raw); captured = body;
-      res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ output_text: JSON.stringify({ summary: "Use the red photo before the blue video", script: "Our story", scenes }) }));
+      requests.push(body);
+      const script = "A red photograph opens our story. Then a blue moving image shows what changed. We stay with the real details, explain their meaning, and finish with one practical next step for the viewer.";
+      const output = requests.length === 1 ? { approaches: [
+        { label: "Direct", strategy: "fact first", summary: "Direct", script, scenes },
+        { label: "Human", strategy: "person first", summary: "Human", script, scenes },
+        { label: "Visual", strategy: "image first", summary: "Use the red photo before the blue video", script, scenes },
+      ] } : { summary: "Use the red photo before the blue video", script, scenes, selectedApproach: "Visual", critique: "The image-first opening is concrete and restrained." };
+      res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ output_text: JSON.stringify(output) }));
     });
   });
-  let captured;
+  let captured; const requests = [];
   try {
     execFileSync("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "color=red:s=160x120", "-frames:v", "1", "-threads", "1", image]);
     execFileSync("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "color=blue:s=160x120:r=30:d=1.2", "-c:v", "libx264", "-pix_fmt", "yuv420p", movie]);
@@ -171,7 +178,9 @@ test("story planning sends real labelled photo/video samples to the model and sk
     await new Promise(resolve => http.listen(0, "127.0.0.1", resolve));
     const planned = await storyboardPlanner({ apiKey: "test", model: "vision-model", endpoint: "http://127.0.0.1:" + http.address().port })({ brief: "Tell a story", seconds: 10, assets: [], frames });
     assert.equal(planned.summary, "Use the red photo before the blue video");
-    const content = captured.input[0].content;
+    assert.equal(planned.selectedApproach, "Visual");
+    assert.equal(requests.length, 2, "drafting and independent critique are separate calls");
+    const content = requests[0].input[0].content;
     assert.equal(content.filter(c => c.type === "input_image").length, 3);
     assert.ok(content.some(c => c.type === "input_text" && c.text.includes("Asset video, frame at 0.60")));
     assert.equal(content[0].text.includes(frames[0].jpegBase64), false, "images are vision inputs, not base64 pasted into prompt text");

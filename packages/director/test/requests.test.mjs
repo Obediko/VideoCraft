@@ -95,3 +95,14 @@ test('bracketed narration requested after the video becomes an outro suggestion'
   assert.equal(voice.text, 'Jesus truly saves');
   assert.equal(voice.afterVideo, true);
 });
+
+test('the director can invoke colour, dialogue finishing and a named camera', async () => {
+  const ask = { ...input, assets: [...input.assets, { id: 'wide', kind: 'video', name: 'Wide Camera' }], instruction: 'Clean the dialogue, make it warmer, then switch to Wide Camera here', playheadS: 10 };
+  const plan = await new RuleDirector().ask(ask);
+  assert.deepEqual(plan.suggestions.map(s => s.kind).filter(k => ['grade', 'dialogue', 'camera'].includes(k)).sort(), ['camera', 'dialogue', 'grade']);
+  const timeline = { durationUs: 24_000_000, tracks: [{ id: 'v', kind: 'video', clips: [{ id: 'clip', assetId: 'main', sourceStartUs: 1_000_000, sourceEndUs: 25_000_000, timelineStartUs: 0, timelineEndUs: 24_000_000 }] }] };
+  const ops = effectOperations(plan, new Set(plan.suggestions.map(s => s.id)), timeline, 'main');
+  assert.ok(ops.some(op => op.type === 'set-colour-grade'));
+  assert.ok(ops.some(op => op.type === 'set-dialogue-finish'));
+  assert.ok(ops.some(op => op.type === 'switch-camera' && op.assetId === 'wide'));
+});

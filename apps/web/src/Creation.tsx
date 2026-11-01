@@ -9,7 +9,8 @@ type StockItem = { provider: string; id: string; kind: "video" | "photo" | "gif"
 const CAMERA = new Set("a an the and or of to in on at with into onto over under from by for as is are be then while their his her its our your this that these those same shot close-up closeup close up wide medium tracking lateral smooth slow push pull pan tilt zoom frame framing angle eye level depth field shallow cut match-cut match cinematic camera lens focus light lighting daylight sunlight warm soft natural gentle gently vignette opening scene continue continues end ends hold brief briefly authentic realistic modest beautiful quiet sunlit morning residential shaded filled moving background pausing pauses beside near through school-age".split(" "));
 /** Plain search words for a scene (the storyboard gives them; older drafts are worked out from the description). */
 const searchOf = (s: Scene) => s.search?.trim() || s.visual.toLowerCase().replace(/[^a-z0-9\s'-]/g, " ").split(/\s+/).map((w) => w.replace(/'s$/, "")).filter((w) => w.length > 2 && !CAMERA.has(w) && !/ly$/.test(w)).filter((w, i, all) => all.indexOf(w) === i).slice(0, 5).join(" ");
-type Plan = { summary: string; script: string; scenes: Scene[]; source: "ai" | "rules"; note?: string };
+type Plan = { summary: string; script: string; scenes: Scene[]; source: "ai" | "rules"; note?: string; selectedApproach?: string; critique?: string };
+type Preferences = { notes: string; preferredSentenceWords?: number; avoidPhrases: string[] };
 type NarrationMode = "ai" | "existing" | "none";
 type Draft = { narrationMode: NarrationMode; voice: string; voiceStyle: string; narrationFingerprint: string; brief: string; seconds: number; platform: string; selected: string[]; plan: Plan | null; narrationId: string; music: boolean; sceneText: boolean; captions: boolean };
 type Props = {
@@ -22,6 +23,12 @@ type Props = {
 const nameOf = (a: Asset) => a.kind === "image" && typeof a.metadata.prompt === "string" ? "Generated · " + a.metadata.prompt.slice(0, 60) : String(a.metadata.filename ?? a.kind);
 const message = (e: unknown) => e instanceof Error ? e.message : "The action failed. Your draft is kept; try again.";
 const keyOf = (id: string) => "videocraft.story.v1." + id;
+const preferenceKey = "videocraft.director.preferences.v1";
+function readPreferences(): Preferences {
+  try { const p = JSON.parse(localStorage.getItem(preferenceKey) ?? "null"); return { notes: typeof p?.notes === "string" ? p.notes.slice(0, 600) : "", preferredSentenceWords: Number.isFinite(p?.preferredSentenceWords) ? p.preferredSentenceWords : undefined, avoidPhrases: Array.isArray(p?.avoidPhrases) ? p.avoidPhrases.filter((x: unknown) => typeof x === "string").slice(0, 20) : [] }; }
+  catch { return { notes: "", avoidPhrases: [] }; }
+}
+function sentenceWords(script: string): number | undefined { const rows = script.split(/[.!?]+/).map(s => s.trim().split(/\s+/).filter(Boolean).length).filter(Boolean); return rows.length ? Math.max(4, Math.min(30, Math.round(rows.reduce((a, b) => a + b, 0) / rows.length))) : undefined; }
 function readDraft(id: string, mode: CreationMode): Draft {
   const empty: Draft = { narrationMode: mode === "idea" ? "ai" : "none", voice: "marin", voiceStyle: "", narrationFingerprint: "", brief: "", seconds: 30, platform: "tiktok", selected: [], plan: null, narrationId: "", music: true, sceneText: true, captions: true };
   try {
@@ -47,6 +54,7 @@ export function Creation({ projectId, revision, mode, assets, apiBase, token, re
   const [voiceWorking, setVoiceWorking] = useState(false);
   const [stockWorking, setStockWorking] = useState(false);
   const [previewError, setPreviewError] = useState(false);
+  const [preferences, setPreferences] = useState<Preferences>(() => readPreferences());
   const [suggested, setSuggested] = useState<Record<number, StockItem[]>>({});
   const [adding, setAdding] = useState("");
   const busy = Boolean(working || recording || voiceWorking || stockWorking);
@@ -54,6 +62,7 @@ export function Creation({ projectId, revision, mode, assets, apiBase, token, re
   const narration = assets.find(a => a.id === draft.narrationId);
   const patch = (change: Partial<Draft>) => setDraft(d => ({ ...d, ...change }));
   useEffect(() => { try { localStorage.setItem(keyOf(projectId), JSON.stringify(draft)); } catch { /* editing remains available */ } }, [projectId, draft]);
+  useEffect(() => { try { localStorage.setItem(preferenceKey, JSON.stringify(preferences)); } catch { /* preference memory is optional */ } }, [preferences]);
   useEffect(() => { onWorking(busy); return () => onWorking(false); }, [busy]);
   useEffect(() => {
     let cancelled = false;
@@ -137,7 +146,7 @@ export function Creation({ projectId, revision, mode, assets, apiBase, token, re
   }
   async function plan() {
     await run("Making the storyboard…", async () => {
-      const result = await request("/v1/projects/" + projectId + "/creation/plan", { method: "POST", body: JSON.stringify({ brief: draft.brief, seconds: draft.seconds, assetIds: draft.selected.filter(id => media.some(a => a.id === id)) }) });
+      const result = await request("/v1/projects/" + projectId + "/creation/plan", { method: "POST", body: JSON.stringify({ brief: draft.brief, seconds: draft.seconds, assetIds: draft.selected.filter(id => media.some(a => a.id === id)), preferences }) });
       patch({ plan: result.plan }); setSceneIndex(null);
     });
   }
@@ -163,28 +172,31 @@ export function Creation({ projectId, revision, mode, assets, apiBase, token, re
   }
   const scene = sceneIndex !== null ? draft.plan?.scenes[sceneIndex] : undefined;
   const previewAsset = media.find(a => a.id === scene?.assetId);
+  const openScenes = draft.plan?.scenes.filter(s => !s.assetId).length ?? 0;
+  const ready = Boolean(draft.plan?.scenes.length && openScenes === 0 && (draft.narrationMode === "none" || draft.plan.script.trim() || draft.narrationId));
   return <main className="page creation stack">
-    <div><h1>{mode === "idea" ? "Create from an idea" : "Tell a story"}</h1><p className="muted">Describe it, gather your visuals, then approve a storyboard and narration.</p></div>
+    <header className="creation-intro"><span className="eyebrow">VideoCraft Director</span><h1>{mode === "idea" ? "Turn your idea into a story" : "Shape your media into a story"}</h1><p>Tell us what you mean. Your Director develops the structure, scouts fitting visuals, and gives you every important choice.</p><div className="director-team" aria-label="Director team"><span>Story</span><span>Visuals</span><span>Sound</span><span>Critic</span></div></header>
     <section className="card stack" aria-label="Story brief">
-      <h2>1. Describe the result</h2>
-      <label>Your brief<textarea rows={3} maxLength={2000} value={draft.brief} disabled={busy} onChange={e => patch({ brief: e.target.value })} placeholder="What is it about, who is it for, and what should viewers take away?" /></label>
+      <span className="eyebrow">Direction</span><h2>What should this video leave with people?</h2>
+      <label className="brief-field"><span className="sr-only">Your brief</span><textarea rows={4} maxLength={2000} value={draft.brief} disabled={busy} onChange={e => patch({ brief: e.target.value })} placeholder="The message, who it is for, and what they should feel or do afterwards…" /></label>
+      <details className="quiet-details"><summary>Set the tone <span className="muted">optional</span></summary><label>How should the Director approach your work?<textarea rows={2} maxLength={600} value={preferences.notes} disabled={busy} onChange={e => setPreferences(p => ({ ...p, notes: e.target.value }))} placeholder="Understated. Nigerian English. No hype. End with a practical invitation." /></label></details>
       <label>Narration preference<select aria-label="Narration preference" value={draft.narrationMode} disabled={busy} onChange={e => patch({ narrationMode: e.target.value as NarrationMode })}><option value="ai">AI-generated narration</option><option value="existing">Record or upload my narration</option><option value="none">Keep original sound / no narration</option></select></label>
       {draft.narrationMode === "ai" && <p className="muted small">AI drafts the narration script with your storyboard. Review the words and voice below; assembling generates and adds the audio automatically.</p>}
       <div className="row-2"><label>Target length (seconds)<input type="number" min={5} max={600} value={draft.seconds} disabled={busy} onChange={e => patch({ seconds: Number(e.target.value) })} /></label>
         <label>Format<select value={draft.platform} disabled={busy} onChange={e => patch({ platform: e.target.value })}><option value="tiktok">Reel / Short · 9:16</option><option value="youtube">YouTube · 16:9</option><option value="square">Feed · 1:1</option></select></label></div>
     </section>
     <section className="card stack" aria-label="Story media">
-      <h2>2. Gather videos and photos</h2>
-      <p className="muted small">Use uploads, stock, or generated images. With no uploads, the storyboard will suggest visuals for you to choose.</p>
+      <span className="eyebrow">Source material</span><h2>Bring what belongs in the story</h2>
+      <p className="muted small">Your own media comes first. When a scene needs something else, the Visual Director will scout choices for you.</p>
       <label className="btn file-btn">Upload videos and photos<input aria-label="Upload videos and photos" type="file" multiple accept="video/*,image/*" disabled={busy} onChange={e => void upload(e.currentTarget)} /></label>
       <div className="creation-library">{media.map(a => <label className="checkbox" key={a.id}><input type="checkbox" disabled={busy} checked={draft.selected.includes(a.id)} onChange={e => patch({ selected: e.target.checked ? [...draft.selected, a.id] : draft.selected.filter(id => id !== a.id) })} />{a.kind === "image" ? "Photo" : "Video"} · {nameOf(a)}</label>)}</div>
-      <button className="primary" type="button" disabled={busy || draft.brief.trim().length < 3 || draft.seconds < 5 || draft.seconds > 600} onClick={() => void plan()}>{draft.plan ? "Make a new storyboard" : "Make my storyboard"}</button>
+      <button className="primary director-action" type="button" disabled={busy || draft.brief.trim().length < 3 || draft.seconds < 5 || draft.seconds > 600} onClick={() => void plan()}>{draft.plan ? "Rethink the direction" : "Develop the first cut"}</button>
       {draft.plan && <p className="muted small">A new storyboard replaces the draft below. Your uploads and narration stay available.</p>}
     </section>
     {draft.plan && <>
       <section className="card stack" aria-label="Storyboard">
-        <h2>3. Review the storyboard</h2><p>{draft.plan.summary}</p><p className="muted small">{draft.plan.source === "ai" ? "AI storyboard" : "Built-in storyboard"} · {draft.plan.scenes.reduce((n, s) => n + s.durationS, 0).toFixed(1)} seconds before narration timing</p>
-        {draft.plan.note && <p role="status">{draft.plan.note}</p>}
+        <span className="eyebrow">First cut</span><h2>Review the Director's choices</h2><p className="plan-summary">{draft.plan.summary}</p><p className="muted small">{draft.plan.source === "ai" ? "Directed storyboard" : "Essential storyboard"} · {draft.plan.scenes.reduce((n, s) => n + s.durationS, 0).toFixed(1)} seconds before narration timing</p>
+        {draft.plan.note && <p role="status">{draft.plan.note}</p>}{draft.plan.selectedApproach && <p className="muted small">Chosen approach: {draft.plan.selectedApproach}{draft.plan.critique ? " · " + draft.plan.critique : ""}</p>}
         <ol className="creation-scenes">{draft.plan.scenes.map((s, i) => <li key={i} className="stack">
           <strong>Scene {i + 1}: {s.visual || "Choose a visual"}</strong>
           <label>Visual<select aria-label="Visual" value={s.assetId} disabled={busy} onChange={e => { const a = media.find(a => a.id === e.target.value); scenePatch(i, { assetId: e.target.value, startS: 0, durationS: Math.min(s.durationS, a?.kind === "video" ? (a.durationUs ?? 5e6) / 1e6 : 60) }); }}><option value="">Choose a visual</option>{media.map(a => <option key={a.id} value={a.id}>{nameOf(a)}</option>)}</select></label>
@@ -213,13 +225,13 @@ export function Creation({ projectId, revision, mode, assets, apiBase, token, re
         {draft.narrationMode === "ai" && <p className="note">Your AI voice is generated automatically when you assemble. You can preview it first with the button below. Editing the script, voice, or delivery makes a new recording.</p>}
         {narration && draft.narrationMode !== "none" && <p className="muted small">Selected audio: {nameOf(narration)}</p>}
         {narration && draft.narrationMode !== "none" && urls[narration.id] && <audio controls src={urls[narration.id]} />}
-        <VoiceOver projectId={projectId} apiBase={apiBase} token={token} request={request} disabled={Boolean(working)} initialScript={draft.plan.script} initialVoice={draft.voice} initialStyle={draft.voiceStyle} onVoiceChange={voice => patch({ voice })} onStyleChange={voiceStyle => patch({ voiceStyle })} placement="story" onWorking={setVoiceWorking} onScriptChange={script => patch({ plan: { ...draft.plan!, script } })} onRecording={setRecording} onAdd={a => { onAsset(a); const ai = a.metadata.voiceover === true; patch({ narrationId: a.id, narrationMode: ai ? "ai" : "existing", narrationFingerprint: ai ? JSON.stringify([draft.plan!.script.trim(), draft.voice, draft.voiceStyle.trim()]) : "" }); }} />
+        <VoiceOver projectId={projectId} apiBase={apiBase} token={token} request={request} disabled={Boolean(working)} initialScript={draft.plan.script} initialVoice={draft.voice} initialStyle={draft.voiceStyle} onVoiceChange={voice => patch({ voice })} onStyleChange={voiceStyle => patch({ voiceStyle })} placement="story" onWorking={setVoiceWorking} onScriptChange={script => { patch({ plan: { ...draft.plan!, script } }); const preferredSentenceWords = sentenceWords(script); if (preferredSentenceWords) setPreferences(p => ({ ...p, preferredSentenceWords })); }} onRecording={setRecording} onAdd={a => { onAsset(a); const ai = a.metadata.voiceover === true; patch({ narrationId: a.id, narrationMode: ai ? "ai" : "existing", narrationFingerprint: ai ? JSON.stringify([draft.plan!.script.trim(), draft.voice, draft.voiceStyle.trim()]) : "" }); }} />
         {draft.narrationMode !== "none" && <label className="checkbox"><input type="checkbox" checked={draft.captions} disabled={busy} onChange={e => patch({ captions: e.target.checked })} />Transcribe narration and add speech captions</label>}
         <label className="checkbox"><input type="checkbox" checked={draft.music} disabled={busy} onChange={e => patch({ music: e.target.checked })} />Add background music</label>
         <label className="checkbox"><input type="checkbox" checked={draft.sceneText} disabled={busy} onChange={e => patch({ sceneText: e.target.checked })} />Include approved scene text</label>
       </section>
-      {revision > 0 && <p className="note">Assembling replaces the current edit with this storyboard. Previous revisions remain available through Undo.</p>}
-      <div className="actions"><button className="primary" disabled={busy || !draft.plan.scenes.length || draft.plan.scenes.some(s => !s.assetId || !media.some(a => a.id === s.assetId))} onClick={() => void assemble()}>Assemble this story</button><span className="muted small">The editor opens for playback, captions, transitions, and export.</span></div>
+      {revision > 0 && <p className="note">This becomes a new revision. Your current edit remains available through Undo.</p>}
+      <section className={"readiness " + (ready ? "ready" : "waiting")} aria-label="First cut readiness"><div><span className="eyebrow">Ready check</span><strong>{ready ? "Everything is in place" : openScenes ? openScenes + " scene" + (openScenes === 1 ? " needs" : "s need") + " a visual" : "Finish the narration choice"}</strong><p className="muted small">The complete edit opens next for playback, refinement, and one final professional review.</p></div><button className="primary" disabled={busy || !ready || draft.plan.scenes.some(s => !s.assetId || !media.some(a => a.id === s.assetId))} onClick={() => void assemble()}>Build the first cut</button></section>
     </>}
     {(working || notice) && <p role={notice ? "alert" : "status"}>{working || notice}</p>}
   </main>;

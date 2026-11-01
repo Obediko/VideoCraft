@@ -134,6 +134,34 @@ export function applyTimelineOperations(timeline: Timeline, operations: Timeline
         found.track.clips[found.index] = Object.keys(transform).length ? { ...rest, transform } : rest;
         break;
       }
+      case "set-colour-grade": {
+        const found = findClip(tracks, operation.clipId);
+        if (!found || found.track.kind !== "video") throw new Error("set-colour-grade references an unknown video clip");
+        const transform: Record<string, string | number | boolean> = { ...(found.clip.transform ?? {}) };
+        const put = (key: string, value: number | undefined, neutral: number) => { if (value === undefined) return; if (value === neutral) delete transform[key]; else transform[key] = value; };
+        put("exposure", operation.exposure, 0); put("contrast", operation.contrast, 1); put("saturation", operation.saturation, 1); put("temperature", operation.temperature, 0);
+        const { transform: _old, ...rest } = found.clip;
+        found.track.clips[found.index] = Object.keys(transform).length ? { ...rest, transform } : rest;
+        break;
+      }
+      case "set-dialogue-finish": {
+        const found = findClip(tracks, operation.clipId);
+        if (!found || found.track.kind !== "video") throw new Error("set-dialogue-finish references an unknown video clip");
+        const transform: Record<string, string | number | boolean> = { ...(found.clip.transform ?? {}) };
+        for (const [key, value] of [["dialogueDenoise", operation.denoise], ["voiceEnhance", operation.voiceEnhance], ["deEss", operation.deEss]] as const) {
+          if (value === undefined) continue; if (value) transform[key] = true; else delete transform[key];
+        }
+        const { transform: _old, ...rest } = found.clip;
+        found.track.clips[found.index] = Object.keys(transform).length ? { ...rest, transform } : rest;
+        break;
+      }
+      case "switch-camera": {
+        const found = findClip(tracks, operation.clipId);
+        if (!found || found.track.kind !== "video") throw new Error("switch-camera references an unknown video clip");
+        if (operation.sourceEndUs - operation.sourceStartUs !== found.clip.sourceEndUs - found.clip.sourceStartUs) throw new Error("switch-camera must preserve the clip duration");
+        found.track.clips[found.index] = { ...found.clip, assetId: operation.assetId, sourceStartUs: operation.sourceStartUs, sourceEndUs: operation.sourceEndUs, ...(operation.camera ? { transform: { ...(found.clip.transform ?? {}), camera: operation.camera } } : {}) };
+        break;
+      }
       case "set-background": {
         const targets = tracks.filter((track) => track.kind === "video").flatMap((track) => track.clips.map((clip, index) => ({ track, clip, index })))
           .filter(({ clip }) => operation.clipId === undefined || clip.id === operation.clipId);
@@ -426,6 +454,21 @@ export function parseTimelineOperations(value: unknown): TimelineOperation[] {
         if (zoom === undefined && look === undefined && transitionIn === undefined && transitionOut === undefined && seconds === undefined) return fail("set-clip-effects needs at least one effect");
         return { type: "set-clip-effects", clipId: op.clipId, ...(zoom ? { zoom } : {}), ...(look ? { look } : {}), ...(transitionIn ? { transitionIn } : {}), ...(transitionOut ? { transitionOut } : {}), ...(seconds !== undefined ? { transitionSeconds: Math.round((seconds as number) * 20) / 20 } : {}) };
       }
+      case "set-colour-grade": {
+        if (!isId(op.clipId)) return fail("set-colour-grade needs clipId");
+        const value = (key: string, min: number, max: number) => { const v = op[key]; if (v === undefined) return undefined; if (typeof v !== "number" || !Number.isFinite(v) || v < min || v > max) return fail(key + " is out of range"); return Math.round(v * 100) / 100; };
+        const exposure = value("exposure", -2, 2), contrast = value("contrast", 0.5, 1.5), saturation = value("saturation", 0, 2), temperature = value("temperature", -1, 1);
+        if (exposure === undefined && contrast === undefined && saturation === undefined && temperature === undefined) return fail("set-colour-grade needs a correction");
+        return { type: "set-colour-grade", clipId: op.clipId, ...(exposure === undefined ? {} : { exposure }), ...(contrast === undefined ? {} : { contrast }), ...(saturation === undefined ? {} : { saturation }), ...(temperature === undefined ? {} : { temperature }) };
+      }
+      case "set-dialogue-finish":
+        if (!isId(op.clipId)) return fail("set-dialogue-finish needs clipId");
+        if (![op.denoise, op.voiceEnhance, op.deEss].some(v => typeof v === "boolean")) return fail("set-dialogue-finish needs a processing choice");
+        return { type: "set-dialogue-finish", clipId: op.clipId, ...(typeof op.denoise === "boolean" ? { denoise: op.denoise } : {}), ...(typeof op.voiceEnhance === "boolean" ? { voiceEnhance: op.voiceEnhance } : {}), ...(typeof op.deEss === "boolean" ? { deEss: op.deEss } : {}) };
+      case "switch-camera":
+        if (!isId(op.clipId) || !isId(op.assetId) || !isUs(op.sourceStartUs) || !isUs(op.sourceEndUs) || (op.sourceEndUs as number) <= (op.sourceStartUs as number)) return fail("switch-camera needs clipId, assetId and a valid source range");
+        if (op.camera !== undefined && (typeof op.camera !== "string" || op.camera.trim().length > 40)) return fail("camera must be at most 40 characters");
+        return { type: "switch-camera", clipId: op.clipId, assetId: op.assetId, sourceStartUs: op.sourceStartUs as number, sourceEndUs: op.sourceEndUs as number, ...(typeof op.camera === "string" && op.camera.trim() ? { camera: op.camera.trim() } : {}) };
       case "set-volume": {
         if (op.clipId === undefined && op.role !== "music" && op.role !== "sfx" && op.role !== "voiceover") return fail("set-volume needs clipId or role (music, sfx or voiceover)");
         if (op.clipId !== undefined && !isId(op.clipId)) return fail("set-volume clipId must be an id");
