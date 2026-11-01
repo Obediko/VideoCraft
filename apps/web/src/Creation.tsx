@@ -5,7 +5,8 @@ import { VoiceOver } from "./VoiceOver.js";
 export type CreationMode = "footage" | "story" | "idea";
 type Asset = { id: string; kind: string; durationUs?: number; metadata: Record<string, string | number | boolean> };
 type Scene = { assetId: string; startS: number; durationS: number; text: string; visual: string };
-type Plan = { summary: string; script: string; scenes: Scene[]; source: "ai" | "rules"; note?: string };
+type Plan = { summary: string; script: string; scenes: Scene[]; source: "ai" | "rules"; note?: string; selectedApproach?: string; critique?: string };
+type Preferences = { notes: string; preferredSentenceWords?: number; avoidPhrases: string[] };
 type NarrationMode = "ai" | "existing" | "none";
 type Draft = { narrationMode: NarrationMode; voice: string; voiceStyle: string; narrationFingerprint: string; brief: string; seconds: number; platform: string; selected: string[]; plan: Plan | null; narrationId: string; music: boolean; sceneText: boolean; captions: boolean };
 type Props = {
@@ -18,6 +19,12 @@ type Props = {
 const nameOf = (a: Asset) => a.kind === "image" && typeof a.metadata.prompt === "string" ? "Generated · " + a.metadata.prompt.slice(0, 60) : String(a.metadata.filename ?? a.kind);
 const message = (e: unknown) => e instanceof Error ? e.message : "The action failed. Your draft is kept; try again.";
 const keyOf = (id: string) => "videocraft.story.v1." + id;
+const preferenceKey = "videocraft.director.preferences.v1";
+function readPreferences(): Preferences {
+  try { const p = JSON.parse(localStorage.getItem(preferenceKey) ?? "null"); return { notes: typeof p?.notes === "string" ? p.notes.slice(0, 600) : "", preferredSentenceWords: Number.isFinite(p?.preferredSentenceWords) ? p.preferredSentenceWords : undefined, avoidPhrases: Array.isArray(p?.avoidPhrases) ? p.avoidPhrases.filter((x: unknown) => typeof x === "string").slice(0, 20) : [] }; }
+  catch { return { notes: "", avoidPhrases: [] }; }
+}
+function sentenceWords(script: string): number | undefined { const rows = script.split(/[.!?]+/).map(s => s.trim().split(/\s+/).filter(Boolean).length).filter(Boolean); return rows.length ? Math.max(4, Math.min(30, Math.round(rows.reduce((a, b) => a + b, 0) / rows.length))) : undefined; }
 function readDraft(id: string, mode: CreationMode): Draft {
   const empty: Draft = { narrationMode: mode === "idea" ? "ai" : "none", voice: "marin", voiceStyle: "", narrationFingerprint: "", brief: "", seconds: 30, platform: "tiktok", selected: [], plan: null, narrationId: "", music: true, sceneText: true, captions: true };
   try {
@@ -43,11 +50,13 @@ export function Creation({ projectId, revision, mode, assets, apiBase, token, re
   const [voiceWorking, setVoiceWorking] = useState(false);
   const [stockWorking, setStockWorking] = useState(false);
   const [previewError, setPreviewError] = useState(false);
+  const [preferences, setPreferences] = useState<Preferences>(() => readPreferences());
   const busy = Boolean(working || recording || voiceWorking || stockWorking);
   const media = assets.filter(a => a.kind === "image" || a.kind === "video");
   const narration = assets.find(a => a.id === draft.narrationId);
   const patch = (change: Partial<Draft>) => setDraft(d => ({ ...d, ...change }));
   useEffect(() => { try { localStorage.setItem(keyOf(projectId), JSON.stringify(draft)); } catch { /* editing remains available */ } }, [projectId, draft]);
+  useEffect(() => { try { localStorage.setItem(preferenceKey, JSON.stringify(preferences)); } catch { /* preference memory is optional */ } }, [preferences]);
   useEffect(() => { onWorking(busy); return () => onWorking(false); }, [busy]);
   useEffect(() => {
     let cancelled = false;
@@ -104,7 +113,7 @@ export function Creation({ projectId, revision, mode, assets, apiBase, token, re
   }
   async function plan() {
     await run("Making the storyboard…", async () => {
-      const result = await request("/v1/projects/" + projectId + "/creation/plan", { method: "POST", body: JSON.stringify({ brief: draft.brief, seconds: draft.seconds, assetIds: draft.selected.filter(id => media.some(a => a.id === id)) }) });
+      const result = await request("/v1/projects/" + projectId + "/creation/plan", { method: "POST", body: JSON.stringify({ brief: draft.brief, seconds: draft.seconds, assetIds: draft.selected.filter(id => media.some(a => a.id === id)), preferences }) });
       patch({ plan: result.plan }); setSceneIndex(null);
     });
   }
@@ -135,6 +144,7 @@ export function Creation({ projectId, revision, mode, assets, apiBase, token, re
     <section className="card stack" aria-label="Story brief">
       <h2>1. Describe the result</h2>
       <label>Your brief<textarea rows={3} maxLength={2000} value={draft.brief} disabled={busy} onChange={e => patch({ brief: e.target.value })} placeholder="What is it about, who is it for, and what should viewers take away?" /></label>
+      <label>Standing Director preferences<textarea rows={2} maxLength={600} value={preferences.notes} disabled={busy} onChange={e => setPreferences(p => ({ ...p, notes: e.target.value }))} placeholder="For example: understated, Nigerian English, no hype, end with a practical invitation." /></label>
       <label>Narration preference<select aria-label="Narration preference" value={draft.narrationMode} disabled={busy} onChange={e => patch({ narrationMode: e.target.value as NarrationMode })}><option value="ai">AI-generated narration</option><option value="existing">Record or upload my narration</option><option value="none">Keep original sound / no narration</option></select></label>
       {draft.narrationMode === "ai" && <p className="muted small">AI drafts the narration script with your storyboard. Review the words and voice below; assembling generates and adds the audio automatically.</p>}
       <div className="row-2"><label>Target length (seconds)<input type="number" min={5} max={600} value={draft.seconds} disabled={busy} onChange={e => patch({ seconds: Number(e.target.value) })} /></label>
@@ -151,7 +161,7 @@ export function Creation({ projectId, revision, mode, assets, apiBase, token, re
     {draft.plan && <>
       <section className="card stack" aria-label="Storyboard">
         <h2>3. Review the storyboard</h2><p>{draft.plan.summary}</p><p className="muted small">{draft.plan.source === "ai" ? "AI storyboard" : "Built-in storyboard"} · {draft.plan.scenes.reduce((n, s) => n + s.durationS, 0).toFixed(1)} seconds before narration timing</p>
-        {draft.plan.note && <p role="status">{draft.plan.note}</p>}
+        {draft.plan.note && <p role="status">{draft.plan.note}</p>}{draft.plan.selectedApproach && <p className="muted small">Chosen approach: {draft.plan.selectedApproach}{draft.plan.critique ? " · " + draft.plan.critique : ""}</p>}
         <ol className="creation-scenes">{draft.plan.scenes.map((s, i) => <li key={i} className="stack">
           <strong>Scene {i + 1}: {s.visual || "Choose a visual"}</strong>
           <label>Visual<select aria-label="Visual" value={s.assetId} disabled={busy} onChange={e => { const a = media.find(a => a.id === e.target.value); scenePatch(i, { assetId: e.target.value, startS: 0, durationS: Math.min(s.durationS, a?.kind === "video" ? (a.durationUs ?? 5e6) / 1e6 : 60) }); }}><option value="">Choose a visual</option>{media.map(a => <option key={a.id} value={a.id}>{nameOf(a)}</option>)}</select></label>
@@ -177,7 +187,7 @@ export function Creation({ projectId, revision, mode, assets, apiBase, token, re
         {draft.narrationMode === "ai" && <p className="note">Your AI voice is generated automatically when you assemble. You can preview it first with the button below. Editing the script, voice, or delivery makes a new recording.</p>}
         {narration && draft.narrationMode !== "none" && <p className="muted small">Selected audio: {nameOf(narration)}</p>}
         {narration && draft.narrationMode !== "none" && urls[narration.id] && <audio controls src={urls[narration.id]} />}
-        <VoiceOver projectId={projectId} apiBase={apiBase} token={token} request={request} disabled={Boolean(working)} initialScript={draft.plan.script} initialVoice={draft.voice} initialStyle={draft.voiceStyle} onVoiceChange={voice => patch({ voice })} onStyleChange={voiceStyle => patch({ voiceStyle })} placement="story" onWorking={setVoiceWorking} onScriptChange={script => patch({ plan: { ...draft.plan!, script } })} onRecording={setRecording} onAdd={a => { onAsset(a); const ai = a.metadata.voiceover === true; patch({ narrationId: a.id, narrationMode: ai ? "ai" : "existing", narrationFingerprint: ai ? JSON.stringify([draft.plan!.script.trim(), draft.voice, draft.voiceStyle.trim()]) : "" }); }} />
+        <VoiceOver projectId={projectId} apiBase={apiBase} token={token} request={request} disabled={Boolean(working)} initialScript={draft.plan.script} initialVoice={draft.voice} initialStyle={draft.voiceStyle} onVoiceChange={voice => patch({ voice })} onStyleChange={voiceStyle => patch({ voiceStyle })} placement="story" onWorking={setVoiceWorking} onScriptChange={script => { patch({ plan: { ...draft.plan!, script } }); const preferredSentenceWords = sentenceWords(script); if (preferredSentenceWords) setPreferences(p => ({ ...p, preferredSentenceWords })); }} onRecording={setRecording} onAdd={a => { onAsset(a); const ai = a.metadata.voiceover === true; patch({ narrationId: a.id, narrationMode: ai ? "ai" : "existing", narrationFingerprint: ai ? JSON.stringify([draft.plan!.script.trim(), draft.voice, draft.voiceStyle.trim()]) : "" }); }} />
         {draft.narrationMode !== "none" && <label className="checkbox"><input type="checkbox" checked={draft.captions} disabled={busy} onChange={e => patch({ captions: e.target.checked })} />Transcribe narration and add speech captions</label>}
         <label className="checkbox"><input type="checkbox" checked={draft.music} disabled={busy} onChange={e => patch({ music: e.target.checked })} />Add background music</label>
         <label className="checkbox"><input type="checkbox" checked={draft.sceneText} disabled={busy} onChange={e => patch({ sceneText: e.target.checked })} />Include approved scene text</label>
