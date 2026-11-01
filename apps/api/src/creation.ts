@@ -1,3 +1,4 @@
+import { DIRECTOR_CRAFT } from "./craft.js";
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -173,7 +174,7 @@ export function registerCreationRoutes(server: FastifyInstance, d: CreationDepen
 }
 
 /** Same structured Responses API used by AI Director; provider failures are an explicit fallback. */
-export function storyboardPlanner(options: { apiKey: string; model: string; endpoint?: string }) {
+export function storyboardPlanner(options: { apiKey: string; model: string; endpoint?: string; rewrite?: boolean }) {
   return async (input: StoryInput): Promise<unknown> => {
     const { frames, ...description } = input;
     const content: Array<Record<string, unknown>> = [{ type: "input_text", text: JSON.stringify(description) }];
@@ -193,7 +194,7 @@ export function storyboardPlanner(options: { apiKey: string; model: string; endp
     return JSON.parse(text);
     };
     const approach = { type: "object", additionalProperties: false, properties: { label: { type: "string" }, strategy: { type: "string" }, summary: { type: "string" }, script: { type: "string" }, scenes: sceneSchema }, required: ["label", "strategy", "summary", "script", "scenes"] };
-    const drafts = await ask(writerInstructions(input.brief, input.preferences ?? scriptPreferences(null)), content, "storyboard_approaches", { type: "object", additionalProperties: false, properties: { approaches: { type: "array", minItems: 3, maxItems: 3, items: approach } }, required: ["approaches"] }) as { approaches: unknown[] };
+    const drafts = await ask(writerInstructions(input.brief, input.preferences ?? scriptPreferences(null)) + "\n\n" + DIRECTOR_CRAFT, content, "storyboard_approaches", { type: "object", additionalProperties: false, properties: { approaches: { type: "array", minItems: 3, maxItems: 3, items: approach } }, required: ["approaches"] }) as { approaches: unknown[] };
     const criticContent = [{ type: "input_text", text: JSON.stringify({ brief: input.brief, seconds: input.seconds, approaches: drafts.approaches }) }];
     const final = await ask(criticInstructions(input.preferences ?? scriptPreferences(null)), criticContent, "storyboard_final", { type: "object", additionalProperties: false, properties: { summary: { type: "string" }, script: { type: "string" }, scenes: sceneSchema, selectedApproach: { type: "string" }, critique: { type: "string" } }, required: ["summary", "script", "scenes", "selectedApproach", "critique"] }) as Record<string, unknown>;
     const issues = scriptQualityIssues(String(final.script ?? ""), input.brief, input.preferences ?? scriptPreferences(null));
