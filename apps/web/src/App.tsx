@@ -987,12 +987,12 @@ export function App() {
 
   if (screen === "choose") return <div className="app-shell" data-release={import.meta.env.VITE_RELEASE_SHA ?? "development"}>
     <header className="topbar"><button className="btn" onClick={() => setScreen("projects")} disabled={busy}>Back to your videos</button><span className="brand">VideoCraft</span><div className="spacer" />{statusPill}</header>
-    <main className="page"><h1>What do you want to create?</h1><p className="muted">Choose a starting point. You can refine the result in the editor.</p>
+    <main className="page choose-page"><span className="eyebrow">New video</span><h1>Where should we begin?</h1><p className="muted lead">Three ways in. One Director and one editing experience from the first thought to the finished film.</p>
       <div className="creation-choices">{([
-        ["footage", "Edit my footage", "Start with a talk, interview, vlog, or existing video. Find highlights and improve the edit."],
-        ["story", "Tell a story", "Combine videos and photos. Add AI or human narration, stock visuals, music, and text."],
-        ["idea", "Create from an idea or script", "Describe your message. Review a storyboard, then choose stock, generated images, or your own visuals."],
-      ] as const).map(([id, title, description]) => <button type="button" className="card creation-choice" key={id} disabled={busy} onClick={() => void createProject(id)}><strong>{title}</strong><span className="muted">{description}</span></button>)}</div>
+        ["footage", "I have footage", "Find the story already inside a talk, interview, vlog, or recording."],
+        ["story", "I have media", "Shape selected videos and photos around one clear message."],
+        ["idea", "I have an idea", "Develop the words, scenes and visual choices from a simple brief."],
+      ] as const).map(([id, title, description], index) => <button type="button" className="card creation-choice" key={id} aria-label={title} disabled={busy} onClick={() => void createProject(id)}><span className="choice-number" aria-hidden="true">0{index + 1}</span><strong>{title}</strong><span className="muted">{description}</span><span className="choice-arrow" aria-hidden="true">→</span></button>)}</div>
     </main></div>;
 
   // ── Videos (projects) ─────────────────────────────────────────────────────────────────────

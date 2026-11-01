@@ -172,28 +172,30 @@ export function Creation({ projectId, revision, mode, assets, apiBase, token, re
   }
   const scene = sceneIndex !== null ? draft.plan?.scenes[sceneIndex] : undefined;
   const previewAsset = media.find(a => a.id === scene?.assetId);
+  const openScenes = draft.plan?.scenes.filter(s => !s.assetId).length ?? 0;
+  const ready = Boolean(draft.plan?.scenes.length && openScenes === 0 && (draft.narrationMode === "none" || draft.plan.script.trim() || draft.narrationId));
   return <main className="page creation stack">
-    <div><h1>{mode === "idea" ? "Create from an idea" : "Tell a story"}</h1><p className="muted">Describe it, gather your visuals, then approve a storyboard and narration.</p></div>
+    <header className="creation-intro"><span className="eyebrow">VideoCraft Director</span><h1>{mode === "idea" ? "Turn your idea into a story" : "Shape your media into a story"}</h1><p>Tell us what you mean. Your Director develops the structure, scouts fitting visuals, and gives you every important choice.</p><div className="director-team" aria-label="Director team"><span>Story</span><span>Visuals</span><span>Sound</span><span>Critic</span></div></header>
     <section className="card stack" aria-label="Story brief">
-      <h2>1. Describe the result</h2>
-      <label>Your brief<textarea rows={3} maxLength={2000} value={draft.brief} disabled={busy} onChange={e => patch({ brief: e.target.value })} placeholder="What is it about, who is it for, and what should viewers take away?" /></label>
-      <label>Standing Director preferences<textarea rows={2} maxLength={600} value={preferences.notes} disabled={busy} onChange={e => setPreferences(p => ({ ...p, notes: e.target.value }))} placeholder="For example: understated, Nigerian English, no hype, end with a practical invitation." /></label>
+      <span className="eyebrow">Direction</span><h2>What should this video leave with people?</h2>
+      <label className="brief-field"><span className="sr-only">Your brief</span><textarea rows={4} maxLength={2000} value={draft.brief} disabled={busy} onChange={e => patch({ brief: e.target.value })} placeholder="The message, who it is for, and what they should feel or do afterwards…" /></label>
+      <details className="quiet-details"><summary>Set the tone <span className="muted">optional</span></summary><label>How should the Director approach your work?<textarea rows={2} maxLength={600} value={preferences.notes} disabled={busy} onChange={e => setPreferences(p => ({ ...p, notes: e.target.value }))} placeholder="Understated. Nigerian English. No hype. End with a practical invitation." /></label></details>
       <label>Narration preference<select aria-label="Narration preference" value={draft.narrationMode} disabled={busy} onChange={e => patch({ narrationMode: e.target.value as NarrationMode })}><option value="ai">AI-generated narration</option><option value="existing">Record or upload my narration</option><option value="none">Keep original sound / no narration</option></select></label>
       {draft.narrationMode === "ai" && <p className="muted small">AI drafts the narration script with your storyboard. Review the words and voice below; assembling generates and adds the audio automatically.</p>}
       <div className="row-2"><label>Target length (seconds)<input type="number" min={5} max={600} value={draft.seconds} disabled={busy} onChange={e => patch({ seconds: Number(e.target.value) })} /></label>
         <label>Format<select value={draft.platform} disabled={busy} onChange={e => patch({ platform: e.target.value })}><option value="tiktok">Reel / Short · 9:16</option><option value="youtube">YouTube · 16:9</option><option value="square">Feed · 1:1</option></select></label></div>
     </section>
     <section className="card stack" aria-label="Story media">
-      <h2>2. Gather videos and photos</h2>
-      <p className="muted small">Use uploads, stock, or generated images. With no uploads, the storyboard will suggest visuals for you to choose.</p>
+      <span className="eyebrow">Source material</span><h2>Bring what belongs in the story</h2>
+      <p className="muted small">Your own media comes first. When a scene needs something else, the Visual Director will scout choices for you.</p>
       <label className="btn file-btn">Upload videos and photos<input aria-label="Upload videos and photos" type="file" multiple accept="video/*,image/*" disabled={busy} onChange={e => void upload(e.currentTarget)} /></label>
       <div className="creation-library">{media.map(a => <label className="checkbox" key={a.id}><input type="checkbox" disabled={busy} checked={draft.selected.includes(a.id)} onChange={e => patch({ selected: e.target.checked ? [...draft.selected, a.id] : draft.selected.filter(id => id !== a.id) })} />{a.kind === "image" ? "Photo" : "Video"} · {nameOf(a)}</label>)}</div>
-      <button className="primary" type="button" disabled={busy || draft.brief.trim().length < 3 || draft.seconds < 5 || draft.seconds > 600} onClick={() => void plan()}>{draft.plan ? "Make a new storyboard" : "Make my storyboard"}</button>
+      <button className="primary director-action" type="button" disabled={busy || draft.brief.trim().length < 3 || draft.seconds < 5 || draft.seconds > 600} onClick={() => void plan()}>{draft.plan ? "Rethink the direction" : "Develop the first cut"}</button>
       {draft.plan && <p className="muted small">A new storyboard replaces the draft below. Your uploads and narration stay available.</p>}
     </section>
     {draft.plan && <>
       <section className="card stack" aria-label="Storyboard">
-        <h2>3. Review the storyboard</h2><p>{draft.plan.summary}</p><p className="muted small">{draft.plan.source === "ai" ? "AI storyboard" : "Built-in storyboard"} · {draft.plan.scenes.reduce((n, s) => n + s.durationS, 0).toFixed(1)} seconds before narration timing</p>
+        <span className="eyebrow">First cut</span><h2>Review the Director's choices</h2><p className="plan-summary">{draft.plan.summary}</p><p className="muted small">{draft.plan.source === "ai" ? "Directed storyboard" : "Essential storyboard"} · {draft.plan.scenes.reduce((n, s) => n + s.durationS, 0).toFixed(1)} seconds before narration timing</p>
         {draft.plan.note && <p role="status">{draft.plan.note}</p>}{draft.plan.selectedApproach && <p className="muted small">Chosen approach: {draft.plan.selectedApproach}{draft.plan.critique ? " · " + draft.plan.critique : ""}</p>}
         <ol className="creation-scenes">{draft.plan.scenes.map((s, i) => <li key={i} className="stack">
           <strong>Scene {i + 1}: {s.visual || "Choose a visual"}</strong>
@@ -228,8 +230,8 @@ export function Creation({ projectId, revision, mode, assets, apiBase, token, re
         <label className="checkbox"><input type="checkbox" checked={draft.music} disabled={busy} onChange={e => patch({ music: e.target.checked })} />Add background music</label>
         <label className="checkbox"><input type="checkbox" checked={draft.sceneText} disabled={busy} onChange={e => patch({ sceneText: e.target.checked })} />Include approved scene text</label>
       </section>
-      {revision > 0 && <p className="note">Assembling replaces the current edit with this storyboard. Previous revisions remain available through Undo.</p>}
-      <div className="actions"><button className="primary" disabled={busy || !draft.plan.scenes.length || draft.plan.scenes.some(s => !s.assetId || !media.some(a => a.id === s.assetId))} onClick={() => void assemble()}>Assemble this story</button><span className="muted small">The editor opens for playback, captions, transitions, and export.</span></div>
+      {revision > 0 && <p className="note">This becomes a new revision. Your current edit remains available through Undo.</p>}
+      <section className={"readiness " + (ready ? "ready" : "waiting")} aria-label="First cut readiness"><div><span className="eyebrow">Ready check</span><strong>{ready ? "Everything is in place" : openScenes ? openScenes + " scene" + (openScenes === 1 ? " needs" : "s need") + " a visual" : "Finish the narration choice"}</strong><p className="muted small">The complete edit opens next for playback, refinement, and one final professional review.</p></div><button className="primary" disabled={busy || !ready || draft.plan.scenes.some(s => !s.assetId || !media.some(a => a.id === s.assetId))} onClick={() => void assemble()}>Build the first cut</button></section>
     </>}
     {(working || notice) && <p role={notice ? "alert" : "status"}>{working || notice}</p>}
   </main>;

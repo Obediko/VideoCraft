@@ -338,16 +338,38 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 /* Guided creation keeps the brief, media and storyboard readable on a phone. */
 .creation { max-width: 960px; margin-inline: auto; }
 .creation .card { padding: 1.25rem; }
+.eyebrow { display: block; color: var(--accent); font-size: .72rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+.creation-intro { padding: clamp(1rem, 4vw, 3rem) 0 1.25rem; max-width: 760px; }
+.creation-intro h1, .choose-page h1 { margin-top: .55rem; font-size: clamp(2rem, 5vw, 3.8rem); line-height: 1.02; letter-spacing: -.045em; }
+.creation-intro p, .choose-page .lead { max-width: 650px; margin-top: .85rem; color: var(--text-2); font-size: clamp(1rem, 2vw, 1.18rem); line-height: 1.55; }
+.director-team { display: flex; flex-wrap: wrap; gap: .45rem; margin-top: 1.25rem; }
+.director-team span { padding: .35rem .65rem; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: .75rem; }
+.brief-field textarea { min-height: 130px; font-size: 1.05rem; line-height: 1.55; }
+.quiet-details { padding-top: .2rem; }
+.quiet-details summary { color: var(--text-2); cursor: pointer; }
+.quiet-details label { margin-top: .8rem; }
+.director-action { align-self: flex-start; min-width: 190px; }
+.plan-summary { max-width: 720px; font-size: 1.08rem; line-height: 1.55; }
+.readiness { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1.15rem 1.25rem; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); }
+.readiness strong { display: block; margin-top: .35rem; font-size: 1.05rem; }
+.readiness p { margin-top: .25rem; }
+.readiness.ready { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+.choose-page { max-width: 1120px; margin-inline: auto; padding-top: clamp(3rem, 10vh, 7rem); }
 .creation-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: 1rem; margin-top: 1.5rem; }
-.creation-choice { white-space: normal; min-width: 0; overflow-wrap: anywhere; display: flex; flex-direction: column; align-items: flex-start; text-align: left; gap: .8rem; padding: 1.5rem; min-height: 180px; }
-.creation-choice strong { font-size: 1.2rem; }
-.creation-library { display: grid; gap: .6rem; max-height: 280px; overflow: auto; overflow-wrap: anywhere; }
-.creation-scenes { padding-left: 1.5rem; }
-.creation-scenes > li { padding: 1rem 0; border-bottom: 1px solid var(--line, #444); }
+.creation-choice { position: relative; white-space: normal; min-width: 0; overflow-wrap: anywhere; display: flex; flex-direction: column; align-items: flex-start; text-align: left; gap: .8rem; padding: 1.5rem; min-height: 210px; transition: transform .18s ease, border-color .18s ease, background .18s ease; }
+.creation-choice:hover:not(:disabled) { transform: translateY(-3px); border-color: var(--border-strong); background: var(--raised); }
+.creation-choice strong { margin-top: auto; font-size: 1.3rem; letter-spacing: -.02em; }
+.choice-number { color: var(--faint); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: .75rem; }
+.choice-arrow { position: absolute; right: 1.3rem; bottom: 1.25rem; color: var(--accent); font-size: 1.25rem; }
+.creation-library { display: grid; gap: .6rem; max-height: 280px; overflow: auto; overflow-wrap: anywhere; min-width: 0; max-width: 100%; }
+.creation-library .checkbox { min-width: 0; max-width: 100%; word-break: break-all; }
+.creation-scenes { width: 100%; min-width: 0; max-width: 100%; padding-left: 1.5rem; overflow: hidden; }
+.creation-scenes > li { width: 100%; min-width: 0; max-width: 100%; padding: 1rem 0; border-bottom: 1px solid var(--line, #444); overflow: hidden; }
 .creation-scenes input, .creation-scenes select, .creation textarea, .creation input { max-width: 100%; min-width: 0; }
+.creation-scenes label, .scene-chosen { min-width: 0; max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
 .creation-preview { display: block; width: 100%; max-height: 360px; object-fit: contain; background: #111; }
 .live-photo { position: absolute; inset: 0; width: 100%; height: 100%; }
-@media (max-width: 600px) { .creation .row-2 { grid-template-columns: 1fr; } .creation .actions { flex-wrap: wrap; } }
+@media (max-width: 600px) { .creation .row-2 { grid-template-columns: 1fr; } .creation .actions { flex-wrap: wrap; } .readiness { align-items: stretch; flex-direction: column; } .readiness button { width: 100%; } }
 
 [aria-label="Story pieces"] .btn { white-space: normal; overflow-wrap: anywhere; max-width: 100%; }
 
