@@ -7,7 +7,13 @@ ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 
 WORKDIR /app
 COPY . .
-RUN npm install --ignore-scripts && npm run build --workspace=@videocraft/domain && npm run build --workspace=@videocraft/web && printf '{"sha":"%s"}\n' "$RELEASE_SHA" > apps/web/dist/version.json
+RUN npm install --ignore-scripts \
+ && npm run build --workspace=@videocraft/domain \
+ && npm run build --workspace=@videocraft/captions \
+ && npm run build --workspace=@videocraft/music \
+ && npm run build --workspace=@videocraft/rendering \
+ && npm run build --workspace=@videocraft/web \
+ && printf '{"sha":"%s"}\n' "$RELEASE_SHA" > apps/web/dist/version.json
 
 FROM nginx:1.27-alpine
 ARG RELEASE_SHA=unknown
