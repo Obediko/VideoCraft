@@ -361,7 +361,9 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 /* Touch screens have no hover: keep the Add label visible on stock results. */
 @media (hover: none) { .stock-add { opacity: 1; } }
 /* Storyboard: suggested stock under each scene, and the scene's own search panel */
-.scene-suggestions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
-.scene-visuals { border: 1px solid var(--border); border-radius: 8px; padding: 12px; background: var(--field); }
+.scene-suggestions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; min-width: 0; max-width: 100%; }
+.scene-suggestions > * { min-width: 0; }
+.scene-visuals { border: 1px solid var(--border); border-radius: 8px; padding: 12px; background: var(--field); min-width: 0; max-width: 100%; overflow: hidden; }
+.scene-visuals .stock-grid { grid-template-columns: repeat(auto-fill, minmax(min(92px, 100%), 1fr)); }
 .scene-chosen { display: flex; align-items: center; gap: 8px; }
 .scene-chosen img { width: 48px; height: 48px; object-fit: cover; border-radius: 6px; }
