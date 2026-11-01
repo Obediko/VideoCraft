@@ -4,7 +4,11 @@ import { VoiceOver } from "./VoiceOver.js";
 
 export type CreationMode = "footage" | "story" | "idea";
 type Asset = { id: string; kind: string; durationUs?: number; metadata: Record<string, string | number | boolean> };
-type Scene = { assetId: string; startS: number; durationS: number; text: string; visual: string };
+type Scene = { assetId: string; startS: number; durationS: number; text: string; visual: string; search?: string; thumb?: string };
+type StockItem = { provider: string; id: string; kind: "video" | "photo" | "gif"; thumbUrl: string; durationS?: number; credit?: string };
+const CAMERA = new Set("a an the and or of to in on at with into onto over under from by for as is are be then while their his her its our your this that these those same shot close-up closeup close up wide medium tracking lateral smooth slow push pull pan tilt zoom frame framing angle eye level depth field shallow cut match-cut match cinematic camera lens focus light lighting daylight sunlight warm soft natural gentle gently vignette opening scene continue continues end ends hold brief briefly authentic realistic modest beautiful quiet sunlit morning residential shaded filled moving background pausing pauses beside near through school-age".split(" "));
+/** Plain search words for a scene (the storyboard gives them; older drafts are worked out from the description). */
+const searchOf = (s: Scene) => s.search?.trim() || s.visual.toLowerCase().replace(/[^a-z0-9\s'-]/g, " ").split(/\s+/).map((w) => w.replace(/'s$/, "")).filter((w) => w.length > 2 && !CAMERA.has(w) && !/ly$/.test(w)).filter((w, i, all) => all.indexOf(w) === i).slice(0, 5).join(" ");
 type Plan = { summary: string; script: string; scenes: Scene[]; source: "ai" | "rules"; note?: string; selectedApproach?: string; critique?: string };
 type Preferences = { notes: string; preferredSentenceWords?: number; avoidPhrases: string[] };
 type NarrationMode = "ai" | "existing" | "none";
@@ -51,6 +55,8 @@ export function Creation({ projectId, revision, mode, assets, apiBase, token, re
   const [stockWorking, setStockWorking] = useState(false);
   const [previewError, setPreviewError] = useState(false);
   const [preferences, setPreferences] = useState<Preferences>(() => readPreferences());
+  const [suggested, setSuggested] = useState<Record<number, StockItem[]>>({});
+  const [adding, setAdding] = useState("");
   const busy = Boolean(working || recording || voiceWorking || stockWorking);
   const media = assets.filter(a => a.kind === "image" || a.kind === "video");
   const narration = assets.find(a => a.id === draft.narrationId);
@@ -88,6 +94,33 @@ export function Creation({ projectId, revision, mode, assets, apiBase, token, re
       const scene = draft.plan.scenes[sceneIndex];
       scenePatch(sceneIndex, { assetId: asset.id, startS: 0, durationS: Math.min(scene?.durationS ?? 5, asset.kind === "video" ? (asset.durationUs ?? 5e6) / 1e6 : 60) });
     }
+  }
+  /** A few free stock matches for every scene without a visual, shown under each scene to pick from. */
+  async function suggestAll() {
+    if (!draft.plan) return;
+    const orientation = draft.platform === "youtube" ? "landscape" : draft.platform === "square" ? "square" : "portrait";
+    await run("Finding visuals for every scene…", async () => {
+      const found: Record<number, StockItem[]> = {}; let none = 0;
+      for (const [i, sc] of draft.plan!.scenes.entries()) {
+        const q = searchOf(sc); if (!q) continue;
+        let items: StockItem[] = [];
+        for (const kind of ["video", "photo"]) {
+          const r = await request("/v1/projects/" + projectId + "/stock/search?kind=" + kind + "&orientation=" + orientation + "&q=" + encodeURIComponent(q)).catch(() => ({ items: [] }));
+          items = (r.items ?? []).slice(0, 4); if (items.length) break;
+        }
+        if (items.length) found[i] = items; else none += 1;
+        setSuggested((cur) => ({ ...cur, ...found }));
+      }
+      setNotice(Object.keys(found).length ? "Pick a visual under each scene" + (none ? " (" + none + " scene" + (none === 1 ? "" : "s") + " found nothing: open its search to try other words)." : ".") : "No stock matched these scenes. Open a scene's search to try other words, or upload your own.");
+    });
+  }
+  async function useSuggestion(index: number, item: StockItem) {
+    setAdding(index + ":" + item.id); setNotice("");
+    try {
+      const r = await request("/v1/projects/" + projectId + "/stock/import", { method: "POST", body: JSON.stringify({ provider: item.provider, kind: item.kind, id: item.id }) });
+      const asset = r.asset as Asset; onAsset(asset);
+      setDraft((d) => ({ ...d, selected: [...new Set([...d.selected, asset.id])], plan: d.plan ? { ...d.plan, scenes: d.plan.scenes.map((s, i) => i === index ? { ...s, assetId: asset.id, thumb: item.thumbUrl, startS: 0, durationS: Math.min(s.durationS, asset.kind === "video" ? (asset.durationUs ?? 5e6) / 1e6 : 60) } : s) } : d.plan }));
+    } catch (e) { setNotice(message(e)); } finally { setAdding(""); }
   }
   async function upload(input: HTMLInputElement, audio = false) {
     const files = Array.from(input.files ?? []); input.value = "";
@@ -167,19 +200,22 @@ export function Creation({ projectId, revision, mode, assets, apiBase, token, re
           <label>Visual<select aria-label="Visual" value={s.assetId} disabled={busy} onChange={e => { const a = media.find(a => a.id === e.target.value); scenePatch(i, { assetId: e.target.value, startS: 0, durationS: Math.min(s.durationS, a?.kind === "video" ? (a.durationUs ?? 5e6) / 1e6 : 60) }); }}><option value="">Choose a visual</option>{media.map(a => <option key={a.id} value={a.id}>{nameOf(a)}</option>)}</select></label>
           <div className="row-2"><label>Start in source (seconds)<input type="number" min={0} step={0.1} disabled={busy || media.find(a => a.id === s.assetId)?.kind === "image"} value={s.startS} onChange={e => scenePatch(i, { startS: Number(e.target.value) })} /></label><label>On screen (seconds)<input type="number" min={0.5} max={60} step={0.1} value={s.durationS} disabled={busy} onChange={e => scenePatch(i, { durationS: Number(e.target.value) })} /></label></div>
           <label>On-screen text<input value={s.text} maxLength={120} disabled={busy} onChange={e => scenePatch(i, { text: e.target.value })} /></label>
-          <div className="actions"><button className="btn" disabled={busy} onClick={() => { setSceneIndex(i); setImagePrompt(s.visual); }}>Preview / find visuals for scene {i + 1}</button>
+          {suggested[i] && !s.assetId && <div className="scene-suggestions" aria-label={"Suggested visuals for scene " + (i + 1)}>{suggested[i]!.map((item) => <button key={item.provider + item.id} type="button" className="stock-item" disabled={busy || adding !== ""} onClick={() => void useSuggestion(i, item)} title={item.credit ?? ""}><img src={item.thumbUrl} alt="" loading="lazy" />{item.durationS ? <span className="stock-time mono">{Math.round(item.durationS)}s</span> : null}<span className="stock-add">{adding === i + ":" + item.id ? "Adding…" : "Use"}</span></button>)}</div>}
+          {s.assetId && media.find((a) => a.id === s.assetId) && <p className="scene-chosen muted small">{s.thumb && <img src={s.thumb} alt="" />}Visual: {nameOf(media.find((a) => a.id === s.assetId)!)}</p>}
+          <div className="actions"><button className="btn" disabled={busy} aria-expanded={sceneIndex === i} onClick={() => { if (sceneIndex === i) { setSceneIndex(null); return; } setSceneIndex(i); setImagePrompt(s.visual); setTimeout(() => document.getElementById("scene-visuals-" + i)?.scrollIntoView({ behavior: "smooth", block: "start" }), 50); }}>{sceneIndex === i ? "Close visuals" : "Find visuals for scene " + (i + 1)}</button>
             <button className="btn" aria-label={"Move scene " + (i + 1) + " earlier"} disabled={busy || i === 0} onClick={() => { const scenes = [...draft.plan!.scenes]; [scenes[i - 1], scenes[i]] = [scenes[i]!, scenes[i - 1]!]; patch({ plan: { ...draft.plan!, scenes } }); setSceneIndex(null); }}>Move earlier</button>
             <button className="btn" disabled={busy || draft.plan!.scenes.length === 1} onClick={() => { patch({ plan: { ...draft.plan!, scenes: draft.plan!.scenes.filter((_, j) => j !== i) } }); setSceneIndex(null); }}>Remove scene {i + 1}</button></div>
-        </li>)}</ol>
-        <button className="btn" disabled={busy || draft.plan.scenes.length >= 40} onClick={() => patch({ plan: { ...draft.plan!, scenes: [...draft.plan!.scenes, { assetId: "", startS: 0, durationS: 5, text: "", visual: "" }] } })}>Add a scene</button>
-      </section>
-      {scene && <section className="card stack" aria-label="Scene visuals"><h2>Visual for scene {sceneIndex! + 1}</h2>
+          {sceneIndex === i && scene && <section id={"scene-visuals-" + i} className="scene-visuals stack" aria-label="Scene visuals"><h3>Visual for scene {i + 1}</h3>
         {previewAsset && urls[previewAsset.id] && (previewAsset.kind === "image" ? <img key={urlRetry} className="creation-preview" src={urls[previewAsset.id]} alt={scene.visual || nameOf(previewAsset)} onError={() => setPreviewError(true)} /> : <video key={urlRetry} className="creation-preview" controls playsInline src={urls[previewAsset.id]} onError={() => setPreviewError(true)} />)}
         {previewError && <button className="btn" onClick={() => setUrlRetry(n => n + 1)}>Reload visual preview</button>}
-        <p className="muted small">Search idea: {scene.visual}. Adding stock or generating an image assigns it to this scene.</p>
-        <StockSearch onWorking={setStockWorking} projectId={projectId} request={request} disabled={busy} orientation={draft.platform === "youtube" ? "landscape" : draft.platform === "square" ? "square" : "portrait"} onUse={a => selectVisual(a as Asset)} />
+        <p className="muted small">Searching free stock for “{searchOf(scene)}”. Change the words and search again, or pick one: it becomes this scene's visual.</p>
+        <StockSearch onWorking={setStockWorking} projectId={projectId} request={request} disabled={busy} orientation={draft.platform === "youtube" ? "landscape" : draft.platform === "square" ? "square" : "portrait"} onUse={a => selectVisual(a as Asset)} initialQuery={searchOf(scene)} hint="Click one to use it for this scene." />
         {images ? <><label>Describe an image<textarea rows={2} value={imagePrompt} maxLength={2000} disabled={busy} onChange={e => setImagePrompt(e.target.value)} /></label><button className="btn" disabled={busy || imagePrompt.trim().length < 3} onClick={() => void run("Generating an image…", async () => { const r = await request("/v1/projects/" + projectId + "/creation/image", { method: "POST", body: JSON.stringify({ prompt: imagePrompt }) }); selectVisual(r.asset); })}>Generate image</button></> : <p className="muted small">Image generation is unavailable. Choose an upload or stock visual.</p>}
-      </section>}
+          </section>}
+        </li>)}</ol>
+        {draft.plan.scenes.some((sc) => !sc.assetId) && <button className="primary" disabled={busy} onClick={() => void suggestAll()}>Find visuals for every scene</button>}
+        <button className="btn" disabled={busy || draft.plan.scenes.length >= 40} onClick={() => patch({ plan: { ...draft.plan!, scenes: [...draft.plan!.scenes, { assetId: "", startS: 0, durationS: 5, text: "", visual: "" }] } })}>Add a scene</button>
+      </section>
       <section className="card stack" aria-label="Story narration"><h2>4. Choose narration</h2>
         <p className="muted small">Keep the original sound, or add one narration track for the whole story. With narration, source speech is muted and visuals extend to include the complete recording.</p>
         <label>Narration<select aria-label="Narration" value={draft.narrationMode === "ai" ? "__ai" : draft.narrationMode === "none" ? "__none" : draft.narrationId} disabled={busy} onChange={e => patch(e.target.value === "__ai" ? { narrationMode: "ai" } : e.target.value === "__none" ? { narrationMode: "none" } : { narrationMode: "existing", narrationId: e.target.value })}><option value="__ai">AI voice from the reviewed script</option><option value="__none">Keep original sound / no narration</option><option value="" disabled>Choose a recording</option>{assets.filter(a => a.kind === "audio" && !a.metadata.mood).map(a => <option key={a.id} value={a.id}>{nameOf(a)}</option>)}</select></label>

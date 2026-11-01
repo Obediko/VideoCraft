@@ -11,7 +11,16 @@ import { composeMusicAsset } from "./music-routes.js";
 import type { ObjectStorage } from "@videocraft/storage";
 import { criticInstructions, scriptPreferences, scriptQualityIssues, writerInstructions, type ScriptPreferences } from "./director-playbook.js";
 
-export type StoryScene = { assetId: string; startS: number; durationS: number; text: string; visual: string };
+export type StoryScene = { assetId: string; startS: number; durationS: number; text: string; visual: string; search?: string };
+
+const CAMERA_WORDS = new Set("a an the and or of to in on at with into onto over under from by for as is are be then while their his her its our your this that these those same shot shots close-up closeup close up wide medium tracking lateral smooth slow push pull pan tilt zoom frame framing angle eye level depth field shallow cut match-cut match cinematic camera lens focus light lighting daylight sunlight warm soft natural gentle gently soundscape ambience music score footsteps shot vignette opening scene continue continues continuing end ends hold holds brief briefly glimpse glimpses beat moment authentic realistic dignified restrained understated exaggerated distress shows show showing reveals reveal genuine exchange exchanges small little very more most some one two three first second third modest beautiful quiet sunlit sunny morning evening afternoon residential shaded filled school-age naturally moving background foreground pausing pauses beside near through".split(" "));
+/** A few plain words a stock library can match, from a cinematic scene description ("girl homework courtyard nigeria"). */
+export function stockQuery(visual: string): string {
+  const words = visual.toLowerCase().replace(/[^a-z0-9\s'-]/g, " ").split(/\s+/).filter((w) => w.length > 2 && !CAMERA_WORDS.has(w) && !/ly$/.test(w));
+  const seen = new Set<string>(); const picked: string[] = [];
+  for (const w of words) { const base = w.replace(/'s$/, ""); if (!seen.has(base)) { seen.add(base); picked.push(base); } if (picked.length >= 5) break; }
+  return picked.join(" ");
+}
 export type StoryPlan = { summary: string; script: string; scenes: StoryScene[]; source: "ai" | "rules"; note?: string; selectedApproach?: string; critique?: string };
 export type StoryFrame = { assetId: string; atS: number; jpegBase64: string };
 export type StoryInput = { brief: string; seconds: number; assets: Array<{ id: string; kind: string; name: string; seconds: number; transcript: string }>; frames: StoryFrame[]; preferences?: ScriptPreferences };
@@ -66,7 +75,7 @@ export function storyScenes(value: unknown, assets: Asset[], allowMissing = fals
     if (typeof s.durationS !== "number" || !Number.isFinite(s.durationS) || s.durationS < 0.5 || s.durationS > 60) throw new Error("Scenes must last between 0.5 and 60 seconds");
     if (a?.kind === "image" && s.startS !== 0) throw new Error("Photos must start at zero");
     if (a?.kind === "video" && (!a.durationUs || Math.round((s.startS + s.durationS) * 1e6) > a.durationUs)) throw new Error("A scene extends beyond its video");
-    return { assetId: s.assetId, startS: s.startS, durationS: s.durationS, text: typeof s.text === "string" ? s.text.slice(0, 120) : "", visual: typeof s.visual === "string" ? s.visual.slice(0, 300) : "" };
+    return { assetId: s.assetId, startS: s.startS, durationS: s.durationS, text: typeof s.text === "string" ? s.text.slice(0, 120) : "", visual: typeof s.visual === "string" ? s.visual.slice(0, 300) : "", ...(typeof s.search === "string" && s.search.trim() ? { search: s.search.trim().slice(0, 80) } : typeof s.visual === "string" && s.visual.trim() ? { search: stockQuery(s.visual) } : {}) };
   });
   if (scenes.reduce((n, s) => n + s.durationS, 0) > 600) throw new Error("Stories can last up to ten minutes");
   return scenes;
@@ -169,7 +178,7 @@ export function storyboardPlanner(options: { apiKey: string; model: string; endp
     const { frames, ...description } = input;
     const content: Array<Record<string, unknown>> = [{ type: "input_text", text: JSON.stringify(description) }];
     for (const frame of frames) content.push({ type: "input_text", text: "Asset " + frame.assetId + ", frame at " + frame.atS.toFixed(2) + " seconds" }, { type: "input_image", image_url: "data:image/jpeg;base64," + frame.jpegBase64, detail: "low" });
-    const fields = { assetId: { type: "string" }, startS: { type: "number" }, durationS: { type: "number" }, text: { type: "string" }, visual: { type: "string" } };
+    const fields = { assetId: { type: "string" }, startS: { type: "number" }, durationS: { type: "number" }, text: { type: "string" }, visual: { type: "string" }, search: { type: "string" } };
     const sceneSchema = { type: "array", items: { type: "object", additionalProperties: false, properties: fields, required: Object.keys(fields) } };
     const endpoint = (options.endpoint ?? "https://api.openai.com/v1").replace(/\/$/, "") + "/responses";
     const ask = async (instructions: string, requestContent: Array<Record<string, unknown>>, name: string, schema: unknown) => {
