@@ -135,10 +135,11 @@ test("edit check with the AI second look: frames of the edit are sent, its fixes
   const mock = createServer((req, res) => { let b = ""; req.on("data", (c) => { b += c; }); req.on("end", () => {
     const body = JSON.parse(b); review = body;
     const result = { issues: [
-      { title: "Open on the result", detail: "The jobs line is the hook.", atS: 4, severity: "fix", action: "move-piece", piece: 1, toIndex: 0, graphic: -1, text: "" },
-      { title: "Clearer title", detail: "Say who it is for.", atS: 0, severity: "fix", action: "rewrite-text", piece: -1, toIndex: -1, graphic: 0, text: "For new graduates" },
-      { title: "Background is cluttered", detail: "Film against a plain wall.", atS: 1, severity: "warn", action: "none", piece: -1, toIndex: -1, graphic: -1, text: "" },
-      { title: "Bad index", detail: "", atS: 0, severity: "fix", action: "remove-piece", piece: 9, toIndex: -1, graphic: -1, text: "" },
+      { title: "Open on the result", detail: "The jobs line is the hook.", atS: 4, severity: "fix", action: "move-piece", piece: 1, toIndex: 0, graphic: -1, text: "", transition: "", seconds: 0 },
+      { title: "Clearer title", detail: "Say who it is for.", atS: 0, severity: "fix", action: "rewrite-text", piece: -1, toIndex: -1, graphic: 0, text: "For new graduates", transition: "", seconds: 0 },
+      { title: "Softer entrance", detail: "The second image arrives abruptly.", atS: 4, severity: "fix", action: "set-transition", piece: 1, toIndex: -1, graphic: -1, text: "", transition: "dissolve", seconds: 0.35 },
+      { title: "Background is cluttered", detail: "Film against a plain wall.", atS: 1, severity: "warn", action: "none", piece: -1, toIndex: -1, graphic: -1, text: "", transition: "", seconds: 0 },
+      { title: "Bad index", detail: "", atS: 0, severity: "fix", action: "remove-piece", piece: 9, toIndex: -1, graphic: -1, text: "", transition: "", seconds: 0 },
     ] };
     res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ output_text: JSON.stringify(result) }));
   }); });
@@ -159,11 +160,12 @@ test("edit check with the AI second look: frames of the edit are sent, its fixes
     const text = review.input[0].content[0].text;
     assert.match(text, /#0 \[0\.0-/); assert.match(text, /#1 .*More than half/); assert.match(text, /title at 0\.\d s .*: Our programme/);
     const labels = review.input[0].content.filter((c) => c.type === "input_text").map((c) => c.text).join(" | ");
-    assert.match(labels, /Start of piece #1/); assert.match(labels, /Under on-screen text #0/);
+    assert.match(labels, /Piece #1 visual/); assert.match(labels, /Under on-screen text #0/);
     assert.equal(review.input[0].content.filter((c) => c.type === "input_image").length, 3);
     const aiIssues = result.issues.filter((i) => i.source === "ai");
-    assert.equal(aiIssues.length, 4);
+    assert.equal(aiIssues.length, 5);
     assert.deepEqual(aiIssues.find((i) => i.title === "Open on the result").fix.operations, [{ type: "reorder-clips", clipIds: ["p2", "p1"] }]);
+    assert.deepEqual(aiIssues.find((i) => i.title === "Softer entrance").fix.operations, [{ type: "set-clip-effects", clipId: "p2", transitionIn: "dissolve", transitionSeconds: 0.35 }]);
     assert.equal(aiIssues.find((i) => i.title === "Bad index").fix, undefined, "an out-of-range piece gets no fix");
     const fixes = aiIssues.filter((i) => i.fix).map((i) => ({ title: i.title, atS: i.atS, operations: i.fix.operations }));
     const fixed = (await server.inject({ method: "POST", url: url("fix"), payload: { revision: rev, fixes } })).json();
@@ -306,6 +308,30 @@ test("a storyboard readability fix applies to an owned photo and resolves its fi
     assert.equal(fixed.statusCode, 201, fixed.body); assert.equal(fixed.json().applied.length, 1, fixed.body);
     const final = await server.inject({ method: "POST", url: "/v1/projects/" + projectId + "/director/check", payload: { revision: fixed.json().revision.revision } });
     assert.equal(final.json().issues.some(i => i.kind === "too-fast"), false);
+  } finally { close(); }
+});
+
+test("storyboard check gives the mixed-media cut a real AI picture review", async () => {
+  let seen;
+  const rules = new RuleDirector();
+  const director = { plan: (input) => rules.plan(input), review: async (input) => { seen = input; return [{ id: "ai-transition", severity: "fix", kind: "ai-set-transition", title: "Soften the scene change", detail: "The visual direction changes abruptly.", atS: 2, source: "ai", fix: { label: "Use a dissolve", operations: [{ type: "set-clip-effects", clipId: "photo-part", transitionIn: "dissolve", transitionSeconds: 0.35 }] } }]; } };
+  const { server, projectId, durationUs, storage, close } = await setup(director);
+  try {
+    execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=0xD6B36A:s=320x480", "-frames:v", "1", "-f", "image2", storage.resolve("projects/" + projectId + "/assets/pic.media")]);
+    const timeline = { durationUs: durationUs + 3_000_000, tracks: [{ id: "video", kind: "video", clips: [{ id: "talk-part", assetId: "talk", sourceStartUs: 0, sourceEndUs: durationUs, timelineStartUs: 0, timelineEndUs: durationUs }, { id: "photo-part", assetId: "pic", sourceStartUs: 0, sourceEndUs: 3_000_000, timelineStartUs: durationUs, timelineEndUs: durationUs + 3_000_000, transform: { transitionIn: "cut", look: "warm", zoom: "push" } }] }, { id: "captions", kind: "caption", clips: [{ id: "caption", assetId: "talk", sourceStartUs: 0, sourceEndUs: 2_000_000, timelineStartUs: 0, timelineEndUs: 2_000_000, transform: { text: "A clear opening line" } }] }, { id: "audio", kind: "audio", clips: [{ id: "voice", assetId: "talk", sourceStartUs: 0, sourceEndUs: durationUs + 3_000_000, timelineStartUs: 0, timelineEndUs: durationUs + 3_000_000, transform: { role: "voiceover" } }] }] };
+    const saved = await server.inject({ method: "POST", url: "/v1/projects/" + projectId + "/revisions", payload: { timeline, tailoring: { intent: "A sincere graduate story", audience: "graduates", channel: "tiktok", targetDurationUs: timeline.durationUs, constraints: ["creation:story"] } } });
+    assert.equal(saved.statusCode, 201, saved.body);
+    const checked = await server.inject({ method: "POST", url: "/v1/projects/" + projectId + "/director/check", payload: { revision: 2, platform: "tiktok" } });
+    assert.equal(checked.statusCode, 200, checked.body);
+    assert.equal(checked.json().ai, true);
+    assert.equal(seen.frames.length, 2, "both the video and photo scenes are sampled");
+    assert.equal(seen.pieces.length, 2);
+    assert.match(seen.pieces[0].text, /A clear opening line/);
+    assert.equal(seen.pieces[1].visual, "campus.jpg");
+    assert.equal(seen.pieces[1].transition, "cut");
+    assert.match(seen.audio, /voiceover/);
+    assert.ok(checked.json().issues.some((issue) => issue.kind === "ai-set-transition"));
+    assert.ok(!checked.json().issues.some((issue) => ["mid-word", "opens-mid-sentence", "ends-mid-sentence"].includes(issue.kind)), "the photo's source time is never matched to the talk transcript");
   } finally { close(); }
 });
 

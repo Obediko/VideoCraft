@@ -223,10 +223,7 @@ export function registerCheckRoutes(server: FastifyInstance, dependencies: Direc
   server.post("/v1/projects/:projectId/director/check", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } } as never, async (request: FastifyRequest, reply: FastifyReply) => {
     const ctx = await context(request, reply);
     if (!ctx) return reply;
-    if (ctx.revision.tailoring?.constraints?.includes("creation:story")) {
-      const issues = checkEdit({ timeline: ctx.revision.timeline, assetId: ctx.main.id, words: [], sourceDurationUs: Math.round(ctx.durationS * 1e6), platform: String(ctx.body.platform ?? "tiktok") });
-      return { issues, ai: false, scanned: false, note: "Built-in timing and text checks only. Watch the complete storyboard and listen to the narration before export; this mixed-media story has not had an AI picture review." };
-    }
+    const isStory = ctx.revision.tailoring?.constraints?.includes("creation:story") ?? false;
     const timeline = ctx.revision.timeline;
     const words = ctx.transcript.flatMap((segment) => segment.words);
     const pieces = timeline.tracks.filter((t) => t.kind === "video").flatMap((t) => t.clips).sort((a, b) => a.timelineStartUs - b.timelineStartUs);
@@ -235,17 +232,18 @@ export function registerCheckRoutes(server: FastifyInstance, dependencies: Direc
     const target = ctx.revision.tailoring?.targetDurationUs ? Math.round(ctx.revision.tailoring.targetDurationUs / 1e6) : undefined;
     const overlays = timeline.tracks.filter((t) => t.kind === "overlay").flatMap((t) => t.clips);
     const graphics = overlays.filter((c) => c.transform?.role === "graphic").sort((a, b) => a.timelineStartUs - b.timelineStartUs);
+    const captions = timeline.tracks.filter((t) => t.kind === "caption").flatMap((t) => t.clips).sort((a, b) => a.timelineStartUs - b.timelineStartUs);
     const reviewAssets = await dependencies.assets.listForProject(ctx.projectId);
     // Every frame carries its own source identity. A card's source time is never a time in the original talk.
-    const sampledPieces = pieces.length > 8 ? [...pieces.slice(0, 7), pieces[pieces.length - 1]!] : pieces;
-    const looks = sampledPieces.map(c => ({ assetId: c.assetId, sourceS: c.sourceStartUs / 1e6 + Math.min(0.8, (c.sourceEndUs - c.sourceStartUs) / 2e6), atS: c.timelineStartUs / 1e6, label: "Start of piece #" + pieces.indexOf(c) }));
+    const sampledPieces = pieces.length <= 10 ? pieces : Array.from(new Set(Array.from({ length: 10 }, (_, i) => pieces[Math.round(i * (pieces.length - 1) / 9)]!)));
+    const looks = sampledPieces.map(c => ({ assetId: c.assetId, sourceS: c.sourceStartUs / 1e6 + Math.min(0.8, (c.sourceEndUs - c.sourceStartUs) / 2e6), atS: c.timelineStartUs / 1e6 + Math.min(0.8, (c.timelineEndUs - c.timelineStartUs) / 2e6), label: "Piece #" + pieces.indexOf(c) + " visual" }));
     for (const [i, g] of graphics.slice(0, 4).entries()) {
       const host = pieces.find(c => c.timelineStartUs <= g.timelineStartUs && c.timelineEndUs > g.timelineStartUs);
       if (host) looks.push({ assetId: host.assetId, sourceS: (host.sourceStartUs + g.timelineStartUs - host.timelineStartUs) / 1e6 + Math.min(0.5, (host.timelineEndUs - g.timelineStartUs) / 2e6), atS: g.timelineStartUs / 1e6, label: "Under on-screen text #" + i });
     }
     const brief = typeof ctx.body.brief === "string" && ctx.body.brief.trim() ? ctx.body.brief.trim().slice(0, 2000) : ctx.revision.tailoring?.intent ?? "";
     let media: MediaSignals | undefined; let frames: Array<{ atS: number; label: string; jpegBase64: string }> = [];
-    await withSource(dependencies, ctx.main.storageKey, async (input, directory) => {
+    if (!isStory) await withSource(dependencies, ctx.main.storageKey, async (input, directory) => {
       media = await scanPicture(dependencies, input, mine.map((c) => ({ startUs: c.sourceStartUs, endUs: c.sourceEndUs }))).catch((caught) => { request.log.warn({ err: caught }, "Picture scan failed"); return undefined; });
     }).catch((caught) => request.log.warn({ err: caught }, "Could not open the source for the check"));
     if (dependencies.director.review) for (const assetId of new Set(looks.map(l => l.assetId))) {
@@ -260,26 +258,38 @@ export function registerCheckRoutes(server: FastifyInstance, dependencies: Direc
         }
       }).catch(caught => request.log.warn({ err: caught, assetId }, "Review source unavailable"));
     }
-    const issues: CheckIssue[] = checkEdit({ timeline, assetId: ctx.main.id, words, sourceDurationUs: ctx.main.durationUs ?? Math.round(ctx.durationS * 1e6), platform, ...(target ? { targetSeconds: target } : {}), ...(media ? { media } : {}) });
+    const issues: CheckIssue[] = checkEdit({ timeline, assetId: ctx.main.id, words, sourceDurationUs: ctx.main.durationUs ?? Math.round(ctx.durationS * 1e6), platform, ...(isStory ? { allVisuals: true } : {}), ...(target ? { targetSeconds: target } : {}), ...(media ? { media } : {}) });
     let note: string | undefined; let ai = false;
     if (dependencies.director.review) {
       const textOf = (startUs: number, endUs: number) => words.filter((w) => w.startUs >= startUs - 50_000 && w.endUs <= endUs + 50_000).map((w) => w.text).join(" ");
+      const captionTextAt = (startUs: number, endUs: number) => captions.filter((c) => c.timelineEndUs > startUs && c.timelineStartUs < endUs).map((c) => String(c.transform?.text ?? "")).filter(Boolean).join(" ");
       const music = timeline.tracks.find((t) => t.kind === "audio")?.clips.find((c) => c.transform?.role === "music");
       const musicAsset = music ? (await dependencies.assets.listForProject(ctx.projectId)).find((a) => a.id === music.assetId) : undefined;
+      const audioRoles = timeline.tracks.filter((t) => t.kind === "audio").flatMap((t) => t.clips).map((c) => String(c.transform?.role ?? "source audio"));
       try {
         const reviewed = await dependencies.director.review({
           brief, platform, frames,
-          pieces: pieces.map((c) => ({ clipId: c.id, startS: c.timelineStartUs / 1e6, endS: c.timelineEndUs / 1e6, text: c.assetId === ctx.main.id ? textOf(c.sourceStartUs, c.sourceEndUs) : reviewAssets.find(a => a.id === c.assetId)?.metadata.endCard === true ? "Intentional narrated end card: " + graphics.filter(g => g.timelineStartUs < c.timelineEndUs && g.timelineEndUs > c.timelineStartUs).map(g => String(g.transform?.text ?? "")).join(" ") : "(other footage)" })),
+          pieces: pieces.map((c) => {
+            const asset = reviewAssets.find(a => a.id === c.assetId);
+            const sourceSpeech = c.assetId === ctx.main.id && words.length ? textOf(c.sourceStartUs, c.sourceEndUs) : "";
+            const timelineCaptions = captionTextAt(c.timelineStartUs, c.timelineEndUs);
+            const spoken = [sourceSpeech, timelineCaptions && timelineCaptions !== sourceSpeech ? "Timed captions/narration: " + timelineCaptions : ""].filter(Boolean).join(" ");
+            const onScreen = graphics.filter(g => g.timelineStartUs < c.timelineEndUs && g.timelineEndUs > c.timelineStartUs).map(g => String(g.transform?.text ?? "")).filter(Boolean).join(" ");
+            const context = asset?.metadata.endCard === true ? "Intentional narrated end card: " + onScreen : [spoken, onScreen && "On-screen: " + onScreen].filter(Boolean).join(" ") || "No timed words supplied for this scene";
+            return { clipId: c.id, startS: c.timelineStartUs / 1e6, endS: c.timelineEndUs / 1e6, text: context, visual: String(asset?.metadata.filename ?? asset?.metadata.description ?? asset?.kind ?? "visual").slice(0, 120), transition: String(c.transform?.transitionIn ?? "cut") + (typeof c.transform?.transitionSeconds === "number" ? " " + Number(c.transform.transitionSeconds).toFixed(2) + " s" : ""), look: String(c.transform?.look ?? "none"), motion: String(c.transform?.zoom ?? "none") };
+          }),
           graphics: graphics.map((g) => ({ clipId: g.id, kind: String(g.transform?.kind ?? "title"), text: String(g.transform?.text ?? ""), atS: g.timelineStartUs / 1e6, durationS: (g.timelineEndUs - g.timelineStartUs) / 1e6 })),
           cutaways: overlays.filter((c) => c.transform?.role === "broll").map((c) => ({ atS: c.timelineStartUs / 1e6, durationS: (c.timelineEndUs - c.timelineStartUs) / 1e6, name: ctx.others.find((o) => o.id === c.assetId)?.name ?? "media" })),
+          audio: audioRoles.length ? Array.from(new Set(audioRoles)).join(", ") + (captions.length ? "; timed captions supplied" : "; no timed captions") : "source sound only" + (captions.length ? "; timed captions supplied" : "; no timed captions"),
           ...(musicAsset ? { music: String(musicAsset.metadata.description ?? musicAsset.metadata.mood ?? musicAsset.metadata.filename ?? "music") } : {}),
         });
         issues.push(...reviewed); ai = true;
+        note = "AI picture review used " + frames.length + " labelled frame" + (frames.length === 1 ? "" : "s") + " across the assembled edit, with scene, transition, text and audio-plan context. It is a sampled editorial review, not continuous playback or an audio loudness test.";
       } catch (caught) { note = "The AI second look was unavailable (" + (caught instanceof Error ? caught.message : "error").slice(0, 160) + "); these are the built-in checks."; }
     }
     const order = { fix: 0, warn: 1, info: 2 } as const;
     issues.sort((a, b) => order[a.severity] - order[b.severity] || (a.atS ?? 1e9) - (b.atS ?? 1e9));
-    return { issues, ai, scanned: Boolean(media), ...(note ? { note } : {}) };
+    return { issues, ai, scanned: Boolean(media), sampledFrames: frames.length, ...(note ? { note } : {}) };
   });
 
   server.post("/v1/projects/:projectId/director/fix", async (request: FastifyRequest, reply: FastifyReply) => {
