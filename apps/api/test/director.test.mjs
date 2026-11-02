@@ -135,11 +135,12 @@ test("edit check with the AI second look: frames of the edit are sent, its fixes
   const mock = createServer((req, res) => { let b = ""; req.on("data", (c) => { b += c; }); req.on("end", () => {
     const body = JSON.parse(b); review = body;
     const result = { issues: [
-      { title: "Open on the result", detail: "The jobs line is the hook.", atS: 4, severity: "fix", action: "move-piece", piece: 1, toIndex: 0, graphic: -1, text: "", transition: "", seconds: 0 },
-      { title: "Clearer title", detail: "Say who it is for.", atS: 0, severity: "fix", action: "rewrite-text", piece: -1, toIndex: -1, graphic: 0, text: "For new graduates", transition: "", seconds: 0 },
-      { title: "Softer entrance", detail: "The second image arrives abruptly.", atS: 4, severity: "fix", action: "set-transition", piece: 1, toIndex: -1, graphic: -1, text: "", transition: "dissolve", seconds: 0.35 },
-      { title: "Background is cluttered", detail: "Film against a plain wall.", atS: 1, severity: "warn", action: "none", piece: -1, toIndex: -1, graphic: -1, text: "", transition: "", seconds: 0 },
-      { title: "Bad index", detail: "", atS: 0, severity: "fix", action: "remove-piece", piece: 9, toIndex: -1, graphic: -1, text: "", transition: "", seconds: 0 },
+      { title: "Open on the result", detail: "The jobs line is the hook.", atS: 4, severity: "fix", action: "move-piece", piece: 1, toIndex: 0, graphic: -1, text: "", transition: "", seconds: 0, query: "" },
+      { title: "Clearer title", detail: "Say who it is for.", atS: 0, severity: "fix", action: "rewrite-text", piece: -1, toIndex: -1, graphic: 0, text: "For new graduates", transition: "", seconds: 0, query: "" },
+      { title: "Softer entrance", detail: "The second image arrives abruptly.", atS: 4, severity: "fix", action: "set-transition", piece: 1, toIndex: -1, graphic: -1, text: "", transition: "dissolve", seconds: 0.35, query: "" },
+      { title: "Use relevant footage", detail: "The image does not support the line.", atS: 4, severity: "warn", action: "replace-visual", piece: 1, toIndex: -1, graphic: -1, text: "", transition: "", seconds: 0, query: "Nigerian mentor helping young entrepreneur" },
+      { title: "Background is cluttered", detail: "Film against a plain wall.", atS: 1, severity: "warn", action: "none", piece: -1, toIndex: -1, graphic: -1, text: "", transition: "", seconds: 0, query: "" },
+      { title: "Bad index", detail: "", atS: 0, severity: "fix", action: "remove-piece", piece: 9, toIndex: -1, graphic: -1, text: "", transition: "", seconds: 0, query: "" },
     ] };
     res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ output_text: JSON.stringify(result) }));
   }); });
@@ -151,7 +152,7 @@ test("edit check with the AI second look: frames of the edit are sent, its fixes
     const piece = (id, seg, at) => ({ id, assetId: "talk", sourceStartUs: seg.startUs - 100_000, sourceEndUs: seg.endUs + 100_000, timelineStartUs: at, timelineEndUs: at + seg.endUs - seg.startUs + 200_000 });
     const p1 = piece("p1", a, 0); const p2 = piece("p2", b, p1.timelineEndUs);
     const tl = { durationUs: p2.timelineEndUs, tracks: [{ id: "v", kind: "video", clips: [p1, p2] }] };
-    const first = await server.inject({ method: "POST", url: "/v1/projects/" + projectId + "/revisions", payload: { timeline: tl } }); assert.equal(first.statusCode, 201, first.body);
+    const first = await server.inject({ method: "POST", url: "/v1/projects/" + projectId + "/revisions", payload: { timeline: tl, tailoring: { intent: "Graduate story", audience: "graduates", channel: "youtube", targetDurationUs: tl.durationUs, constraints: ["creation:story"] } } }); assert.equal(first.statusCode, 201, first.body);
     let rev = first.json().revision.revision;
     rev = (await server.inject({ method: "POST", url: "/v1/projects/" + projectId + "/revisions/" + rev + "/edit", payload: { operations: [{ type: "add-graphic", kind: "title", text: "Our programme", anchorAssetId: "talk", anchorSourceUs: a.startUs, durationUs: 2_500_000 }] } })).json().revision.revision;
     const result = (await server.inject({ method: "POST", url: url("check"), payload: { revision: rev, platform: "youtube", brief: "Reel for graduates" } })).json();
@@ -163,9 +164,10 @@ test("edit check with the AI second look: frames of the edit are sent, its fixes
     assert.match(labels, /Piece #1 visual/); assert.match(labels, /Under on-screen text #0/);
     assert.equal(review.input[0].content.filter((c) => c.type === "input_image").length, 3);
     const aiIssues = result.issues.filter((i) => i.source === "ai");
-    assert.equal(aiIssues.length, 5);
+    assert.equal(aiIssues.length, 6);
     assert.deepEqual(aiIssues.find((i) => i.title === "Open on the result").fix.operations, [{ type: "reorder-clips", clipIds: ["p2", "p1"] }]);
     assert.deepEqual(aiIssues.find((i) => i.title === "Softer entrance").fix.operations, [{ type: "set-clip-effects", clipId: "p2", transitionIn: "dissolve", transitionSeconds: 0.35 }]);
+    assert.deepEqual(aiIssues.find((i) => i.title === "Use relevant footage").replacement, { label: "Find a better visual", query: "Nigerian mentor helping young entrepreneur", clipId: "p2" });
     assert.equal(aiIssues.find((i) => i.title === "Bad index").fix, undefined, "an out-of-range piece gets no fix");
     const fixes = aiIssues.filter((i) => i.fix).map((i) => ({ title: i.title, atS: i.atS, operations: i.fix.operations }));
     const fixed = (await server.inject({ method: "POST", url: url("fix"), payload: { revision: rev, fixes } })).json();
@@ -332,6 +334,11 @@ test("storyboard check gives the mixed-media cut a real AI picture review", asyn
     assert.match(seen.audio, /voiceover/);
     assert.ok(checked.json().issues.some((issue) => issue.kind === "ai-set-transition"));
     assert.ok(!checked.json().issues.some((issue) => ["mid-word", "opens-mid-sentence", "ends-mid-sentence"].includes(issue.kind)), "the photo's source time is never matched to the talk transcript");
+    const replaced = await server.inject({ method: "POST", url: "/v1/projects/" + projectId + "/director/replace-visual", payload: { revision: 2, clipId: "photo-part", assetId: "talk" } });
+    assert.equal(replaced.statusCode, 201, replaced.body);
+    const changed = replaced.json().revision.timeline.tracks.find((track) => track.kind === "video").clips.find((clip) => clip.id === "photo-part");
+    assert.equal(changed.assetId, "talk"); assert.equal(changed.timelineEndUs - changed.timelineStartUs, 3_000_000);
+    assert.deepEqual(changed.transform, { transitionIn: "cut", look: "warm", zoom: "push" }, "the approved replacement preserves its timing and treatments");
   } finally { close(); }
 });
 

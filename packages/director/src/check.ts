@@ -14,6 +14,8 @@ export interface CheckIssue {
   /** Where in the edited video (seconds), when it is about one moment. */
   atS?: number;
   fix?: { label: string; operations: TimelineOperation[] };
+  /** A grounded stock-search brief for replacing one exact visual. Import and replacement still need approval. */
+  replacement?: { label: string; query: string; clipId: string };
   source: "rules" | "ai";
 }
 

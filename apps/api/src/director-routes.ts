@@ -268,7 +268,7 @@ export function registerCheckRoutes(server: FastifyInstance, dependencies: Direc
       const audioRoles = timeline.tracks.filter((t) => t.kind === "audio").flatMap((t) => t.clips).map((c) => String(c.transform?.role ?? "source audio"));
       try {
         const reviewed = await dependencies.director.review({
-          brief, platform, frames,
+          brief, platform, frames, canReplaceVisual: isStory,
           pieces: pieces.map((c) => {
             const asset = reviewAssets.find(a => a.id === c.assetId);
             const sourceSpeech = c.assetId === ctx.main.id && words.length ? textOf(c.sourceStartUs, c.sourceEndUs) : "";
@@ -290,6 +290,32 @@ export function registerCheckRoutes(server: FastifyInstance, dependencies: Direc
     const order = { fix: 0, warn: 1, info: 2 } as const;
     issues.sort((a, b) => order[a.severity] - order[b.severity] || (a.atS ?? 1e9) - (b.atS ?? 1e9));
     return { issues, ai, scanned: Boolean(media), sampledFrames: frames.length, ...(note ? { note } : {}) };
+  });
+
+  /** Replace one reviewed scene while preserving its edited duration, treatments and anchored overlays. */
+  server.post("/v1/projects/:projectId/director/replace-visual", async (request: FastifyRequest, reply: FastifyReply) => {
+    const ctx = await context(request, reply);
+    if (!ctx) return reply;
+    if (!ctx.revision.tailoring?.constraints?.includes("creation:story")) return error(reply, 422, "storyboard_required", "Visual replacement is available for narrated Storyboard scenes; source-footage speech must be recut instead");
+    const project = await dependencies.projects.get(ctx.projectId);
+    if (project && project.revision !== ctx.revision.revision) return error(reply, 409, "revision_conflict", "The edit changed; check again before replacing this scene");
+    const clipId = typeof ctx.body.clipId === "string" ? ctx.body.clipId : "";
+    const assetId = typeof ctx.body.assetId === "string" ? ctx.body.assetId : "";
+    const replacement = (await dependencies.assets.listForProject(ctx.projectId)).find((asset) => asset.id === assetId && (asset.kind === "video" || asset.kind === "image"));
+    const target = ctx.revision.timeline.tracks.filter((track) => track.kind === "video").flatMap((track) => track.clips).find((clip) => clip.id === clipId);
+    if (!clipId || !replacement || !target) return error(reply, 400, "invalid_request", "Choose an owned photo or video for the reviewed scene");
+    const durationUs = target.timelineEndUs - target.timelineStartUs;
+    if (replacement.kind === "video" && (!(replacement.durationUs && replacement.durationUs >= durationUs))) return error(reply, 422, "replacement_too_short", "That video is shorter than this scene. Choose a longer video or a photo.");
+    const sourceStartUs = 0; const sourceEndUs = durationUs;
+    const tracks = ctx.revision.timeline.tracks.map((track) => ({ ...track, clips: track.clips.map((clip) => {
+      if (clip.id === target.id && track.kind === "video") return { ...clip, assetId: replacement.id, sourceStartUs, sourceEndUs };
+      if (clip.transform?.anchorClipId !== target.id || typeof clip.transform.anchorSourceUs !== "number") return clip;
+      const relative = Math.max(0, Math.min(durationUs - 1, Number(clip.transform.anchorSourceUs) - target.sourceStartUs));
+      return { ...clip, transform: { ...clip.transform, anchorAssetId: replacement.id, anchorSourceUs: sourceStartUs + relative } };
+    }) }));
+    const revision = await dependencies.saveRevision({ projectId: ctx.projectId, createdBy: ctx.principal.userId, timeline: { ...ctx.revision.timeline, tracks }, acceptedProposalIds: ctx.revision.acceptedProposalIds, ...(ctx.revision.tailoring ? { tailoring: ctx.revision.tailoring } : {}) });
+    request.log.info({ projectId: ctx.projectId, revision: revision.revision, clipId, assetId: replacement.id }, "Reviewed visual replaced");
+    return reply.code(201).send({ revision, asset: replacement });
   });
 
   server.post("/v1/projects/:projectId/director/fix", async (request: FastifyRequest, reply: FastifyReply) => {

@@ -129,6 +129,8 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .suggestion-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
 .suggestion-body label { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 15px; color: var(--text); }
 .suggestion-body input:not([type]) { margin-top: 4px; }
+.review-replacement { width: 100%; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.review-replacement .stock { margin-top: 4px; }
 .what { color: var(--text-2); overflow-wrap: anywhere; }
 .fix-label { color: var(--accent); }
 .issue-fix { border-left: 3px solid var(--bad); }

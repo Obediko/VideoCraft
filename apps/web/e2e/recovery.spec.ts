@@ -15,7 +15,7 @@ try {
 
 async function editor(page:Page, screen='export', resume=false) {
   let editedTimeline:any;
-  const state={mixed:false,creativeFails:false,holdStock:false,releaseImport:null as null|(()=>void),importCalls:0,withImportedPhoto:false,savedEffects:[] as any[],libraryFails:false,editOps:[] as any[],revision:2,status:'queued',offline:false,calls:0,links:0,submissions:0,submissionKeys:[] as string[],loseNextSubmission:false,expired:false,uploadCalls:0,uploadExpired:false,uploadTypes:[] as string[],withTranscript:false,planApplied:false,assetLists:0,mediaFails:false,linkFails:false,mediaRequests:0,playbackRequests:0};
+  const state={mixed:false,reviewReplacement:false,replacementCalls:[] as any[],creativeFails:false,holdStock:false,releaseImport:null as null|(()=>void),importCalls:0,withImportedPhoto:false,savedEffects:[] as any[],libraryFails:false,editOps:[] as any[],revision:2,status:'queued',offline:false,calls:0,links:0,submissions:0,submissionKeys:[] as string[],loseNextSubmission:false,expired:false,uploadCalls:0,uploadExpired:false,uploadTypes:[] as string[],withTranscript:false,planApplied:false,assetLists:0,mediaFails:false,linkFails:false,mediaRequests:0,playbackRequests:0};
   const timeline=(seconds:number):any=>state.mixed?{durationUs:2e6,tracks:[{id:'v',kind:'video',clips:[{id:'c-photo',assetId:'stock-photo',sourceStartUs:0,sourceEndUs:1e6,timelineStartUs:0,timelineEndUs:1e6},{id:'c-video',assetId:'a',sourceStartUs:0,sourceEndUs:1e6,timelineStartUs:1e6,timelineEndUs:2e6}]}]}:({durationUs:seconds*1e6,tracks:[{id:'v',kind:'video',clips:[{id:'c',assetId:'a',sourceStartUs:0,sourceEndUs:seconds*1e6,timelineStartUs:0,timelineEndUs:seconds*1e6}]}]});
   await page.addInitScript(({screen,resume})=>{
     localStorage.setItem('videocraft.lastProject','p');localStorage.setItem('videocraft.lastScreen',screen);
@@ -52,6 +52,8 @@ async function editor(page:Page, screen='export', resume=false) {
     else if(path.endsWith('/creative/plan')){if(state.creativeFails){status=502;body={error:{message:'Creative planning is unavailable. Try again.'}};}else body={revision:state.revision,source:'ai',sampledFrames:2,note:'Planned from the script, timeline and sampled source frames.',proposals:[{id:'creative',title:'Mark the insight',reason:'The second scene introduces the key idea.',atUs:1e6,recipe:parseEffectRecipe({presetId:'key-point',text:'City insight',durationS:1})}]};}
     else if(path.endsWith('/director/plan'))body={plan:{source:'ai',summary:'Add the approved picture without music',suggestions:[{id:'stock',kind:'stock',title:'Approved picture',query:'freedom',atS:0,durationS:1,mode:'full'}]}};
     else if(path.endsWith('/director/apply')){state.planApplied=true;state.revision++;const edited=timeline(2);edited.tracks.push({id:'o',kind:'overlay',clips:[{id:'photo-cutaway',assetId:'stock-photo',sourceStartUs:0,sourceEndUs:1e6,timelineStartUs:0,timelineEndUs:1e6,transform:{role:'broll',mode:'full'}}]});body={revision:{revision:state.revision,timeline:edited}};}
+    else if(path.endsWith('/director/check'))body={ai:true,scanned:false,sampledFrames:2,note:'AI picture review used 2 labelled frames.',issues:state.replacementCalls.length?[]:[{id:'ai-replace',severity:'warn',kind:'ai-replace-visual',title:'Use a locally grounded scene',detail:'The current visual does not support the location in the brief.',atS:0,source:'ai',replacement:{label:'Find a better visual',query:'Nigerian community mentor helping entrepreneur',clipId:'c'}}]};
+    else if(path.endsWith('/director/replace-visual')){state.replacementCalls.push(req.postDataJSON());state.revision++;state.withImportedPhoto=true;const changed=timeline(2);changed.tracks[0].clips[0].assetId='stock-photo';body={revision:{revision:state.revision,timeline:changed},asset:{id:'stock-photo',kind:'image',metadata:{filename:'Nigerian community support.jpg'}}};status=201;}
     else if(/\/revisions\/\d+\/restore$/.test(path)) {
       const expected=req.postDataJSON().expectedRevision;
       if(expected!==state.revision){status=409;body={error:{message:'Newer edit'}};}
@@ -66,7 +68,8 @@ async function editor(page:Page, screen='export', resume=false) {
       state.status='queued';body={job:{id:'job',status:'queued',progress:0}};
     }
     else if(path.endsWith('/cancel')){state.status='cancelled';body={job:{id:'job',status:'cancelled',progress:5}};}
-    else if(path.endsWith('/stock/sources'))body={video:[],photo:[],gif:[]};
+    else if(path.endsWith('/stock/search'))body={items:[{provider:'pexels',id:'11',kind:'photo',thumbUrl:'http://localhost:8080/stock.png',width:100,height:100,title:'Community support',credit:'Photographer'}]};
+    else if(path.endsWith('/stock/sources'))body=state.reviewReplacement?{video:[],photo:['pexels'],gif:[]}:{video:[],photo:[],gif:[]};
     else if(path.endsWith('/preferences'))body={samples:0,summary:'',counts:{}};
     await route.fulfill({status,headers,contentType:'application/json',body:JSON.stringify(body)});
   });
@@ -172,6 +175,18 @@ test('applying a Director plan without music loads the approved photo into the p
   await expect(page.locator('img.live-broll')).toHaveCount(1);
   await expect(page.locator('img.live-broll')).toHaveJSProperty('naturalWidth',1);
   await expect(page.locator('video.live-broll')).toHaveCount(0);
+});
+
+test('an AI review finding scouts stock and replaces only the approved scene',async({page})=>{
+  const state=await editor(page,'check');state.reviewReplacement=true;
+  await page.goto('/');
+  await page.getByRole('button',{name:'Check my edit',exact:true}).click();
+  await expect(page.getByText('Use a locally grounded scene',{exact:true})).toBeVisible();
+  await expect(page.getByText('AI search brief:',{exact:false})).toContainText('Nigerian community mentor helping entrepreneur');
+  await page.getByRole('button',{name:'Add Community support from Pexels',exact:true}).click();
+  await expect.poll(()=>state.replacementCalls.length).toBe(1);
+  expect(state.replacementCalls[0]).toMatchObject({revision:2,clipId:'c',assetId:'stock-photo'});
+  await expect(page.getByText('Nothing to fix. Ready to export.',{exact:true})).toBeVisible();
 });
 
 
