@@ -5,14 +5,14 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import type { Asset, ProjectRevision, Timeline, TimelineClip, TranscriptSegment } from "@videocraft/domain";
+import { CLIP_ZOOMS, COLOUR_LOOKS, TRANSITIONS, type Asset, type ClipZoom, type ColourLook, type ProjectRevision, type Timeline, type TimelineClip, type TranscriptSegment, type Transition } from "@videocraft/domain";
 import type { AssetRepository, ProjectRepository, RevisionRepository } from "@videocraft/application";
 import { applyTimelineOperations } from "@videocraft/domain";
 import { composeMusicAsset } from "./music-routes.js";
 import type { ObjectStorage } from "@videocraft/storage";
 import { criticInstructions, scriptPreferences, scriptQualityIssues, writerInstructions, type ScriptPreferences } from "./director-playbook.js";
 
-export type StoryScene = { assetId: string; startS: number; durationS: number; text: string; visual: string; search?: string };
+export type StoryScene = { assetId: string; startS: number; durationS: number; text: string; visual: string; search?: string; transition?: Transition; transitionSeconds?: number; look?: ColourLook; zoom?: ClipZoom };
 
 const CAMERA_WORDS = new Set("a an the and or of to in on at with into onto over under from by for as is are be then while their his her its our your this that these those same shot shots close-up closeup close up wide medium tracking lateral smooth slow push pull pan tilt zoom frame framing angle eye level depth field shallow cut match-cut match cinematic camera lens focus light lighting daylight sunlight warm soft natural gentle gently soundscape ambience music score footsteps shot vignette opening scene continue continues continuing end ends hold holds brief briefly glimpse glimpses beat moment authentic realistic dignified restrained understated exaggerated distress shows show showing reveals reveal genuine exchange exchanges small little very more most some one two three first second third modest beautiful quiet sunlit sunny morning evening afternoon residential shaded filled school-age naturally moving background foreground pausing pauses beside near through".split(" "));
 /** A few plain words a stock library can match, from a cinematic scene description ("girl homework courtyard nigeria"). */
@@ -36,7 +36,7 @@ export interface CreationDependencies {
   clock(): string;
 }
 
-/** Bounded samples, not a claim to have watched every second. Unknown/large uploads are explicitly skipped. */
+/** Bounded temporal contact sheet spanning each video, not a claim of frame-by-frame review. */
 export async function sampleStoryFrames(d: Pick<CreationDependencies, "storage" | "ffmpeg">, assets: Asset[], moments?: Array<{ assetId: string; atS: number }>): Promise<StoryFrame[]> {
   const frames: StoryFrame[] = []; let bytes = 0;
   const signal = AbortSignal.timeout(15_000);
@@ -49,7 +49,9 @@ export async function sampleStoryFrames(d: Pick<CreationDependencies, "storage" 
     try {
       const path = d.storage.downloadToFile ? join(directory, "source.media") : d.storage.resolve(asset.storageKey);
       if (d.storage.downloadToFile) await d.storage.downloadToFile(asset.storageKey, path, { signal });
-      const times = moments ? [...new Set(moments.filter(m => m.assetId === asset.id && Number.isFinite(m.atS) && m.atS >= 0).slice(0, 2).map(m => asset.kind === "image" ? 0 : m.atS))] : asset.kind === "image" ? [0] : [0, Math.max(0, (asset.durationUs ?? 0) / 2e6)];
+      const seconds = Math.max(0, (asset.durationUs ?? 0) / 1e6);
+      const sampleCount = Math.min(6, Math.max(3, Math.ceil(seconds / 15) + 1));
+      const times: number[] = moments ? [...new Set(moments.filter(m => m.assetId === asset.id && Number.isFinite(m.atS) && m.atS >= 0).slice(0, 6).map(m => asset.kind === "image" ? 0 : m.atS))] : asset.kind === "image" ? [0] : seconds > 0 ? Array.from({ length: sampleCount }, (_, i) => i * Math.max(0, seconds - 0.05) / Math.max(1, sampleCount - 1)) : [0];
       for (const atS of times) {
         const jpeg = await new Promise<Buffer>((resolve, reject) => {
           execFile(d.ffmpeg ?? "ffmpeg", ["-v", "error", "-threads", "1", "-filter_threads", "1", "-ss", atS.toFixed(3), "-i", path, "-frames:v", "1", "-vf", "scale=512:512:force_original_aspect_ratio=decrease", "-q:v", "7", "-threads", "1", "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1"], { timeout: 10_000, maxBuffer: 1024 ** 2, signal, encoding: "buffer" }, (err, stdout) => err ? reject(err) : resolve(stdout));
@@ -76,7 +78,11 @@ export function storyScenes(value: unknown, assets: Asset[], allowMissing = fals
     if (typeof s.durationS !== "number" || !Number.isFinite(s.durationS) || s.durationS < 0.5 || s.durationS > 60) throw new Error("Scenes must last between 0.5 and 60 seconds");
     if (a?.kind === "image" && s.startS !== 0) throw new Error("Photos must start at zero");
     if (a?.kind === "video" && (!a.durationUs || Math.round((s.startS + s.durationS) * 1e6) > a.durationUs)) throw new Error("A scene extends beyond its video");
-    return { assetId: s.assetId, startS: s.startS, durationS: s.durationS, text: typeof s.text === "string" ? s.text.slice(0, 120) : "", visual: typeof s.visual === "string" ? s.visual.slice(0, 300) : "", ...(typeof s.search === "string" && s.search.trim() ? { search: s.search.trim().slice(0, 80) } : typeof s.visual === "string" && s.visual.trim() ? { search: stockQuery(s.visual) } : {}) };
+    const transition = typeof s.transition === "string" && TRANSITIONS.includes(s.transition as Transition) ? s.transition as Transition : "cut";
+    const transitionSeconds = Number(s.transitionSeconds);
+    const look = typeof s.look === "string" && COLOUR_LOOKS.includes(s.look as ColourLook) ? s.look as ColourLook : "none";
+    const zoom = typeof s.zoom === "string" && CLIP_ZOOMS.includes(s.zoom as ClipZoom) ? s.zoom as ClipZoom : "none";
+    return { assetId: s.assetId, startS: s.startS, durationS: s.durationS, text: typeof s.text === "string" ? s.text.slice(0, 120) : "", visual: typeof s.visual === "string" ? s.visual.slice(0, 300) : "", ...(typeof s.search === "string" && s.search.trim() ? { search: s.search.trim().slice(0, 80) } : typeof s.visual === "string" && s.visual.trim() ? { search: stockQuery(s.visual) } : {}), transition, ...(transition !== "cut" ? { transitionSeconds: Number.isFinite(transitionSeconds) ? Math.max(0.1, Math.min(2, transitionSeconds)) : 0.5 } : {}), look, zoom };
   });
   if (scenes.reduce((n, s) => n + s.durationS, 0) > 600) throw new Error("Stories can last up to ten minutes");
   return scenes;
@@ -88,7 +94,7 @@ export function storyTimeline(scenes: StoryScene[], narration?: Asset, sceneText
   const add = (s: StoryScene, durationUs = Math.round(s.durationS * 1e6)) => {
     if (clips.length >= 40) throw new Error("Narration needs too many repeated clips. Lengthen the final scene or finish with a photo.");
     const start = Math.round(s.startS * 1e6);
-    clips.push({ id: randomUUID(), assetId: s.assetId, sourceStartUs: start, sourceEndUs: start + durationUs, timelineStartUs: at, timelineEndUs: at + durationUs, reason: s.visual || "Storyboard scene", transform: { background: "none", ...(narration ? { muteSource: true } : {}) } });
+    clips.push({ id: randomUUID(), assetId: s.assetId, sourceStartUs: start, sourceEndUs: start + durationUs, timelineStartUs: at, timelineEndUs: at + durationUs, reason: s.visual || "Storyboard scene", transform: { background: "none", transitionIn: clips.length ? (s.transition ?? "cut") : "cut", ...(s.transition && s.transition !== "cut" ? { transitionSeconds: s.transitionSeconds ?? 0.5 } : {}), ...(s.look && s.look !== "none" ? { look: s.look } : {}), ...(s.zoom && s.zoom !== "none" ? { zoom: s.zoom } : {}), ...(narration ? { muteSource: true } : {}) } });
     at += durationUs;
   };
   scenes.forEach(s => add(s));
@@ -134,7 +140,8 @@ export function registerCreationRoutes(server: FastifyInstance, d: CreationDepen
       const input: StoryInput = { brief, seconds, assets: media, frames, preferences: scriptPreferences(b.preferences) };
       const raw = await d.plan(input) as Record<string, unknown>;
       plan = { source: "ai", summary: typeof raw.summary === "string" ? raw.summary.slice(0, 1000) : "Review your storyboard", script: typeof raw.script === "string" ? raw.script.slice(0, 3000) : "", scenes: storyScenes(raw.scenes, assets, true), ...(typeof raw.selectedApproach === "string" ? { selectedApproach: raw.selectedApproach.slice(0, 120) } : {}), ...(typeof raw.critique === "string" ? { critique: raw.critique.slice(0, 1000) } : {}) };
-      if (assets.length) plan.note = "Visual samples from " + new Set(frames.map(f => f.assetId)).size + " of " + assets.length + " selected media items informed this plan. Large uploads, missing size metadata, and items beyond the sampling limit use filenames and existing transcripts. Review every scene before assembling.";
+      if (assets.length) plan.note = frames.length + " temporal samples across " + new Set(frames.map(f => f.assetId)).size + " of " + assets.length + " selected media items informed this plan. Large uploads, missing size metadata, and items beyond the sampling limit use filenames and existing transcripts. Review every scene before assembling.";
+      request.log.info({ requestId: request.id, projectId: c.projectId, stage: "storyboard_plan", source: plan.source, selectedAssets: assets.length, sampledAssets: new Set(frames.map(frame => frame.assetId)).size, sampledFrames: frames.length, scenes: plan.scenes.length }, "Storyboard plan completed");
     } catch (err) { request.log.warn({ err, projectId: c.projectId }, "Storyboard planning failed"); plan = { ...fallback, note: "AI planning was unavailable. Your media is kept in its selected order; you can edit the storyboard below." }; }
     return { plan };
   });
@@ -179,7 +186,7 @@ export function storyboardPlanner(options: { apiKey: string; model: string; endp
     const { frames, ...description } = input;
     const content: Array<Record<string, unknown>> = [{ type: "input_text", text: JSON.stringify(description) }];
     for (const frame of frames) content.push({ type: "input_text", text: "Asset " + frame.assetId + ", frame at " + frame.atS.toFixed(2) + " seconds" }, { type: "input_image", image_url: "data:image/jpeg;base64," + frame.jpegBase64, detail: "low" });
-    const fields = { assetId: { type: "string" }, startS: { type: "number" }, durationS: { type: "number" }, text: { type: "string" }, visual: { type: "string" }, search: { type: "string" } };
+    const fields = { assetId: { type: "string" }, startS: { type: "number" }, durationS: { type: "number" }, text: { type: "string" }, visual: { type: "string" }, search: { type: "string" }, transition: { type: "string", enum: [...TRANSITIONS] }, transitionSeconds: { type: "number" }, look: { type: "string", enum: [...COLOUR_LOOKS] }, zoom: { type: "string", enum: [...CLIP_ZOOMS] } };
     const sceneSchema = { type: "array", items: { type: "object", additionalProperties: false, properties: fields, required: Object.keys(fields) } };
     const endpoint = (options.endpoint ?? "https://api.openai.com/v1").replace(/\/$/, "") + "/responses";
     const ask = async (instructions: string, requestContent: Array<Record<string, unknown>>, name: string, schema: unknown) => {

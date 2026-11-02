@@ -237,15 +237,16 @@ export function App() {
     const missing = faceAssets.filter((id) => !faceTracks[id]);
     if (!token || !projectId || missing.length === 0) return;
     let cancelled = false; let timer: ReturnType<typeof setTimeout> | undefined;
-    for (const id of missing) {
-      request("/v1/projects/" + projectId + "/assets/" + id + "/faces")
-        .then((result) => {
-          if (cancelled) return;
-          if (result.pending) { timer = setTimeout(() => setFaceRetry((n) => n + 1), (result.retryAfterSeconds ?? 5) * 1000); return; }
-          if (typeof result.step === "number" && Array.isArray(result.boxes)) setFaceTracks((current) => ({ ...current, [id]: { step: result.step, boxes: result.boxes } }));
-        })
-        .catch(() => undefined);
-    }
+    // Queue expensive analysis. Parallel requests exhausted the shared API limit on projects with many clips.
+    void (async () => { for (const id of missing) {
+      if (cancelled) break;
+      try {
+        const result = await request("/v1/projects/" + projectId + "/assets/" + id + "/faces");
+        if (cancelled) break;
+        if (result.pending) { timer = setTimeout(() => setFaceRetry((n) => n + 1), (result.retryAfterSeconds ?? 5) * 1000); break; }
+        if (typeof result.step === "number" && Array.isArray(result.boxes)) setFaceTracks((current) => ({ ...current, [id]: { step: result.step, boxes: result.boxes } }));
+      } catch { if (!cancelled) timer = setTimeout(() => setFaceRetry((n) => n + 1), 8_000); break; }
+    } })();
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, [token, projectId, faceAssets.join(","), faceRetry]);
   // Person cut-outs for previewing background changes and cutaways behind you (made once per video, in the background).

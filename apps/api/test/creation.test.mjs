@@ -110,6 +110,15 @@ test("repeated photos keep separate scene text and narration survives a later ti
   assert.equal(reordered.tracks.find(t => t.kind === "audio").clips[0].timelineStartUs, 0, "whole-story narration stays at zero after a reorder");
 });
 
+test("storyboard finishing choices are validated and assembled into the first cut", () => {
+  const planned = storyScenes([{ ...scenes[0], transition: "not-real", look: "radioactive", zoom: "fly", transitionSeconds: 99 }, { ...scenes[1], transition: "dissolve", transitionSeconds: 0.7, look: "warm", zoom: "push" }], [video, photo]);
+  assert.deepEqual([planned[0].transition, planned[0].look, planned[0].zoom], ["cut", "none", "none"]);
+  const timeline = storyTimeline(planned, undefined, false, [video, photo]);
+  const clip = timeline.tracks[0].clips[1];
+  assert.equal(clip.transform.transitionIn, "dissolve"); assert.equal(clip.transform.transitionSeconds, 0.7);
+  assert.equal(clip.transform.look, "warm"); assert.equal(clip.transform.zoom, "push");
+});
+
 test("mixed video and photo storyboard renders the approved visual, music and complete human narration to a decodable MP4", async () => {
   const s = await setup();
   try {
@@ -173,7 +182,9 @@ test("story planning sends real labelled photo/video samples to the model and sk
     const media = [{ ...photo, metadata: { filename: "IMG_001.png", sizeBytes: statSync(image).size } }, { ...video, metadata: { filename: "IMG_002.mp4", sizeBytes: statSync(movie).size } }, { ...photo, id: "large", metadata: { sizeBytes: 51 * 1024 ** 2 } }, { ...photo, id: "unknown", metadata: {} }];
     const staged = [];
     const frames = await sampleStoryFrames({ storage: { resolve: key => key.includes("video") ? movie : image, downloadToFile: async (key, path, options) => { assert.ok(options.signal); staged.push(key); const { copyFile } = await import("node:fs/promises"); await copyFile(key.includes("video") ? movie : image, path); } } }, media.map(a => ({ ...a, storageKey: a.id + ".media" })));
-    assert.deepEqual(frames.map(f => [f.assetId, f.atS]), [["photo", 0], ["video", 0], ["video", 0.6]]);
+    assert.equal(frames[0].assetId, "photo"); assert.equal(frames[0].atS, 0);
+    assert.deepEqual(frames.slice(1).map(f => f.assetId), ["video", "video", "video"]);
+    assert.ok(frames[1].atS === 0 && frames[2].atS > 0 && frames[3].atS > frames[2].atS, "video samples cover its duration");
     assert.equal(staged.length, 2); assert.ok(frames.every(f => Buffer.from(f.jpegBase64, "base64").subarray(0, 2).equals(Buffer.from([255, 216]))));
     await new Promise(resolve => http.listen(0, "127.0.0.1", resolve));
     const planned = await storyboardPlanner({ apiKey: "test", model: "vision-model", endpoint: "http://127.0.0.1:" + http.address().port })({ brief: "Tell a story", seconds: 10, assets: [], frames });
@@ -181,8 +192,8 @@ test("story planning sends real labelled photo/video samples to the model and sk
     assert.equal(planned.selectedApproach, "Visual");
     assert.equal(requests.length, 2, "drafting and independent critique are separate calls");
     const content = requests[0].input[0].content;
-    assert.equal(content.filter(c => c.type === "input_image").length, 3);
-    assert.ok(content.some(c => c.type === "input_text" && c.text.includes("Asset video, frame at 0.60")));
+    assert.equal(content.filter(c => c.type === "input_image").length, 4);
+    assert.ok(content.some(c => c.type === "input_text" && c.text.includes("Asset video, frame at")));
     assert.equal(content[0].text.includes(frames[0].jpegBase64), false, "images are vision inputs, not base64 pasted into prompt text");
   } finally { if (http.listening) await new Promise(resolve => http.close(resolve)); rmSync(directory, { recursive: true, force: true }); }
 });

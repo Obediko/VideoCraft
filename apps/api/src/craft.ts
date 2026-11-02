@@ -14,7 +14,8 @@ Scenes (each must be findable in a stock library or filmable on a phone)
 - One scene = one shot = one action: who, doing what, where. Plain present tense, one or two short sentences, e.g. "A girl does homework at a plastic table in a courtyard; an older woman leans in and points at the page."
 - Vary shot size from scene to scene: wide to show the place, medium for the action, close for hands and faces at the emotional beat.
 - Keep shots short in short-form (2-4 s); give the emotional beat a little longer.
-- No camera or lighting jargon, no adjective piles ("cinematic", "golden", "soft warm light", "beautiful", "authentic", "dignified"), no instructions about transitions or music in the scene.
+- No camera or lighting jargon and no adjective piles ("cinematic", "golden", "soft warm light", "beautiful", "authentic", "dignified"). Keep the visual description factual; choose transition, look and motion only in their structured fields.
+- Default to a clean cut. Use a dissolve or dip only when it expresses a real passage of time, place or feeling; never add decoration to every cut. Use motion sparingly on stills, and keep looks consistent across adjacent scenes.
 - People look like real people in real places; avoid staged, glossy, stock-cliche set-ups (handshakes in front of laptops, people pointing at screens, light bulbs, globes).
 Narration (written for the ear)
 - Talk like one person telling a friend: short sentences, everyday words, contractions, one idea per sentence. About 2-2.5 words per second of video.
