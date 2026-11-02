@@ -33,6 +33,8 @@ export interface CheckInput {
   platform?: "tiktok" | "youtube" | "square" | string;
   targetSeconds?: number;
   media?: MediaSignals;
+  /** Check every visual piece when a storyboard contains several source assets. */
+  allVisuals?: boolean;
 }
 
 const ENDS_SENTENCE = /[.!?…]["')\]]?$/;
@@ -44,7 +46,7 @@ export function checkEdit(input: CheckInput): CheckIssue[] {
   const add = (issue: Omit<CheckIssue, "id" | "source">) => issues.push({ ...issue, id: issue.kind + "-" + issues.length, source: "rules" });
   const words = [...input.words].sort((a, b) => a.startUs - b.startUs);
   const video = clipsOf(input.timeline, "video");
-  const mine = video.filter((c) => c.assetId === input.assetId);
+  const mine = input.allVisuals ? video : video.filter((c) => c.assetId === input.assetId);
   const captions = clipsOf(input.timeline, "caption");
   const overlays = clipsOf(input.timeline, "overlay");
   const toTimeline = (clip: TimelineClip, sourceUs: number) => clip.timelineStartUs + (sourceUs - clip.sourceStartUs);
@@ -57,37 +59,40 @@ export function checkEdit(input: CheckInput): CheckIssue[] {
   if (mostlyStill) add({ severity: "info", kind: "still", title: "The picture is still for much of the video", detail: Math.round((100 * stillUs) / keptUs) + "% of it barely moves. Fine for slides or a screen recording; for a talk, cutaways or a second angle keep it lively." });
 
   mine.forEach((clip, index) => {
+    // Transcript timestamps belong only to the main source. A photo or second video may also start at source
+    // zero, but that does not make the main recording's words part of that scene.
+    const clipWords = clip.assetId === input.assetId ? words : [];
     const len = clip.sourceEndUs - clip.sourceStartUs;
     if (len < 1_000_000 && mine.length > 1) {
       add({ severity: "fix", kind: "short-piece", title: "A " + s(len) + " s piece at " + s(clip.timelineStartUs) + " s feels like a glitch", detail: "Very short pieces between cuts read as a mistake.", atS: s(clip.timelineStartUs), fix: { label: "Remove this piece", operations: [{ type: "remove-clip", clipId: clip.id, reason: "Edit check: too short" }] } });
       return;
     }
-    const inside = words.filter((w) => w.endUs > clip.sourceStartUs && w.startUs < clip.sourceEndUs);
+    const inside = clipWords.filter((w) => w.endUs > clip.sourceStartUs && w.startUs < clip.sourceEndUs);
     // Cut in the middle of a word, at either end.
     let start = clip.sourceStartUs; let end = clip.sourceEndUs;
-    const atStart = words.find((w) => w.startUs < clip.sourceStartUs - 40_000 && w.endUs > clip.sourceStartUs + 40_000);
+    const atStart = clipWords.find((w) => w.startUs < clip.sourceStartUs - 40_000 && w.endUs > clip.sourceStartUs + 40_000);
     // A clip that already runs to the end of the recording cannot keep more of a word the recogniser timed past it.
-    const atEnd = clip.sourceEndUs >= input.sourceDurationUs - 50_000 ? undefined : words.find((w) => w.startUs < clip.sourceEndUs - 40_000 && w.endUs > clip.sourceEndUs + 40_000);
+    const atEnd = clip.sourceEndUs >= input.sourceDurationUs - 50_000 ? undefined : clipWords.find((w) => w.startUs < clip.sourceEndUs - 40_000 && w.endUs > clip.sourceEndUs + 40_000);
     // A little air around the word, but never into the neighbouring word.
     // Words that run together or overlap (recognisers often stretch or overlap timings) are kept as one block,
     // so the new cut always lands in a real gap of at least 60 ms.
     if (atStart) {
       let blockStart = atStart.startUs; let prevEnd = -Infinity;
-      for (const w of [...words].filter((x) => x.startUs < atStart.startUs).reverse()) {
+      for (const w of [...clipWords].filter((x) => x.startUs < atStart.startUs).reverse()) {
         if (w.endUs > blockStart - 60_000) blockStart = Math.min(blockStart, w.startUs); else { prevEnd = w.endUs; break; }
       }
       start = Math.max(0, blockStart - 80_000, prevEnd + 20_000);
     }
     if (atEnd) {
       let blockEnd = atEnd.endUs; let nextStart = Infinity;
-      for (const w of words.filter((x) => x.startUs > atEnd.startUs || (x.startUs === atEnd.startUs && x !== atEnd))) {
+      for (const w of clipWords.filter((x) => x.startUs > atEnd.startUs || (x.startUs === atEnd.startUs && x !== atEnd))) {
         if (w.startUs < blockEnd + 60_000) blockEnd = Math.max(blockEnd, w.endUs); else { nextStart = w.startUs; break; }
       }
       end = Math.min(input.sourceDurationUs, blockEnd + 150_000, nextStart - 20_000);
     }
     if (atStart || atEnd) {
       const which = [atStart && "“" + atStart.text + "” at the start", atEnd && "“" + atEnd.text + "” at the end"].filter(Boolean).join(" and ");
-      add({ severity: "fix", kind: "mid-word", title: "Cut in the middle of a word", detail: "The cut clips " + which + ".", atS: s(atStart ? clip.timelineStartUs : clip.timelineEndUs), fix: { label: "Keep the whole word", operations: [{ type: "trim-clip", clipId: clip.id, sourceStartUs: Math.round(start), sourceEndUs: Math.round(end) }, ...captionsFor(input.assetId, words, [{ startUs: start, endUs: clip.sourceStartUs }, { startUs: clip.sourceEndUs, endUs: end }])] } });
+      add({ severity: "fix", kind: "mid-word", title: "Cut in the middle of a word", detail: "The cut clips " + which + ".", atS: s(atStart ? clip.timelineStartUs : clip.timelineEndUs), fix: { label: "Keep the whole word", operations: [{ type: "trim-clip", clipId: clip.id, sourceStartUs: Math.round(start), sourceEndUs: Math.round(end) }, ...captionsFor(input.assetId, clipWords, [{ startUs: start, endUs: clip.sourceStartUs }, { startUs: clip.sourceEndUs, endUs: end }])] } });
     }
     // Dead air inside a kept piece.
     for (let i = 1; i < inside.length; i += 1) {
@@ -104,7 +109,7 @@ export function checkEdit(input: CheckInput): CheckIssue[] {
         if (b - a < 400_000) continue;
         const atEdgeStart = a - clip.sourceStartUs < 300_000; const atEdgeEnd = clip.sourceEndUs - b < 300_000;
         // Cut out the bad picture without clipping a word on either side of it.
-        const afterBad = words.find((w) => w.startUs >= b - 40_000); const beforeBad = words.filter((w) => w.endUs <= a + 40_000).at(-1);
+        const afterBad = clipWords.find((w) => w.startUs >= b - 40_000); const beforeBad = clipWords.filter((w) => w.endUs <= a + 40_000).at(-1);
         const trimmed = atEdgeStart ? { start: afterBad ? Math.max(b, afterBad.startUs - 60_000) : b, end: clip.sourceEndUs } : atEdgeEnd ? { start: clip.sourceStartUs, end: beforeBad ? Math.min(a, beforeBad.endUs + 60_000) : a } : undefined;
         // Frozen picture is normal for slides and screen recordings, so it is only ever a suggestion.
         add({ severity: trimmed && label === "black" ? "fix" : "warn", kind: label, title: (label === "black" ? "Black screen" : "Frozen picture") + " for " + s(b - a) + " s at " + s(toTimeline(clip, a)) + " s", detail: label === "black" ? "Viewers think the video broke." : "The picture does not move while the sound goes on. Fine for slides; if the camera froze, " + (trimmed ? "cut it out." : "cover it with a cutaway."), atS: s(toTimeline(clip, a)), ...(trimmed && trimmed.end - trimmed.start >= 500_000 ? { fix: { label: "Cut it out", operations: [{ type: "trim-clip" as const, clipId: clip.id, sourceStartUs: Math.round(trimmed.start), sourceEndUs: Math.round(trimmed.end) }] } } : {}) });
@@ -112,19 +117,19 @@ export function checkEdit(input: CheckInput): CheckIssue[] {
     }
     // Opening and ending mid-sentence.
     if (index === 0) {
-      const first = inside[0]; const before = words.filter((w) => w.endUs <= (first?.startUs ?? 0)).at(-1);
+      const first = inside[0]; const before = clipWords.filter((w) => w.endUs <= (first?.startUs ?? 0)).at(-1);
       if (first && before && first.startUs - before.endUs < 350_000 && !ENDS_SENTENCE.test(before.text)) {
-        const sentenceStart = [...words].reverse().find((w, j, arr) => w.startUs < first.startUs && (j === arr.length - 1 || ENDS_SENTENCE.test(arr[j + 1]!.text) || arr[j + 1]!.endUs < w.startUs - 600_000));
-        const from = sentenceStart ? Math.max(0, sentenceStart.startUs - 120_000, (words.filter((w) => w.endUs <= sentenceStart.startUs).at(-1)?.endUs ?? -Infinity) + 20_000) : undefined;
-        add({ severity: from !== undefined && first.startUs - from <= 5_000_000 ? "fix" : "warn", kind: "opens-mid-sentence", title: "Opens mid-sentence", detail: "The first words continue a sentence the viewer never heard (“…" + before.text + " " + first.text + "”).", atS: 0, ...(from !== undefined && first.startUs - from <= 5_000_000 ? { fix: { label: "Start at the beginning of the sentence", operations: [{ type: "trim-clip" as const, clipId: clip.id, sourceStartUs: Math.round(from), sourceEndUs: clip.sourceEndUs }, ...captionsFor(input.assetId, words, [{ startUs: from, endUs: clip.sourceStartUs }])] } } : {}) });
+        const sentenceStart = [...clipWords].reverse().find((w, j, arr) => w.startUs < first.startUs && (j === arr.length - 1 || ENDS_SENTENCE.test(arr[j + 1]!.text) || arr[j + 1]!.endUs < w.startUs - 600_000));
+        const from = sentenceStart ? Math.max(0, sentenceStart.startUs - 120_000, (clipWords.filter((w) => w.endUs <= sentenceStart.startUs).at(-1)?.endUs ?? -Infinity) + 20_000) : undefined;
+        add({ severity: from !== undefined && first.startUs - from <= 5_000_000 ? "fix" : "warn", kind: "opens-mid-sentence", title: "Opens mid-sentence", detail: "The first words continue a sentence the viewer never heard (“…" + before.text + " " + first.text + "”).", atS: 0, ...(from !== undefined && first.startUs - from <= 5_000_000 ? { fix: { label: "Start at the beginning of the sentence", operations: [{ type: "trim-clip" as const, clipId: clip.id, sourceStartUs: Math.round(from), sourceEndUs: clip.sourceEndUs }, ...captionsFor(input.assetId, clipWords, [{ startUs: from, endUs: clip.sourceStartUs }])] } } : {}) });
       }
     }
     if (index === mine.length - 1) {
       const last = inside.at(-1);
       if (last && !ENDS_SENTENCE.test(last.text)) {
-        const finish = words.find((w) => w.startUs >= last.startUs && ENDS_SENTENCE.test(w.text));
-        const to = finish && finish.endUs - last.endUs <= 6_000_000 ? Math.min(input.sourceDurationUs, finish.endUs + 300_000, (words.find((w) => w.startUs >= finish.endUs)?.startUs ?? Infinity) - 20_000) : undefined;
-        add({ severity: to ? "fix" : "warn", kind: "ends-mid-sentence", title: "Ends mid-sentence", detail: "The video stops on “" + last.text + "”; finishing the thought makes a cleaner ending.", atS: s(clip.timelineEndUs), ...(to ? { fix: { label: "Finish the sentence (+" + s(to - clip.sourceEndUs) + " s)", operations: [{ type: "trim-clip" as const, clipId: clip.id, sourceStartUs: clip.sourceStartUs, sourceEndUs: Math.round(to) }, ...captionsFor(input.assetId, words, [{ startUs: clip.sourceEndUs, endUs: to }])] } } : {}) });
+        const finish = clipWords.find((w) => w.startUs >= last.startUs && ENDS_SENTENCE.test(w.text));
+        const to = finish && finish.endUs - last.endUs <= 6_000_000 ? Math.min(input.sourceDurationUs, finish.endUs + 300_000, (clipWords.find((w) => w.startUs >= finish.endUs)?.startUs ?? Infinity) - 20_000) : undefined;
+        add({ severity: to ? "fix" : "warn", kind: "ends-mid-sentence", title: "Ends mid-sentence", detail: "The video stops on “" + last.text + "”; finishing the thought makes a cleaner ending.", atS: s(clip.timelineEndUs), ...(to ? { fix: { label: "Finish the sentence (+" + s(to - clip.sourceEndUs) + " s)", operations: [{ type: "trim-clip" as const, clipId: clip.id, sourceStartUs: clip.sourceStartUs, sourceEndUs: Math.round(to) }, ...captionsFor(input.assetId, clipWords, [{ startUs: clip.sourceEndUs, endUs: to }])] } } : {}) });
       }
     }
   });

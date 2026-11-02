@@ -30,13 +30,13 @@ Set `IMAGE_MODEL` to an image model available to the server's OpenAI account to 
 
 The server validates ownership, media kind, finite source ranges, video duration, photo start zero, 1–40 scenes, 0.5–60 seconds per scene, total story duration up to ten minutes, and known narration duration. Stale revision assembly is rejected; earlier revisions remain available through undo/history. Concurrent editor transaction guarantees retain the existing persistence implementation and have not been expanded here.
 
-Mixed-media stories cannot be sent to the existing single-video cut planner, which would replace the timeline from one source. The editor links back to Storyboard instead. Mixed-media checks explicitly report built-in timing/text checks, without claiming an AI visual review or treating intended stills as frozen-video defects.
+Mixed-media stories are not sent to the single-video cut planner, which would replace the timeline from one source. The editor links back to Storyboard instead. The final Check pass now reviews the assembled mixed-media timeline: it samples actual source frames across the full scene order, supplies narration/caption context plus transitions, looks, motion, graphics and audio roles to the AI reviewer, and keeps deterministic timing/text checks. It labels the result honestly as sampled evidence rather than continuous playback and never treats intentional stills as frozen-video defects. Review findings remain proposals; only selected, validated fixes change the revision.
 
 ## Release gates
 
 Local tests exercise actual mixed-media FFmpeg output and full narration duration, repeated-photo text anchors, ownership/range/revision validation, provider fallback, and exact generated-image storage. Browser tests cover the chooser, uploads, draft recovery, ordering, photo/video playback, stock/generated visual assignment and human narration/caption requests in Chromium and mobile WebKit.
 
-Before release, run those browser tests in CI, deploy the exact passing revision, test authenticated provider calls and full exports, and test physical iPhone Safari/Android Chrome. The outstanding Freedom playback/export incident remains a separate release blocker. Generated video, exhaustive inspection of every frame in every upload, cross-device unassembled drafts, and a mixed-media AI picture review are not implemented by this change.
+Before release, run those browser tests in CI, deploy the exact passing revision, test authenticated provider calls and full exports, and test physical iPhone Safari/Android Chrome. The outstanding Freedom playback/export incident remains a separate release blocker. Generated video, exhaustive inspection of every frame in every upload, audio listening/loudness measurement, and cross-device unassembled drafts are not implemented by this change.
 
 ## Idea-mode narration default
 

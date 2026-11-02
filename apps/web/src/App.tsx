@@ -64,7 +64,7 @@ function rulerTicks(durationUs: number): number[] {
   return ticks;
 }
 type CheckIssue = { id: string; severity: "fix" | "warn" | "info"; kind: string; title: string; detail: string; atS?: number; fix?: { label: string; operations: Array<Record<string, unknown>> }; source: "rules" | "ai" };
-type CheckResult = { issues: CheckIssue[]; ai: boolean; scanned: boolean; note?: string; revision: number };
+type CheckResult = { issues: CheckIssue[]; ai: boolean; scanned: boolean; sampledFrames?: number; note?: string; revision: number };
 type Review = { comments: Array<{ id: string; userId: string; atUs?: number; body: string; resolvedAt?: string; createdAt: string }>; decisions: Array<{ userId: string; decision: "approved" | "changes_requested"; note?: string; createdAt: string }> };
 type Project = { id: string; name: string; revision: number; createdAt: string; updatedAt: string };
 type Asset = { id: string; kind: string; storageKey: string; durationUs?: number; metadata: Record<string, string | number | boolean> };
