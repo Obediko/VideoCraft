@@ -13,12 +13,14 @@ type Props = {
   initialQuery?: string;
   /** What clicking a result does, shown under the results. */
   hint?: string;
+  /** Hide stock videos that cannot fill the destination scene without looping or freezing. */
+  minimumDurationS?: number;
   /** Called with the stored asset; the editor adds it as a cutaway. */
   onUse(asset: { id: string; kind: string; metadata: Record<string, string | number | boolean> } & Record<string, unknown>): void;
 };
 const LIBRARY: Record<string, string> = { pexels: "Pexels", pixabay: "Pixabay", giphy: "GIPHY" };
 
-export function StockSearch({ projectId, request, orientation, disabled, onWorking, onUse, initialQuery, hint }: Props) {
+export function StockSearch({ projectId, request, orientation, disabled, onWorking, onUse, initialQuery, hint, minimumDurationS }: Props) {
   const [sources, setSources] = useState<Sources | null>(null);
   const [kind, setKind] = useState<"video" | "photo" | "gif">("video");
   const [query, setQuery] = useState(initialQuery ?? "");
@@ -52,8 +54,9 @@ export function StockSearch({ projectId, request, orientation, disabled, onWorki
     setWorking("search"); setNote("");
     try {
       const result = await request("/v1/projects/" + projectId + "/stock/search?kind=" + type + "&orientation=" + orientation + "&q=" + encodeURIComponent(words.trim()));
-      setItems(result.items ?? []);
-      if (!result.items?.length) setNote("Nothing found for “" + words.trim() + "”. Try fewer or simpler words (who, what, where).");
+      const usable = (result.items ?? []).filter((item: Item) => item.kind !== "video" || !minimumDurationS || (item.durationS ?? 0) >= minimumDurationS);
+      setItems(usable);
+      if (!usable.length) setNote("Nothing long enough found for “" + words.trim() + "”. Try Photos, or use fewer and simpler words (who, what, where).");
     } catch (caught) { setItems([]); setNote(caught instanceof Error ? caught.message : "Search failed"); }
     finally { setWorking(""); }
   }

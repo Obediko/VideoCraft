@@ -63,7 +63,7 @@ function rulerTicks(durationUs: number): number[] {
   const ticks: number[] = []; for (let t = 0; t <= total + 1e-6; t += step) ticks.push(t);
   return ticks;
 }
-type CheckIssue = { id: string; severity: "fix" | "warn" | "info"; kind: string; title: string; detail: string; atS?: number; fix?: { label: string; operations: Array<Record<string, unknown>> }; source: "rules" | "ai" };
+type CheckIssue = { id: string; severity: "fix" | "warn" | "info"; kind: string; title: string; detail: string; atS?: number; fix?: { label: string; operations: Array<Record<string, unknown>> }; replacement?: { label: string; query: string; clipId: string }; source: "rules" | "ai" };
 type CheckResult = { issues: CheckIssue[]; ai: boolean; scanned: boolean; sampledFrames?: number; note?: string; revision: number };
 type Review = { comments: Array<{ id: string; userId: string; atUs?: number; body: string; resolvedAt?: string; createdAt: string }>; decisions: Array<{ userId: string; decision: "approved" | "changes_requested"; note?: string; createdAt: string }> };
 type Project = { id: string; name: string; revision: number; createdAt: string; updatedAt: string };
@@ -897,6 +897,19 @@ export function App() {
       await runCheck(result.revision.revision);
     } catch (error) { setStatus(errorMessage(error)); setBusy(false); }
   }
+  async function replaceReviewedVisual(issue: CheckIssue, asset: Asset) {
+    if (!projectId || !check || !issue.replacement) return;
+    setBusy(true);
+    try {
+      const result = await request("/v1/projects/" + projectId + "/director/replace-visual", { method: "POST", body: JSON.stringify({ revision: check.revision, clipId: issue.replacement.clipId, assetId: asset.id }) });
+      setRevision(result.revision.revision); setTimeline(result.revision.timeline);
+      setAssets((current) => [...current.filter((item) => item.id !== asset.id), asset]);
+      setRenderUrl(""); setRenderJobId(""); setRenderJobStatus(""); setCheck(null);
+      setStatus("Scene replaced without changing its timing or treatments; checking the new cut…");
+      setBusy(false);
+      await runCheck(result.revision.revision);
+    } catch (error) { setStatus(errorMessage(error)); setBusy(false); }
+  }
   function showIssue(issue: CheckIssue) {
     if (typeof issue.atS !== "number") return;
     setPreviewMode("edit");
@@ -1172,15 +1185,16 @@ export function App() {
           {!check && <p className="muted">A last look before export: clipped words, long pauses, black or frozen picture, text that goes by too fast and music balance. Each finding comes with a fix you can accept.</p>}
           {check?.note && <p className="note">{check.note}</p>}
           {check && <p className="muted">{check.issues.length === 0 ? "Nothing to fix. Ready to export." : toFix + " to fix · " + (check.issues.length - toFix) + " to look at. Warnings never block export."}</p>}
-          {check && check.issues.length > 0 && <ul className="suggestion-list issue-list">{check.issues.map((issue) => <li key={issue.id} className={"card suggestion issue-" + issue.severity + (issue.fix && !fixPicked[issue.id] ? " off" : "")}>
+          {check && check.issues.length > 0 && <ul className="suggestion-list issue-list">{check.issues.map((issue) => { const scene = issue.replacement ? timeline.tracks.flatMap(track => track.clips).find(clip => clip.id === issue.replacement!.clipId) : undefined; const alternatives = issue.replacement ? assets.filter(asset => (asset.kind === "video" || asset.kind === "image") && asset.id !== scene?.assetId && (asset.kind !== "video" || !asset.durationUs || asset.durationUs >= (scene ? scene.timelineEndUs - scene.timelineStartUs : 0))).slice(0, 6) : []; return <li key={issue.id} className={"card suggestion issue-" + issue.severity + (issue.fix && !fixPicked[issue.id] ? " off" : "")}>
             {issue.fix && <input type="checkbox" id={"i-" + issue.id} checked={Boolean(fixPicked[issue.id])} onChange={(event) => setFixPicked((current) => ({ ...current, [issue.id]: event.target.checked }))} />}
             <div className="suggestion-body">
               <label htmlFor={"i-" + issue.id}><span className={"tag sev-" + issue.severity}>{issue.severity === "fix" ? "Fix" : issue.severity === "warn" ? "Look" : "Note"}{issue.source === "ai" ? " · AI" : ""}</span> <strong>{issue.title}</strong></label>
               <span className="small what">{issue.detail}</span>
               {issue.fix && <span className="small fix-label">→ {issue.fix.label}</span>}
               {typeof issue.atS === "number" && <button type="button" className="link small" onClick={() => showIssue(issue)}>Show at {issue.atS.toFixed(1)} s</button>}
+              {issue.replacement && scene && <div className="stack review-replacement"><strong>{issue.replacement.label}</strong><p className="muted small">AI search brief: “{issue.replacement.query}”. Preview a choice; only the one you select replaces this scene.</p>{alternatives.length > 0 && <div className="actions"><span className="small muted">Use project media:</span>{alternatives.map(asset => <button type="button" className="btn" key={asset.id} disabled={busy} onClick={() => void replaceReviewedVisual(issue, asset)}>{assetName(asset.id)}</button>)}</div>}<StockSearch projectId={projectId} request={request} disabled={busy || check.revision !== revision} orientation={(PLATFORMS[platform]?.width ?? 9) < (PLATFORMS[platform]?.height ?? 16) ? "portrait" : PLATFORMS[platform]?.width === PLATFORMS[platform]?.height ? "square" : "landscape"} initialQuery={issue.replacement.query} minimumDurationS={(scene.timelineEndUs - scene.timelineStartUs) / 1e6} hint="Choose one to replace only this reviewed scene." onUse={asset => void replaceReviewedVisual(issue, asset as Asset)} /></div>}
             </div>
-          </li>)}</ul>}
+          </li>; })}</ul>}
           <div className="actions">
             <button className={check ? "btn" : "primary"} onClick={() => void runCheck()} disabled={busy}>{check ? "Check again" : "Check my edit"}</button>
             {check && check.issues.some((issue) => issue.fix) && <button className="primary" onClick={applyFixes} disabled={busy || check.revision !== revision || !check.issues.some((issue) => issue.fix && fixPicked[issue.id])}>Apply selected fixes</button>}

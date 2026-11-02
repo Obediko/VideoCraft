@@ -102,6 +102,8 @@ export interface ReviewInput {
   cutaways: Array<{ atS: number; durationS: number; name: string }>;
   music?: string;
   audio?: string;
+  /** Visual replacement is safe only when picture is independent of the spoken programme, as in Storyboard mode. */
+  canReplaceVisual?: boolean;
   platform: string;
   /** Frames of the source at moments of the edit (cut points, graphics), labelled with their place in the edit. */
   frames: Array<{ atS: number; label: string; jpegBase64: string }>;
@@ -406,14 +408,15 @@ For each, choose one action that fixes it if possible:
 - "remove-piece" (piece = index) to drop a piece; "move-piece" (piece, toIndex) to reorder, e.g. toIndex 0 to open on the strongest line;
 - "rewrite-text" (graphic = index, text = the new wording) or "remove-graphic" (graphic = index);
 - "set-transition" (piece = index, transition = dissolve, dip-black, dip-white, flash or cut; seconds = 0.1..1.2) to repair the entrance to that piece. Prefer a clean cut or restrained dissolve; do not decorate every cut;
+- "replace-visual" (piece = index, query = 3..10 concrete stock-search words describing who, action and place) when the supplied visual conflicts with or fails to illustrate the scene. Make geographic/cultural terms explicit only when the brief supplies them;
 - "none" when it cannot be fixed by editing (then say concretely what to change when filming).
-Use -1 for unused indexes, "" for unused text and transition, and 0 for unused seconds. Never invent facts. If the edit is good, return an empty list.`;
+Use -1 for unused indexes, "" for unused text, transition and query, and 0 for unused seconds. Never invent facts. If the edit is good, return an empty list.`;
 
 const REVIEW_SCHEMA = {
   type: "object", additionalProperties: false, required: ["issues"],
   properties: { issues: { type: "array", items: { type: "object", additionalProperties: false,
-    required: ["title", "detail", "atS", "severity", "action", "piece", "toIndex", "graphic", "text", "transition", "seconds"],
-    properties: { title: { type: "string" }, detail: { type: "string" }, atS: { type: "number" }, severity: { type: "string", enum: ["fix", "warn", "info"] }, action: { type: "string", enum: ["none", "remove-piece", "move-piece", "rewrite-text", "remove-graphic", "set-transition"] }, piece: { type: "integer" }, toIndex: { type: "integer" }, graphic: { type: "integer" }, text: { type: "string" }, transition: { type: "string", enum: ["", "cut", "dissolve", "dip-black", "dip-white", "flash"] }, seconds: { type: "number" } } } } },
+    required: ["title", "detail", "atS", "severity", "action", "piece", "toIndex", "graphic", "text", "transition", "seconds", "query"],
+    properties: { title: { type: "string" }, detail: { type: "string" }, atS: { type: "number" }, severity: { type: "string", enum: ["fix", "warn", "info"] }, action: { type: "string", enum: ["none", "remove-piece", "move-piece", "rewrite-text", "remove-graphic", "set-transition", "replace-visual"] }, piece: { type: "integer" }, toIndex: { type: "integer" }, graphic: { type: "integer" }, text: { type: "string" }, transition: { type: "string", enum: ["", "cut", "dissolve", "dip-black", "dip-white", "flash"] }, seconds: { type: "number" }, query: { type: "string" } } } } },
 };
 
 /** The AI director over OpenAI's Responses API with image input and a strict JSON schema; falls back to rules. */
@@ -455,7 +458,7 @@ export class OpenAiDirector implements Director {
     const pieces = input.pieces.map((p, i) => "#" + i + " [" + p.startS.toFixed(1) + "-" + p.endS.toFixed(1) + " s] Visual: " + (p.visual ?? "unspecified") + "; entrance: " + (p.transition ?? "cut") + "; look: " + (p.look ?? "none") + "; motion: " + (p.motion ?? "none") + "; words/context: " + p.text.slice(0, 500)).join("\n");
     const graphics = input.graphics.map((g, i) => "#" + i + " " + g.kind + " at " + g.atS.toFixed(1) + " s for " + g.durationS.toFixed(1) + " s: " + g.text).join("\n") || "(none)";
     const cutaways = input.cutaways.map((c) => c.name + " at " + c.atS.toFixed(1) + " s for " + c.durationS.toFixed(1) + " s").join("\n") || "(none)";
-    const content: Array<Record<string, unknown>> = [{ type: "input_text", text: "Creator's description:\n" + input.brief.slice(0, 2000) + "\n\nFormat: " + input.platform + "\nAudio plan: " + (input.audio ?? "source sound") + "\nMusic: " + (input.music ?? "none") + "\n\nThe assembled edit, piece by piece (times are edited-timeline times):\n" + pieces + "\n\nOn-screen text:\n" + graphics + "\n\nCutaways:\n" + cutaways + "\n\nLabelled sampled frames from the actual source assets follow." }];
+    const content: Array<Record<string, unknown>> = [{ type: "input_text", text: "Creator's description:\n" + input.brief.slice(0, 2000) + "\n\nFormat: " + input.platform + "\nAudio plan: " + (input.audio ?? "source sound") + "\nVisual replacement allowed: " + (input.canReplaceVisual ? "yes; picture is independent of the narration" : "no; do not propose replace-visual") + "\nMusic: " + (input.music ?? "none") + "\n\nThe assembled edit, piece by piece (times are edited-timeline times):\n" + pieces + "\n\nOn-screen text:\n" + graphics + "\n\nCutaways:\n" + cutaways + "\n\nLabelled sampled frames from the actual source assets follow." }];
     for (const frame of input.frames.slice(0, 12)) {
       content.push({ type: "input_text", text: frame.label + " (" + frame.atS.toFixed(1) + " s):" });
       content.push({ type: "input_image", image_url: "data:image/jpeg;base64," + frame.jpegBase64, detail: "low" });
@@ -468,6 +471,7 @@ export class OpenAiDirector implements Director {
       const atS = typeof issue.atS === "number" && Number.isFinite(issue.atS) && issue.atS >= 0 ? Math.round(issue.atS * 10) / 10 : undefined;
       const piece = input.pieces[Number(issue.piece)]; const graphic = input.graphics[Number(issue.graphic)];
       let fix: CheckIssue["fix"];
+      let replacement: CheckIssue["replacement"];
       if (issue.action === "remove-piece" && piece && input.pieces.length > 1) fix = { label: "Remove piece " + (Number(issue.piece) + 1), operations: [{ type: "remove-clip", clipId: piece.clipId, reason: "AI check: " + title }] };
       else if (issue.action === "move-piece" && piece && Number.isInteger(issue.toIndex) && Number(issue.toIndex) >= 0 && Number(issue.toIndex) < input.pieces.length && Number(issue.toIndex) !== Number(issue.piece)) {
         const order = input.pieces.map((p) => p.clipId).filter((id) => id !== piece.clipId); order.splice(Number(issue.toIndex), 0, piece.clipId);
@@ -479,8 +483,12 @@ export class OpenAiDirector implements Director {
         const seconds = Math.max(0.1, Math.min(1.2, typeof issue.seconds === "number" && Number.isFinite(issue.seconds) ? issue.seconds : 0.35));
         fix = { label: transition === "cut" ? "Use a clean cut" : "Use a " + transition.replace("-", " ") + " (" + seconds.toFixed(2) + " s)", operations: [{ type: "set-clip-effects", clipId: piece.clipId, transitionIn: transition, ...(transition === "cut" ? {} : { transitionSeconds: Math.round(seconds * 20) / 20 }) }] };
       }
+      else if (issue.action === "replace-visual" && input.canReplaceVisual && piece && typeof issue.query === "string") {
+        const query = issue.query.replace(/[^\p{L}\p{N}\s'-]+/gu, " ").replace(/\s+/g, " ").trim().slice(0, 100);
+        if (query.split(/\s+/).length >= 2) replacement = { label: "Find a better visual", query, clipId: piece.clipId };
+      }
       const severity = fix ? "fix" : issue.severity === "info" ? "info" : "warn";
-      out.push({ id: "ai-" + i, severity, kind: "ai-" + String(issue.action || "note"), title, detail, ...(atS !== undefined ? { atS } : {}), ...(fix ? { fix } : {}), source: "ai" });
+      out.push({ id: "ai-" + i, severity, kind: "ai-" + String(issue.action || "note"), title, detail, ...(atS !== undefined ? { atS } : {}), ...(fix ? { fix } : {}), ...(replacement ? { replacement } : {}), source: "ai" });
     }
     return out;
   }
