@@ -32,6 +32,8 @@ export type Fetcher = (url: string, init?: { headers?: Record<string, string>; s
 /** Media hosts downloads may come from; anything else is refused. */
 const MEDIA_HOSTS = [/(^|\.)pexels\.com$/, /(^|\.)vimeo\.com$/, /(^|\.)vimeocdn\.com$/, /(^|\.)pixabay\.com$/, /(^|\.)giphy\.com$/];
 const MAX_BYTES = 300 * 1024 * 1024;
+const SEARCH_CACHE_MS = 2 * 60_000;
+const searchCache = new Map<string, { at: number; items: StockItem[] }>();
 
 export function providersFor(keys: StockKeys, kind: StockKind): StockProvider[] {
   if (kind === "gif") return keys.giphy ? ["giphy"] : [];
@@ -186,6 +188,9 @@ export function registerStockRoutes(server: FastifyInstance, dependencies: Stock
     if (!q) return error(reply, 400, "invalid_request", "Type what to look for");
     const providers = providersFor(dependencies.keys, kind);
     if (providers.length === 0) return error(reply, 503, "stock_unavailable", kind === "gif" ? "GIF search needs a Giphy key on the server" : "Stock search needs a Pexels or Pixabay key on the server");
+    const cacheKey = [providers.join(","), kind, orientation ?? "any", q.toLocaleLowerCase()].join(":");
+    const cached = searchCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < SEARCH_CACHE_MS) return { items: cached.items, cached: true };
     const settled = await Promise.allSettled(providers.map((provider) => searchProvider(fetcher, dependencies.keys, provider, kind, q, orientation)));
     const lists = settled.map((result) => (result.status === "fulfilled" ? result.value.filter((item) => item.thumbUrl) : []));
     if (settled.every((result) => result.status === "rejected")) {
@@ -195,6 +200,8 @@ export function registerStockRoutes(server: FastifyInstance, dependencies: Stock
     // Interleave the libraries so both show near the top.
     const items: StockItem[] = [];
     for (let i = 0; i < Math.max(0, ...lists.map((list) => list.length)); i += 1) for (const list of lists) if (list[i]) items.push(list[i]!);
+    searchCache.set(cacheKey, { at: Date.now(), items });
+    if (searchCache.size > 200) for (const [key, value] of searchCache) if (Date.now() - value.at >= SEARCH_CACHE_MS) searchCache.delete(key);
     return { items };
   });
 
@@ -266,9 +273,11 @@ export async function importStock(dependencies: StockDependencies, fetcher: Fetc
 /** The best free stock match for a few words, not imported (shown in a suggestion before applying). */
 export async function previewStock(dependencies: StockDependencies, query: string, kind: StockKind, orientation?: "portrait" | "landscape" | "square"): Promise<{ provider: StockProvider; id: string; thumbUrl: string; credit?: string } | undefined> {
   const fetcher: Fetcher = dependencies.fetch ?? ((url, init) => fetch(url, init) as never);
-  for (const provider of providersFor(dependencies.keys, kind)) {
-    const item = (await searchProvider(fetcher, dependencies.keys, provider, kind, query, orientation).catch(() => [])).find((candidate) => candidate.thumbUrl.startsWith("https://"));
-    if (item) return { provider, id: item.id, thumbUrl: item.thumbUrl, ...(item.credit ? { credit: item.credit + " on " + (provider === "pexels" ? "Pexels" : provider === "pixabay" ? "Pixabay" : "GIPHY") } : {}) };
+  const providers = providersFor(dependencies.keys, kind);
+  const lists = await Promise.all(providers.map(provider => searchProvider(fetcher, dependencies.keys, provider, kind, query, orientation).catch(() => [])));
+  for (let i = 0; i < Math.max(0, ...lists.map(list => list.length)); i += 1) for (let p = 0; p < providers.length; p += 1) {
+    const provider = providers[p]!, item = lists[p]?.[i];
+    if (item?.thumbUrl.startsWith("https://")) return { provider, id: item.id, thumbUrl: item.thumbUrl, ...(item.credit ? { credit: item.credit + " on " + (provider === "pexels" ? "Pexels" : provider === "pixabay" ? "Pixabay" : "GIPHY") } : {}) };
   }
   return undefined;
 }

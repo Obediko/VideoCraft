@@ -4,9 +4,12 @@ import { VoiceOver } from "./VoiceOver.js";
 
 export type CreationMode = "footage" | "story" | "idea";
 type Asset = { id: string; kind: string; durationUs?: number; metadata: Record<string, string | number | boolean> };
-type Scene = { assetId: string; startS: number; durationS: number; text: string; visual: string; search?: string; thumb?: string };
+type Scene = { assetId: string; startS: number; durationS: number; text: string; visual: string; search?: string; thumb?: string; transition?: string; transitionSeconds?: number; look?: string; zoom?: string };
 type StockItem = { provider: string; id: string; kind: "video" | "photo" | "gif"; thumbUrl: string; durationS?: number; credit?: string };
 const CAMERA = new Set("a an the and or of to in on at with into onto over under from by for as is are be then while their his her its our your this that these those same shot close-up closeup close up wide medium tracking lateral smooth slow push pull pan tilt zoom frame framing angle eye level depth field shallow cut match-cut match cinematic camera lens focus light lighting daylight sunlight warm soft natural gentle gently vignette opening scene continue continues end ends hold brief briefly authentic realistic modest beautiful quiet sunlit morning residential shaded filled moving background pausing pauses beside near through school-age".split(" "));
+const TRANSITIONS: Record<string, string> = { cut: "Cut", dissolve: "Dissolve", push: "Push", "slide-up": "Slide up", wipe: "Wipe", circle: "Circle reveal", blur: "Blur", "dip-black": "Dip to black", "dip-white": "Dip to white", flash: "Flash" };
+const LOOKS: Record<string, string> = { none: "Natural", warm: "Warm", clean: "Clean & crisp", cinematic: "Cinematic", vivid: "Vivid", soft: "Soft", mono: "Black & white" };
+const ZOOMS: Record<string, string> = { none: "Static", push: "Slow push-in", punch: "Punch-in" };
 /** Plain search words for a scene (the storyboard gives them; older drafts are worked out from the description). */
 const searchOf = (s: Scene) => s.search?.trim() || s.visual.toLowerCase().replace(/[^a-z0-9\s'-]/g, " ").split(/\s+/).map((w) => w.replace(/'s$/, "")).filter((w) => w.length > 2 && !CAMERA.has(w) && !/ly$/.test(w)).filter((w, i, all) => all.indexOf(w) === i).slice(0, 5).join(" ");
 type Plan = { summary: string; script: string; scenes: Scene[]; source: "ai" | "rules"; note?: string; selectedApproach?: string; critique?: string };
@@ -95,23 +98,33 @@ export function Creation({ projectId, revision, mode, assets, apiBase, token, re
       scenePatch(sceneIndex, { assetId: asset.id, startS: 0, durationS: Math.min(scene?.durationS ?? 5, asset.kind === "video" ? (asset.durationUs ?? 5e6) / 1e6 : 60) });
     }
   }
-  /** A few free stock matches for every scene without a visual, shown under each scene to pick from. */
+  /** Scout a few free stock matches for every unresolved scene, shown under it for creator approval. */
+  async function scoutScenes(plan: Plan): Promise<number> {
+    const orientation = draft.platform === "youtube" ? "landscape" : draft.platform === "square" ? "square" : "portrait";
+    const found: Record<number, StockItem[]> = {};
+    // Twelve scenes stays below the route budget even when a video miss needs a photo fallback.
+    const queue = plan.scenes.map((sc, i) => ({ sc, i })).filter(({ sc }) => !sc.assetId && Boolean(searchOf(sc))).slice(0, 12);
+    const byQuery = new Map<string, Promise<StockItem[]>>();
+    const lookup = (q: string) => byQuery.get(q) ?? (() => { const work = (async () => {
+      const video = await request("/v1/projects/" + projectId + "/stock/search?kind=video&orientation=" + orientation + "&q=" + encodeURIComponent(q)).catch(() => ({ items: [] }));
+      if (video.items?.length) return video.items.slice(0, 4);
+      const photo = await request("/v1/projects/" + projectId + "/stock/search?kind=photo&orientation=" + orientation + "&q=" + encodeURIComponent(q)).catch(() => ({ items: [] }));
+      return (photo.items ?? []).slice(0, 4);
+    })(); byQuery.set(q, work); return work; })();
+    // A small worker pool keeps the UI responsive without tripping the API's stock-search budget.
+    await Promise.all(Array.from({ length: Math.min(3, queue.length) }, async () => { while (queue.length) {
+      const next = queue.shift(); if (!next) break;
+      const items = await lookup(searchOf(next.sc));
+      if (items.length) found[next.i] = items;
+      setSuggested(cur => ({ ...cur, ...(items.length ? { [next.i]: items } : {}) }));
+    } }));
+    return Object.keys(found).length;
+  }
   async function suggestAll() {
     if (!draft.plan) return;
-    const orientation = draft.platform === "youtube" ? "landscape" : draft.platform === "square" ? "square" : "portrait";
     await run("Finding visuals for every scene…", async () => {
-      const found: Record<number, StockItem[]> = {}; let none = 0;
-      for (const [i, sc] of draft.plan!.scenes.entries()) {
-        const q = searchOf(sc); if (!q) continue;
-        let items: StockItem[] = [];
-        for (const kind of ["video", "photo"]) {
-          const r = await request("/v1/projects/" + projectId + "/stock/search?kind=" + kind + "&orientation=" + orientation + "&q=" + encodeURIComponent(q)).catch(() => ({ items: [] }));
-          items = (r.items ?? []).slice(0, 4); if (items.length) break;
-        }
-        if (items.length) found[i] = items; else none += 1;
-        setSuggested((cur) => ({ ...cur, ...found }));
-      }
-      setNotice(Object.keys(found).length ? "Pick a visual under each scene" + (none ? " (" + none + " scene" + (none === 1 ? "" : "s") + " found nothing: open its search to try other words)." : ".") : "No stock matched these scenes. Open a scene's search to try other words, or upload your own.");
+      const found = await scoutScenes(draft.plan!);
+      setNotice(found ? "The Visual Director found choices. Pick one under each open scene." : "No stock matched these scenes. Open a scene's search to try other words, or upload your own.");
     });
   }
   async function useSuggestion(index: number, item: StockItem) {
@@ -147,7 +160,12 @@ export function Creation({ projectId, revision, mode, assets, apiBase, token, re
   async function plan() {
     await run("Making the storyboard…", async () => {
       const result = await request("/v1/projects/" + projectId + "/creation/plan", { method: "POST", body: JSON.stringify({ brief: draft.brief, seconds: draft.seconds, assetIds: draft.selected.filter(id => media.some(a => a.id === id)), preferences }) });
-      patch({ plan: result.plan }); setSceneIndex(null);
+      patch({ plan: result.plan }); setSceneIndex(null); setSuggested({});
+      if (result.plan.scenes.some((scene: Scene) => !scene.assetId)) {
+        setWorking("The Visual Director is scouting choices…");
+        const found = await scoutScenes(result.plan);
+        setNotice(found ? "The Visual Director found choices for " + found + " scene" + (found === 1 ? "." : "s.") : "The storyboard is ready, but no free stock matched its open scenes. Try simpler search words or upload a visual.");
+      }
     });
   }
   async function assemble() {
@@ -201,6 +219,9 @@ export function Creation({ projectId, revision, mode, assets, apiBase, token, re
           <strong>Scene {i + 1}: {s.visual || "Choose a visual"}</strong>
           <label>Visual<select aria-label="Visual" value={s.assetId} disabled={busy} onChange={e => { const a = media.find(a => a.id === e.target.value); scenePatch(i, { assetId: e.target.value, startS: 0, durationS: Math.min(s.durationS, a?.kind === "video" ? (a.durationUs ?? 5e6) / 1e6 : 60) }); }}><option value="">Choose a visual</option>{media.map(a => <option key={a.id} value={a.id}>{nameOf(a)}</option>)}</select></label>
           <div className="row-2"><label>Start in source (seconds)<input type="number" min={0} step={0.1} disabled={busy || media.find(a => a.id === s.assetId)?.kind === "image"} value={s.startS} onChange={e => scenePatch(i, { startS: Number(e.target.value) })} /></label><label>On screen (seconds)<input type="number" min={0.5} max={60} step={0.1} value={s.durationS} disabled={busy} onChange={e => scenePatch(i, { durationS: Number(e.target.value) })} /></label></div>
+          <div className="row-2"><label>Transition into scene<select value={i === 0 ? "cut" : (s.transition ?? "cut")} disabled={busy || i === 0} onChange={e => scenePatch(i, { transition: e.target.value })}>{Object.entries(TRANSITIONS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>Motion<select value={s.zoom ?? "none"} disabled={busy} onChange={e => scenePatch(i, { zoom: e.target.value })}>{Object.entries(ZOOMS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div>
+          <label>Look<select value={s.look ?? "none"} disabled={busy} onChange={e => scenePatch(i, { look: e.target.value })}>{Object.entries(LOOKS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          {i > 0 && s.transition && s.transition !== "cut" && <label>Transition length ({Number(s.transitionSeconds ?? 0.5).toFixed(2)} seconds)<input type="range" min={0.1} max={2} step={0.05} value={s.transitionSeconds ?? 0.5} disabled={busy} onChange={e => scenePatch(i, { transitionSeconds: Number(e.target.value) })} /></label>}
           <label>On-screen text<input value={s.text} maxLength={120} disabled={busy} onChange={e => scenePatch(i, { text: e.target.value })} /></label>
           {suggested[i] && !s.assetId && <div className="scene-suggestions" aria-label={"Suggested visuals for scene " + (i + 1)}>{suggested[i]!.map((item) => <button key={item.provider + item.id} type="button" className="stock-item" disabled={busy || adding !== ""} onClick={() => void useSuggestion(i, item)} title={item.credit ?? ""}><img src={item.thumbUrl} alt="" loading="lazy" />{item.durationS ? <span className="stock-time mono">{Math.round(item.durationS)}s</span> : null}<span className="stock-add">{adding === i + ":" + item.id ? "Adding…" : "Use"}</span></button>)}</div>}
           {s.assetId && media.find((a) => a.id === s.assetId) && <p className="scene-chosen muted small">{s.thumb && <img src={s.thumb} alt="" />}Visual: {nameOf(media.find((a) => a.id === s.assetId)!)}</p>}
@@ -216,7 +237,7 @@ export function Creation({ projectId, revision, mode, assets, apiBase, token, re
           </section>}
         </li>)}</ol>
         {draft.plan.scenes.some((sc) => !sc.assetId) && <button className="primary" disabled={busy} onClick={() => void suggestAll()}>Find visuals for every scene</button>}
-        <button className="btn" disabled={busy || draft.plan.scenes.length >= 40} onClick={() => patch({ plan: { ...draft.plan!, scenes: [...draft.plan!.scenes, { assetId: "", startS: 0, durationS: 5, text: "", visual: "" }] } })}>Add a scene</button>
+        <button className="btn" disabled={busy || draft.plan.scenes.length >= 40} onClick={() => patch({ plan: { ...draft.plan!, scenes: [...draft.plan!.scenes, { assetId: "", startS: 0, durationS: 5, text: "", visual: "", transition: "dissolve", transitionSeconds: 0.5, look: "none", zoom: "none" }] } })}>Add a scene</button>
       </section>
       <section className="card stack" aria-label="Story narration"><h2>4. Choose narration</h2>
         <p className="muted small">Keep the original sound, or add one narration track for the whole story. With narration, source speech is muted and visuals extend to include the complete recording.</p>

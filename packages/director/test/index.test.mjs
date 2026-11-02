@@ -114,6 +114,16 @@ test("applying a plan: words are not clipped, captions are rebuilt once, graphic
   assert.ok(!overlays.some((c) => c.transform.text === "not accepted"), "unaccepted suggestions are not applied");
 });
 
+test("director cut padding never repeats source audio at a join", () => {
+  const base = { durationUs: 4e6, tracks: [{ id: "v", kind: "video", clips: [{ id: "src", assetId: "talk", sourceStartUs: 0, sourceEndUs: 4e6, timelineStartUs: 0, timelineEndUs: 4e6 }] }] };
+  const words = [{ text: "one", startUs: 0, endUs: 900000 }, { text: "bridge", startUs: 1000000, endUs: 1900000 }, { text: "two", startUs: 2000000, endUs: 2900000 }];
+  const plan = { source: "ai", summary: "cut", profile: { intent: "", audience: "", channel: "", tone: "", targetSeconds: 3 }, suggestions: [{ id: "cut", kind: "cut", title: "cut", reason: "", segments: [{ startS: 0.1, endS: 1.45 }, { startS: 1.55, endS: 2.8 }] }] };
+  const ops = planOperations(plan, new Set(["cut"]), { timeline: base, assetId: "talk", words });
+  const inserts = ops.filter(op => op.type === "insert-clip");
+  assert.equal(inserts.length, 2);
+  assert.ok(inserts[0].sourceEndUs <= inserts[1].sourceStartUs, "joined clips cannot replay overlapping source samples");
+});
+
 test('creative treatments are bounded, grounded in retained footage and compile after a cut',async()=>{
   const {parseEffectRecipe}=await import('@videocraft/domain');
   const {effectOperations,sanitizePlan}=await import('../dist/index.js');

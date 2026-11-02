@@ -630,6 +630,15 @@ export function planOperations(plan: DirectorPlan, accepted: Set<string>, ctx: A
       const endUs = last ? Math.min(nextStart - 20_000, last.endUs + 220_000) : e;
       return { startUs: Math.round(startUs), endUs: Math.round(endUs) };
     }).filter((seg) => seg.endUs - seg.startUs >= 500_000);
+    // Padding adjacent selections can make their source ranges overlap, replaying the same syllable or word.
+    // Split that small overlap at one source-time boundary so every sample is heard exactly once.
+    for (let i = 1; i < snapped.length; i += 1) {
+      const before = snapped[i - 1]!, current = snapped[i]!;
+      if (current.startUs < before.endUs) {
+        const boundary = Math.round((current.startUs + before.endUs) / 2);
+        before.endUs = boundary; current.startUs = boundary;
+      }
+    }
     if (snapped.length > 0) {
       for (const track of ctx.timeline.tracks) if (track.kind === "video" || track.kind === "caption") for (const clip of track.clips) ops.push({ type: "remove-clip", clipId: clip.id, reason: "Replaced by the director's cut" });
       for (const seg of snapped) ops.push({ type: "insert-clip", assetId: ctx.assetId, sourceStartUs: seg.startUs, sourceEndUs: seg.endUs, reason: cut.reason || cut.title });
