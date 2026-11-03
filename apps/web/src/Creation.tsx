@@ -189,6 +189,22 @@ export function Creation({ projectId, revision, mode, assets, apiBase, token, re
       onReady(result);
     });
   }
+  function buildFirstCut() {
+    if (busy) return;
+    const missing = draft.plan?.scenes.findIndex(s => !s.assetId || !media.some(a => a.id === s.assetId)) ?? -1;
+    if (missing >= 0) {
+      const scene = draft.plan!.scenes[missing]!;
+      setSceneIndex(missing); setImagePrompt(scene.visual); setNotice("Choose a visual for scene " + (missing + 1) + " before building the first cut.");
+      setTimeout(() => document.getElementById("scene-visuals-" + missing)?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+      return;
+    }
+    if (draft.narrationMode !== "none" && !draft.plan?.script.trim() && !draft.narrationId) {
+      setNotice("Review or write the narration, or choose ‘Keep original sound / no narration’. Then build the first cut.");
+      document.querySelector<HTMLElement>('[aria-label="Story narration"]')?.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+    void assemble();
+  }
   const scene = sceneIndex !== null ? draft.plan?.scenes[sceneIndex] : undefined;
   const previewAsset = media.find(a => a.id === scene?.assetId);
   const openScenes = draft.plan?.scenes.filter(s => !s.assetId).length ?? 0;
@@ -253,7 +269,7 @@ export function Creation({ projectId, revision, mode, assets, apiBase, token, re
         <label className="checkbox"><input type="checkbox" checked={draft.sceneText} disabled={busy} onChange={e => patch({ sceneText: e.target.checked })} />Include approved scene text</label>
       </section>
       {revision > 0 && <p className="note">This becomes a new revision. Your current edit remains available through Undo.</p>}
-      <section className={"readiness " + (ready ? "ready" : "waiting")} aria-label="First cut readiness"><div><span className="eyebrow">Ready check</span><strong>{ready ? "Everything is in place" : openScenes ? openScenes + " scene" + (openScenes === 1 ? " needs" : "s need") + " a visual" : "Finish the narration choice"}</strong><p className="muted small">The complete edit opens next for playback, refinement, and one final professional review.</p></div><button className="primary" disabled={busy || !ready || draft.plan.scenes.some(s => !s.assetId || !media.some(a => a.id === s.assetId))} onClick={() => void assemble()}>Build the first cut</button></section>
+      <section className={"readiness " + (ready ? "ready" : "waiting")} aria-label="First cut readiness"><div><span className="eyebrow">Ready check</span><strong>{ready ? "Everything is in place" : openScenes ? openScenes + " scene" + (openScenes === 1 ? " needs" : "s need") + " a visual" : "Finish the narration choice"}</strong><p className="muted small">The complete edit opens next for playback, refinement, and one final professional review.</p></div><button className="primary" disabled={busy} onClick={buildFirstCut}>Build the first cut</button></section>
     </>}
     {(working || notice) && <p role={notice ? "alert" : "status"}>{working || notice}</p>}
   </main>;
