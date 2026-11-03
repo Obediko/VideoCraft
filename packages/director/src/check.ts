@@ -171,7 +171,7 @@ export function checkEdit(input: CheckInput): CheckIssue[] {
   for (const { clip } of decorated) {
     const seconds = Number(clip.transform?.transitionSeconds ?? 0.5); const durationS = (clip.timelineEndUs - clip.timelineStartUs) / 1e6;
     const maximum = Math.max(0.15, Math.min(0.75, durationS * 0.2));
-    const transition = String(clip.transform?.transitionIn); const safeTransition = (["cut", "dissolve", "dip-black", "dip-white", "flash", "push", "slide-up", "wipe", "circle", "blur"] as Transition[]).includes(transition as Transition) ? transition as Transition : "dissolve";
+    const transition = String(clip.transform?.transitionIn); const safeTransition = (["cut", "dissolve", "dip-black", "dip-white", "flash", "push", "slide-up", "wipe", "circle", "blur", "soft-pan", "soft-rise", "match-push", "film-fade", "silver-fade", "editorial-cover"] as Transition[]).includes(transition as Transition) ? transition as Transition : "dissolve";
     if (seconds > maximum + 0.05) add({ severity: "fix", kind: "transition-long", title: "Transition lingers at " + s(clip.timelineStartUs) + " s", detail: seconds.toFixed(2) + " s is heavy for a " + durationS.toFixed(1) + " s scene.", atS: s(clip.timelineStartUs), fix: { label: "Tighten it to " + maximum.toFixed(2) + " s", operations: [{ type: "set-clip-effects", clipId: clip.id, transitionIn: safeTransition, transitionSeconds: Math.round(maximum * 20) / 20 }] } });
   }
 

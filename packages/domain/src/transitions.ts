@@ -6,10 +6,10 @@ import type { TimelineClip } from "./index.js";
  * footage just past its cut, or its last frame held) with the start of the incoming one, so no clip moves.
  */
 export const DIP_SECONDS: Record<string, number> = { "dip-black": 0.25, "dip-white": 0.25, flash: 0.12 };
-const BLENDS = new Set(["dissolve", "push", "slide-up", "wipe", "circle", "blur"]);
+const BLENDS = new Set(["dissolve", "push", "slide-up", "wipe", "circle", "blur", "soft-pan", "soft-rise", "match-push", "film-fade", "silver-fade", "editorial-cover"]);
 export const BLEND_DEFAULT_SECONDS = 0.5;
 /** FFmpeg xfade names for the blends. */
-export const XFADE_NAMES: Record<string, string> = { dissolve: "fade", push: "slideleft", "slide-up": "slideup", wipe: "wipeleft", circle: "circleopen", blur: "hblur" };
+export const XFADE_NAMES: Record<string, string> = { dissolve: "fade", push: "slideleft", "slide-up": "slideup", wipe: "wipeleft", circle: "circleopen", blur: "hblur", "soft-pan": "smoothleft", "soft-rise": "smoothup", "match-push": "zoomin", "film-fade": "fadeslow", "silver-fade": "fadegrays", "editorial-cover": "coverleft" };
 
 type Clip = Pick<TimelineClip, "timelineStartUs" | "timelineEndUs" | "transform">;
 const lengthOf = (c: Clip) => Math.max(0, (c.timelineEndUs - c.timelineStartUs) / 1e6);

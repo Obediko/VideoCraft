@@ -87,12 +87,30 @@ export const COLOUR_LOOKS = ["none", "warm", "clean", "cinematic", "vivid", "sof
 export type ColourLook = (typeof COLOUR_LOOKS)[number];
 /**
  * How a clip comes in. Dips and the flash fade through a colour; the others blend the two clips over each other
- * (dissolve, push, slide-up, wipe, circle, blur), using a little footage past the cut so the timing never shifts.
+ * (including the standard and premium catalogue), using a little footage past the cut so the timing never shifts.
  */
-export const TRANSITIONS = ["cut", "dip-black", "dip-white", "flash", "dissolve", "push", "slide-up", "wipe", "circle", "blur"] as const;
+export const TRANSITIONS = ["cut", "dip-black", "dip-white", "flash", "dissolve", "push", "slide-up", "wipe", "circle", "blur", "soft-pan", "soft-rise", "match-push", "film-fade", "silver-fade", "editorial-cover"] as const;
 /** Transitions that overlap the two clips (the rest fade through a colour). */
-export const BLEND_TRANSITIONS = ["dissolve", "push", "slide-up", "wipe", "circle", "blur"] as const;
+export const BLEND_TRANSITIONS = ["dissolve", "push", "slide-up", "wipe", "circle", "blur", "soft-pan", "soft-rise", "match-push", "film-fade", "silver-fade", "editorial-cover"] as const;
 export type Transition = (typeof TRANSITIONS)[number];
+export const TRANSITION_CATALOGUE: Record<Transition, { label: string; family: "cut" | "dip" | "blend"; premium?: boolean; use: string }> = {
+  cut: { label: "Cut", family: "cut", use: "Default; invisible and honest." },
+  "dip-black": { label: "Dip to black", family: "dip", use: "A chapter, ending or serious passage." },
+  "dip-white": { label: "Dip to white", family: "dip", use: "A light or hopeful passage." },
+  flash: { label: "Flash", family: "dip", use: "A very brief energetic accent." },
+  dissolve: { label: "Dissolve", family: "blend", use: "A calm change of time, place or feeling." },
+  push: { label: "Push", family: "blend", use: "Energetic lateral movement." },
+  "slide-up": { label: "Slide up", family: "blend", use: "Vertical short-form movement." },
+  wipe: { label: "Wipe", family: "blend", use: "A clear graphic reveal." },
+  circle: { label: "Circle reveal", family: "blend", use: "A playful iris reveal." },
+  blur: { label: "Blur", family: "blend", use: "A soft dreamlike change." },
+  "soft-pan": { label: "Soft pan", family: "blend", premium: true, use: "A restrained directional scene change." },
+  "soft-rise": { label: "Soft rise", family: "blend", premium: true, use: "A gentle upward reveal for progress or arrival." },
+  "match-push": { label: "Match push", family: "blend", premium: true, use: "Aligned then-and-now or detail-to-detail imagery." },
+  "film-fade": { label: "Film fade", family: "blend", premium: true, use: "A slower, softer passage of time." },
+  "silver-fade": { label: "Silver fade", family: "blend", premium: true, use: "A reflective archival or memory beat." },
+  "editorial-cover": { label: "Editorial cover", family: "blend", premium: true, use: "A confident chapter change with matched movement." },
+};
 export const SOUND_EFFECTS = ["whoosh", "pop", "hit", "riser"] as const;
 export type SoundEffect = (typeof SOUND_EFFECTS)[number];
 export interface TimelineSignals { silences?: Array<{ startUs: Microseconds; endUs: Microseconds }>; scenes?: Array<{ startUs: Microseconds; endUs: Microseconds }>; }

@@ -354,7 +354,7 @@ test("real ffmpeg: a voice-over plays at its moment and the original sound dips 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("real ffmpeg: blends (dissolve, push, wipe) overlap the clips without moving them, using footage past the cut", async () => {
+test("real ffmpeg: standard and premium blends preserve duration and both shots", async () => {
   const dir = mkdtempSync(join(tmpdir(), "vc-blend-"));
   try {
     // One recording: 3 s red then 3 s blue. Clip A = red 0-2 s (runs on into more red), clip B = blue 4-6 s.
@@ -363,7 +363,7 @@ test("real ffmpeg: blends (dissolve, push, wipe) overlap the clips without movin
     const planner = new FfmpegCommandPlanner({ resolve: async () => src });
     const at = (path, s) => [...execFileSync("ffmpeg", ["-v", "error", "-ss", String(s), "-i", path, "-frames:v", "1", "-vf", "crop=8:8:156:116,scale=1:1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"])];
     const length = (path) => Number(execFileSync("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path]).toString());
-    for (const kind of ["dissolve", "push", "wipe"]) {
+    for (const kind of ["dissolve", "push", "wipe", "soft-pan", "soft-rise", "match-push", "film-fade", "silver-fade", "editorial-cover"]) {
       const out = join(dir, kind + ".mp4");
       const clips = [clip("a", 0, 2_000_000, 0), { ...clip("b", 4_000_000, 6_000_000, 2_000_000), transform: { transitionIn: kind, transitionSeconds: 0.8 } }];
       await new FfmpegProcess().run(await planner.plan(revision(clips), { ...settings, width: 320, height: 240, frameRate: 25 }, out));

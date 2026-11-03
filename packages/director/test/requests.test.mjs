@@ -87,6 +87,8 @@ test("asking for a dissolve or push puts it between the parts", async () => {
   const ops = effectOperations(plan, new Set([t.id]), timeline, "a");
   assert.deepEqual(ops.map((o) => o.transitionIn ?? "-"), ["dip-black", "dissolve", "dissolve"]);
   assert.equal((await new RuleDirector().ask({ ...input, instruction: "push transitions please" })).suggestions[0].transition, "push");
+  assert.equal((await new RuleDirector().ask({ ...input, instruction: "use a restrained match push between the before and after" })).suggestions[0].transition, "match-push");
+  assert.equal((await new RuleDirector().ask({ ...input, instruction: "use a silver archive fade for the memory" })).suggestions[0].transition, "silver-fade");
 });
 
 test('bracketed narration requested after the video becomes an outro suggestion', async () => {
