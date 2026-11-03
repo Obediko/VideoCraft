@@ -87,3 +87,15 @@ test("a readability fix must fit its host clip, or explicitly require a longer p
   const changed = applyTimelineOperations(roomy, fix.fix.operations);
   assert.equal(checkEdit({ timeline: changed, assetId: A, words: [], sourceDurationUs: durationUs, platform: "youtube" }).some(i => i.kind === "too-fast"), false);
 });
+
+test("finishing checks restrain transitions, GIFs and unreadable captions", () => {
+  const clips = Array.from({ length: 5 }, (_, i) => ({ id: "v" + i, assetId: i === 3 ? "gif" : A, sourceStartUs: i * 2e6, sourceEndUs: i * 2e6 + 2e6, timelineStartUs: i * 2e6, timelineEndUs: i * 2e6 + 2e6, transform: i ? { transitionIn: "dissolve", transitionSeconds: 1.2 } : {} }));
+  clips[3].sourceEndUs += 2e6; clips[3].timelineEndUs += 2e6;
+  const timeline = { durationUs: 10e6, tracks: [{ id: "video", kind: "video", clips }, { id: "captions", kind: "caption", clips: [
+    { id: "c1", assetId: "generated:caption", sourceStartUs: 0, sourceEndUs: 700000, timelineStartUs: 0, timelineEndUs: 700000, transform: { text: "This caption contains far too many words for its very short display" } },
+    { id: "c2", assetId: "generated:caption", sourceStartUs: 0, sourceEndUs: 800000, timelineStartUs: 650000, timelineEndUs: 1450000, transform: { text: "and this overlaps" } },
+  ] }] };
+  const issues = checkEdit({ timeline, assetId: A, words: [], sourceDurationUs: 12e6, platform: "youtube", allVisuals: true, assetInfo: { [A]: { kind: "video" }, gif: { kind: "video", stockKind: "gif" } } });
+  for (const kind of ["transition-overuse", "transition-long", "gif-restraint", "caption-density", "caption-overlap"]) assert.ok(kinds(issues).includes(kind), kind + " in " + kinds(issues));
+  assert.equal(issues.find(issue => issue.kind === "transition-overuse").severity, "warn", "the rules do not guess which story turn deserves the transition");
+});

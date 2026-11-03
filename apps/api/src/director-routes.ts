@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { applyTimelineOperations, parseTimelineOperations, parseEffectRecipe, type EffectRecipe, type EffectLibraryRepository, type ProjectRevision, type TranscriptSegment, type UUID } from "@videocraft/domain";
+import { applyTimelineOperations, parseTimelineOperations, parseEffectRecipe, type Asset, type EffectRecipe, type EffectLibraryRepository, type ProjectRevision, type TranscriptSegment, type UUID } from "@videocraft/domain";
 import type { AssetRepository, ProjectRepository, RevisionRepository } from "@videocraft/application";
 import type { ObjectStorage } from "@videocraft/storage";
 import { RuleDirector, briefHints, checkEdit, effectOperations, parseMediaSignals, planOperations, sanitizePlan, type CheckIssue, type Director, type DirectorInput, type DirectorPlan, type MediaSignals } from "@videocraft/director";
@@ -27,6 +27,8 @@ export interface DirectorRouteDependencies {
   previewStock?(query: string, kind: "video" | "photo" | "gif", orientation?: "portrait" | "landscape" | "square"): Promise<{ provider: "pexels" | "pixabay" | "giphy"; id: string; thumbUrl: string; credit?: string } | undefined>;
   /** Imports one stock item the creator saw in a suggestion. */
   importStock?(projectId: UUID, provider: "pexels" | "pixabay" | "giphy", kind: "video" | "photo" | "gif", id: string): Promise<{ id: UUID }>;
+  /** Returns a bounded slate for the Director to compare before importing one winner. */
+  visualCandidates?(query: string, orientation: "portrait" | "landscape" | "square", minimumDurationS: number): Promise<Array<{ provider: "pexels" | "pixabay"; id: string; kind: "video" | "photo"; thumbUrl: string; width: number; height: number; durationS?: number | undefined; title?: string | undefined; credit?: string | undefined }>>;
   /** Finds and imports a free stock video, photo or GIF for a few words (absent without stock keys). */
   findStock?(projectId: UUID, query: string, kind: "video" | "photo" | "gif", orientation?: "portrait" | "landscape" | "square"): Promise<{ id: UUID } | undefined>;
   /** Reads text aloud as an audio asset (absent without the OpenAI key). */
@@ -220,6 +222,20 @@ function contextOf(dependencies: DirectorRouteDependencies) {
 
 /** Edit check: rules (cuts, pauses, text, music, captions, black/frozen picture) plus an AI second look when available. */
 export function registerCheckRoutes(server: FastifyInstance, dependencies: DirectorRouteDependencies, context: ReturnType<typeof contextOf>): void {
+  type CheckContext = NonNullable<Awaited<ReturnType<typeof context>>>;
+  type TimelineClip = ProjectRevision["timeline"]["tracks"][number]["clips"][number];
+  const saveReplacement = async (ctx: CheckContext, target: TimelineClip, replacement: Asset): Promise<ProjectRevision> => {
+    const durationUs = target.timelineEndUs - target.timelineStartUs;
+    if (replacement.kind === "video" && (!(replacement.durationUs && replacement.durationUs >= durationUs))) throw Object.assign(new Error("That video is shorter than this scene. Choose a longer video or a photo."), { code: "replacement_too_short" });
+    const sourceStartUs = 0; const sourceEndUs = durationUs;
+    const tracks = ctx.revision.timeline.tracks.map((track) => ({ ...track, clips: track.clips.map((clip) => {
+      if (clip.id === target.id && track.kind === "video") return { ...clip, assetId: replacement.id, sourceStartUs, sourceEndUs };
+      if (clip.transform?.anchorClipId !== target.id || typeof clip.transform.anchorSourceUs !== "number") return clip;
+      const relative = Math.max(0, Math.min(durationUs - 1, Number(clip.transform.anchorSourceUs) - target.sourceStartUs));
+      return { ...clip, transform: { ...clip.transform, anchorAssetId: replacement.id, anchorSourceUs: sourceStartUs + relative } };
+    }) }));
+    return dependencies.saveRevision({ projectId: ctx.projectId, createdBy: ctx.principal.userId, timeline: { ...ctx.revision.timeline, tracks }, acceptedProposalIds: ctx.revision.acceptedProposalIds, ...(ctx.revision.tailoring ? { tailoring: ctx.revision.tailoring } : {}) });
+  };
   server.post("/v1/projects/:projectId/director/check", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } } as never, async (request: FastifyRequest, reply: FastifyReply) => {
     const ctx = await context(request, reply);
     if (!ctx) return reply;
@@ -258,7 +274,8 @@ export function registerCheckRoutes(server: FastifyInstance, dependencies: Direc
         }
       }).catch(caught => request.log.warn({ err: caught, assetId }, "Review source unavailable"));
     }
-    const issues: CheckIssue[] = checkEdit({ timeline, assetId: ctx.main.id, words, sourceDurationUs: ctx.main.durationUs ?? Math.round(ctx.durationS * 1e6), platform, ...(isStory ? { allVisuals: true } : {}), ...(target ? { targetSeconds: target } : {}), ...(media ? { media } : {}) });
+    const assetInfo = Object.fromEntries(reviewAssets.map(asset => [asset.id, { kind: asset.kind, ...(typeof asset.metadata.stockKind === "string" ? { stockKind: asset.metadata.stockKind } : {}) }]));
+    const issues: CheckIssue[] = checkEdit({ timeline, assetId: ctx.main.id, words, sourceDurationUs: ctx.main.durationUs ?? Math.round(ctx.durationS * 1e6), platform, assetInfo, ...(isStory ? { allVisuals: true } : {}), ...(target ? { targetSeconds: target } : {}), ...(media ? { media } : {}) });
     let note: string | undefined; let ai = false;
     if (dependencies.director.review) {
       const textOf = (startUs: number, endUs: number) => words.filter((w) => w.startUs >= startUs - 50_000 && w.endUs <= endUs + 50_000).map((w) => w.text).join(" ");
@@ -304,18 +321,45 @@ export function registerCheckRoutes(server: FastifyInstance, dependencies: Direc
     const replacement = (await dependencies.assets.listForProject(ctx.projectId)).find((asset) => asset.id === assetId && (asset.kind === "video" || asset.kind === "image"));
     const target = ctx.revision.timeline.tracks.filter((track) => track.kind === "video").flatMap((track) => track.clips).find((clip) => clip.id === clipId);
     if (!clipId || !replacement || !target) return error(reply, 400, "invalid_request", "Choose an owned photo or video for the reviewed scene");
-    const durationUs = target.timelineEndUs - target.timelineStartUs;
-    if (replacement.kind === "video" && (!(replacement.durationUs && replacement.durationUs >= durationUs))) return error(reply, 422, "replacement_too_short", "That video is shorter than this scene. Choose a longer video or a photo.");
-    const sourceStartUs = 0; const sourceEndUs = durationUs;
-    const tracks = ctx.revision.timeline.tracks.map((track) => ({ ...track, clips: track.clips.map((clip) => {
-      if (clip.id === target.id && track.kind === "video") return { ...clip, assetId: replacement.id, sourceStartUs, sourceEndUs };
-      if (clip.transform?.anchorClipId !== target.id || typeof clip.transform.anchorSourceUs !== "number") return clip;
-      const relative = Math.max(0, Math.min(durationUs - 1, Number(clip.transform.anchorSourceUs) - target.sourceStartUs));
-      return { ...clip, transform: { ...clip.transform, anchorAssetId: replacement.id, anchorSourceUs: sourceStartUs + relative } };
-    }) }));
-    const revision = await dependencies.saveRevision({ projectId: ctx.projectId, createdBy: ctx.principal.userId, timeline: { ...ctx.revision.timeline, tracks }, acceptedProposalIds: ctx.revision.acceptedProposalIds, ...(ctx.revision.tailoring ? { tailoring: ctx.revision.tailoring } : {}) });
+    let revision: ProjectRevision;
+    try { revision = await saveReplacement(ctx, target, replacement); }
+    catch (caught) { if (caught instanceof Error && (caught as Error & { code?: string }).code === "replacement_too_short") return error(reply, 422, "replacement_too_short", caught.message); throw caught; }
     request.log.info({ projectId: ctx.projectId, revision: revision.revision, clipId, assetId: replacement.id }, "Reviewed visual replaced");
     return reply.code(201).send({ revision, asset: replacement });
+  });
+
+  /** Search, compare and apply one Director-ranked visual. This is deliberately one bounded pass, never a retry loop. */
+  server.post("/v1/projects/:projectId/director/choose-visual", { config: { rateLimit: { max: 6, timeWindow: "1 minute" } } } as never, async (request: FastifyRequest, reply: FastifyReply) => {
+    const ctx = await context(request, reply);
+    if (!ctx) return reply;
+    if (!ctx.revision.tailoring?.constraints?.includes("creation:story")) return error(reply, 422, "storyboard_required", "Director visual choice is available for narrated Storyboard scenes");
+    if (!dependencies.director.rankVisuals || !dependencies.visualCandidates || !dependencies.importStock) return error(reply, 503, "director_choice_unavailable", "Director visual choice needs AI and a configured Pexels or Pixabay library");
+    const project = await dependencies.projects.get(ctx.projectId);
+    if (project && project.revision !== ctx.revision.revision) return error(reply, 409, "revision_conflict", "The edit changed; check again before choosing a visual");
+    const clipId = typeof ctx.body.clipId === "string" ? ctx.body.clipId : "";
+    const query = typeof ctx.body.query === "string" ? ctx.body.query.replace(/[^\p{L}\p{N}\s'-]+/gu, " ").replace(/\s+/g, " ").trim().slice(0, 100) : "";
+    const target = ctx.revision.timeline.tracks.filter(track => track.kind === "video").flatMap(track => track.clips).find(clip => clip.id === clipId);
+    if (!target || query.split(/\s+/).length < 2) return error(reply, 400, "invalid_request", "A reviewed scene and its search brief are required");
+    const durationS = (target.timelineEndUs - target.timelineStartUs) / 1e6;
+    const orientation = ctx.revision.tailoring?.channel === "youtube" ? "landscape" : ctx.revision.tailoring?.channel === "square" ? "square" : "portrait";
+    const current = (await dependencies.assets.listForProject(ctx.projectId)).find(asset => asset.id === target.assetId);
+    const candidates = (await dependencies.visualCandidates(query, orientation, durationS)).filter(candidate => !(candidate.provider === current?.metadata.stockProvider && candidate.id === current?.metadata.stockId)).slice(0, 12);
+    if (!candidates.length) return error(reply, 404, "no_visual_candidates", "No suitable visual long enough for this scene was found");
+    const captions = ctx.revision.timeline.tracks.filter(track => track.kind === "caption").flatMap(track => track.clips).filter(clip => clip.timelineEndUs > target.timelineStartUs && clip.timelineStartUs < target.timelineEndUs).map(clip => String(clip.transform?.text ?? "")).filter(Boolean).join(" ");
+    let ranking: Awaited<ReturnType<NonNullable<Director["rankVisuals"]>>>;
+    try { ranking = await dependencies.director.rankVisuals({ brief: ctx.revision.tailoring?.intent ?? "", scene: { query, narration: captions || "No timed narration supplied", orientation, durationS }, candidates }); }
+    catch (caught) { request.log.warn({ err: caught, projectId: ctx.projectId, clipId }, "Director visual ranking failed"); return error(reply, 502, "ranking_failed", "The Director could not compare these visuals. Manual choices remain available."); }
+    if (ranking.confidence < 0.6) return reply.code(422).send({ error: { code: "low_confidence", message: "The Director did not find a replacement strong enough to apply automatically." }, ranking: { confidence: ranking.confidence, reason: ranking.reason }, candidates: candidates.length });
+    const winner = candidates[ranking.index];
+    if (!winner) return error(reply, 502, "ranking_failed", "The Director's visual choice was unavailable");
+    const imported = await dependencies.importStock(ctx.projectId, winner.provider, winner.kind, winner.id);
+    const replacement = (await dependencies.assets.listForProject(ctx.projectId)).find(asset => asset.id === imported.id);
+    if (!replacement) return error(reply, 502, "stock_import_failed", "The chosen visual could not be imported");
+    let revision: ProjectRevision;
+    try { revision = await saveReplacement(ctx, target, replacement); }
+    catch (caught) { if (caught instanceof Error && (caught as Error & { code?: string }).code === "replacement_too_short") return error(reply, 422, "replacement_too_short", "The chosen source file is shorter than advertised. Manual choices remain available."); throw caught; }
+    request.log.info({ projectId: ctx.projectId, revision: revision.revision, clipId, assetId: replacement.id, provider: winner.provider, stockId: winner.id, confidence: ranking.confidence }, "Director chose reviewed visual");
+    return reply.code(201).send({ revision, asset: replacement, choice: { confidence: ranking.confidence, reason: ranking.reason, compared: candidates.length, provider: winner.provider, kind: winner.kind, credit: winner.credit } });
   });
 
   server.post("/v1/projects/:projectId/director/fix", async (request: FastifyRequest, reply: FastifyReply) => {

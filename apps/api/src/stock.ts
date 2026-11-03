@@ -282,6 +282,19 @@ export async function previewStock(dependencies: StockDependencies, query: strin
   return undefined;
 }
 
+/** A small, diverse candidate slate for the AI picture editor. Nothing is imported until it chooses. */
+export async function visualCandidates(dependencies: StockDependencies, query: string, orientation: "portrait" | "landscape" | "square", minimumDurationS: number): Promise<Array<StockItem & { provider: "pexels" | "pixabay"; kind: "video" | "photo" }>> {
+  const fetcher: Fetcher = dependencies.fetch ?? ((url, init) => fetch(url, init) as never);
+  const searches = (["video", "photo"] as const).flatMap(kind => providersFor(dependencies.keys, kind).map(async provider => ({
+    provider, kind, items: await searchProvider(fetcher, dependencies.keys, provider, kind, query, orientation).catch(() => []),
+  })));
+  const lists = await Promise.all(searches);
+  const usable = lists.map(list => list.items.filter(item => item.thumbUrl.startsWith("https://") && (item.kind !== "video" || (item.durationS ?? 0) >= minimumDurationS)).slice(0, 4));
+  const out: StockItem[] = [];
+  for (let index = 0; index < 4 && out.length < 12; index += 1) for (const list of usable) if (list[index]) out.push(list[index]!);
+  return out as Array<StockItem & { provider: "pexels" | "pixabay"; kind: "video" | "photo" }>;
+}
+
 /** The best free stock match for a few words, imported as an asset (for the director). Undefined when none. */
 export async function findStock(dependencies: StockDependencies, projectId: string, query: string, kind: StockKind, orientation?: "portrait" | "landscape" | "square"): Promise<Asset | undefined> {
   const fetcher: Fetcher = dependencies.fetch ?? ((url, init) => fetch(url, init) as never);

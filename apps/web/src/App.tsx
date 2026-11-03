@@ -910,6 +910,18 @@ export function App() {
       await runCheck(result.revision.revision);
     } catch (error) { setStatus(errorMessage(error)); setBusy(false); }
   }
+  async function letDirectorChooseVisual(issue: CheckIssue) {
+    if (!projectId || !check || !issue.replacement) return;
+    setBusy(true); setStatus("Director is comparing the strongest matching videos and photos…");
+    try {
+      const result = await request("/v1/projects/" + projectId + "/director/choose-visual", { method: "POST", body: JSON.stringify({ revision: check.revision, clipId: issue.replacement.clipId, query: issue.replacement.query }) });
+      setRevision(result.revision.revision); setTimeline(result.revision.timeline);
+      const listed = await request("/v1/projects/" + projectId + "/assets").catch(() => null); if (listed) setAssets(listed.assets);
+      setRenderUrl(""); setRenderJobId(""); setRenderJobStatus(""); setCheck(null); setBusy(false);
+      await runCheck(result.revision.revision);
+      setStatus("Director compared " + result.choice.compared + " candidates and chose the strongest match (" + Math.round(result.choice.confidence * 100) + "% confidence). " + result.choice.reason);
+    } catch (error) { setStatus(errorMessage(error)); setBusy(false); }
+  }
   function showIssue(issue: CheckIssue) {
     if (typeof issue.atS !== "number") return;
     setPreviewMode("edit");
@@ -1192,7 +1204,7 @@ export function App() {
               <span className="small what">{issue.detail}</span>
               {issue.fix && <span className="small fix-label">→ {issue.fix.label}</span>}
               {typeof issue.atS === "number" && <button type="button" className="link small" onClick={() => showIssue(issue)}>Show at {issue.atS.toFixed(1)} s</button>}
-              {issue.replacement && scene && <div className="stack review-replacement"><strong>{issue.replacement.label}</strong><p className="muted small">AI search brief: “{issue.replacement.query}”. Preview a choice; only the one you select replaces this scene.</p>{alternatives.length > 0 && <div className="actions"><span className="small muted">Use project media:</span>{alternatives.map(asset => <button type="button" className="btn" key={asset.id} disabled={busy} onClick={() => void replaceReviewedVisual(issue, asset)}>{assetName(asset.id)}</button>)}</div>}<StockSearch projectId={projectId} request={request} disabled={busy || check.revision !== revision} orientation={(PLATFORMS[platform]?.width ?? 9) < (PLATFORMS[platform]?.height ?? 16) ? "portrait" : PLATFORMS[platform]?.width === PLATFORMS[platform]?.height ? "square" : "landscape"} initialQuery={issue.replacement.query} minimumDurationS={(scene.timelineEndUs - scene.timelineStartUs) / 1e6} hint="Choose one to replace only this reviewed scene." onUse={asset => void replaceReviewedVisual(issue, asset as Asset)} /></div>}
+              {issue.replacement && scene && <div className="stack review-replacement"><strong>{issue.replacement.label}</strong><p className="muted small">AI search brief: “{issue.replacement.query}”. Let the Director compare and apply the strongest match once, or choose manually.</p><div className="actions"><button type="button" className="primary" disabled={busy || check.revision !== revision} onClick={() => void letDirectorChooseVisual(issue)}>Let Director choose</button><span className="muted small">Ranks relevance, authenticity, framing, duration and picture quality.</span></div>{alternatives.length > 0 && <div className="actions"><span className="small muted">Or use project media:</span>{alternatives.map(asset => <button type="button" className="btn" key={asset.id} disabled={busy} onClick={() => void replaceReviewedVisual(issue, asset)}>{assetName(asset.id)}</button>)}</div>}<StockSearch projectId={projectId} request={request} disabled={busy || check.revision !== revision} orientation={(PLATFORMS[platform]?.width ?? 9) < (PLATFORMS[platform]?.height ?? 16) ? "portrait" : PLATFORMS[platform]?.width === PLATFORMS[platform]?.height ? "square" : "landscape"} initialQuery={issue.replacement.query} minimumDurationS={(scene.timelineEndUs - scene.timelineStartUs) / 1e6} hint="Manual choice remains available; it replaces only this reviewed scene." onUse={asset => void replaceReviewedVisual(issue, asset as Asset)} /></div>}
             </div>
           </li>; })}</ul>}
           <div className="actions">
