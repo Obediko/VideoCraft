@@ -110,7 +110,8 @@ test("an idea with no uploads requires an approved visual; stock and generated i
   await expect(page.getByLabel("Narration preference", { exact: true })).toHaveValue("ai");
   await page.getByLabel("Your brief").fill("A hopeful sunrise story");
   await page.getByRole("button", { name: "Develop the first cut" }).click();
-  await expect(page.getByRole("button", { name: "Build the first cut" })).toBeDisabled();
+  await page.getByRole("button", { name: "Build the first cut" }).click();
+  await expect(page.getByRole("alert")).toContainText("Choose a visual for scene 1");
   await page.getByRole("button", { name: "Find visuals for scene 1" }).click();
   await page.getByLabel("Search stock").fill("sunrise");
   await page.getByRole("button", { name: "Search", exact: true }).click();
