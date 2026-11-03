@@ -84,7 +84,17 @@ export interface Director {
   ask?(input: AskInput): Promise<DirectorPlan>;
   /** A second look at a finished edit (AI only); the rules check runs separately. */
   review?(input: ReviewInput): Promise<CheckIssue[]>;
+  /** Compare a bounded set of real visual candidates for one narrated scene. */
+  rankVisuals?(input: VisualRankingInput): Promise<VisualRanking>;
 }
+
+export interface VisualRankingInput {
+  brief: string;
+  scene: { query: string; narration: string; orientation: "portrait" | "landscape" | "square"; durationS: number };
+  candidates: Array<{ provider: "pexels" | "pixabay"; id: string; kind: "video" | "photo"; title?: string | undefined; credit?: string | undefined; width: number; height: number; durationS?: number | undefined; thumbUrl: string }>;
+}
+
+export interface VisualRanking { index: number; confidence: number; reason: string }
 
 export interface AskInput extends DirectorInput {
   instruction: string;
@@ -402,7 +412,8 @@ You are now changing an existing edit, not making a new one. Suggest ONLY what t
 - If the request cannot be done by editing, return one "advice" saying so kindly.`;
 
 const REVIEW = `You are a senior picture editor giving a restrained final quality-control review before publication. You get the creator's description, the assembled edit scene by scene, narration/caption context, transitions, looks, motion, graphics, cutaways, and labelled sampled frames.
-Find at most 6 real problems a viewer would notice, most important first: a weak or slow opening; repeated, irrelevant or confusing story beats; abrupt pacing or a transition that clashes with adjacent scenes; inconsistent colour/framing; on-screen text that is wrong, unclear, misspelt, unreadable or covers something important; a visual that does not support the narration; or a visibly weak frame (dark, blurry, cluttered, stretched or badly cropped).
+Review the edit as one treatment system, not a collection of effects. Find at most 6 real problems a viewer would notice, most important first: a weak or slow opening; repeated, irrelevant or confusing story beats; abrupt pacing; visible transitions that are overused, too long, consecutive or emotionally wrong; GIFs/reaction media that cheapen a sincere tone or outstay one brief beat; captions that are dense, mistimed, repetitive or fight graphics; inconsistent colour/framing; on-screen text that is wrong, unclear, misspelt, unreadable or covers something important; a visual that does not support the narration; or a visibly weak frame (dark, blurry, cluttered, stretched or badly cropped).
+Prefer coherence and restraint: clean cuts by default; one motivated transition at a real story turn; GIFs only for explicitly playful work; captions following spoken phrase boundaries; one typography/accent system; consistent colour; music and motion serving the story. Do not suggest an effect merely because the feature exists.
 Judge only the supplied evidence. Sampled frames are not continuous playback, and audio is described rather than heard: never claim to have watched every frame, heard the mix, detected lip-sync, or measured loudness. Do not manufacture a problem merely to return feedback. Intentional still images are not frozen video.
 For each, choose one action that fixes it if possible:
 - "remove-piece" (piece = index) to drop a piece; "move-piece" (piece, toIndex) to reorder, e.g. toIndex 0 to open on the strongest line;
@@ -417,6 +428,15 @@ const REVIEW_SCHEMA = {
   properties: { issues: { type: "array", items: { type: "object", additionalProperties: false,
     required: ["title", "detail", "atS", "severity", "action", "piece", "toIndex", "graphic", "text", "transition", "seconds", "query"],
     properties: { title: { type: "string" }, detail: { type: "string" }, atS: { type: "number" }, severity: { type: "string", enum: ["fix", "warn", "info"] }, action: { type: "string", enum: ["none", "remove-piece", "move-piece", "rewrite-text", "remove-graphic", "set-transition", "replace-visual"] }, piece: { type: "integer" }, toIndex: { type: "integer" }, graphic: { type: "integer" }, text: { type: "string" }, transition: { type: "string", enum: ["", "cut", "dissolve", "dip-black", "dip-white", "flash"] }, seconds: { type: "number" }, query: { type: "string" } } } } },
+};
+
+const VISUAL_RANKING = `You are a senior picture editor choosing one stock visual for one narrated scene. Compare every supplied candidate, then choose the single strongest editorial match.
+Rank by: direct support for the narration and search brief; authentic people, action and place; useful composition for the requested orientation; sufficient video duration; visual clarity; and continuity with a sincere premium documentary style. Do not reward a candidate merely for matching one keyword. Penalise generic, staged, geographically contradictory, text-heavy, logo-heavy or ambiguous imagery.
+Return a confidence from 0 to 1. Use confidence below 0.6 when none is a responsible replacement.`;
+
+const VISUAL_RANKING_SCHEMA = {
+  type: "object", additionalProperties: false, required: ["index", "confidence", "reason"],
+  properties: { index: { type: "integer" }, confidence: { type: "number" }, reason: { type: "string" } },
 };
 
 /** The AI director over OpenAI's Responses API with image input and a strict JSON schema; falls back to rules. */
@@ -491,6 +511,19 @@ export class OpenAiDirector implements Director {
       out.push({ id: "ai-" + i, severity, kind: "ai-" + String(issue.action || "note"), title, detail, ...(atS !== undefined ? { atS } : {}), ...(fix ? { fix } : {}), ...(replacement ? { replacement } : {}), source: "ai" });
     }
     return out;
+  }
+  async rankVisuals(input: VisualRankingInput): Promise<VisualRanking> {
+    if (input.candidates.length < 1 || input.candidates.length > 12) throw new Error("Visual ranking needs 1 to 12 candidates");
+    const lines = input.candidates.map((candidate, index) => "#" + index + " " + candidate.kind + " " + candidate.width + "x" + candidate.height + (candidate.durationS ? " " + candidate.durationS.toFixed(1) + " s" : "") + "; " + (candidate.title ?? "untitled") + "; source " + candidate.provider).join("\n");
+    const content: Array<Record<string, unknown>> = [{ type: "input_text", text: "Film brief:\n" + input.brief.slice(0, 2000) + "\n\nScene narration/context:\n" + input.scene.narration.slice(0, 1000) + "\n\nSearch brief: " + input.scene.query.slice(0, 100) + "\nFormat: " + input.scene.orientation + "; scene duration: " + input.scene.durationS.toFixed(1) + " s\n\nCandidates:\n" + lines + "\n\nCandidate images follow in the same numbered order." }];
+    for (const [index, candidate] of input.candidates.entries()) {
+      content.push({ type: "input_text", text: "Candidate #" + index + ":" });
+      content.push({ type: "input_image", image_url: candidate.thumbUrl, detail: "low" });
+    }
+    const raw = (await this.request(VISUAL_RANKING, content, "visual_ranking", VISUAL_RANKING_SCHEMA)) as Record<string, unknown>;
+    const index = Number(raw.index); const confidence = Number(raw.confidence);
+    if (!Number.isInteger(index) || index < 0 || index >= input.candidates.length || !Number.isFinite(confidence)) throw new Error("The visual ranking was invalid");
+    return { index, confidence: Math.max(0, Math.min(1, confidence)), reason: typeof raw.reason === "string" ? raw.reason.replace(/\s+/g, " ").trim().slice(0, 300) : "Best editorial match" };
   }
   private async call(input: DirectorInput, instructions = SYSTEM, extra = ""): Promise<unknown> {
     const lines = input.transcript.map((s) => "[" + s.startS.toFixed(1) + "-" + s.endS.toFixed(1) + "] " + s.text).join("\n").slice(0, 60_000);

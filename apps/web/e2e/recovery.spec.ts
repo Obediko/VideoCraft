@@ -53,6 +53,7 @@ async function editor(page:Page, screen='export', resume=false) {
     else if(path.endsWith('/director/plan'))body={plan:{source:'ai',summary:'Add the approved picture without music',suggestions:[{id:'stock',kind:'stock',title:'Approved picture',query:'freedom',atS:0,durationS:1,mode:'full'}]}};
     else if(path.endsWith('/director/apply')){state.planApplied=true;state.revision++;const edited=timeline(2);edited.tracks.push({id:'o',kind:'overlay',clips:[{id:'photo-cutaway',assetId:'stock-photo',sourceStartUs:0,sourceEndUs:1e6,timelineStartUs:0,timelineEndUs:1e6,transform:{role:'broll',mode:'full'}}]});body={revision:{revision:state.revision,timeline:edited}};}
     else if(path.endsWith('/director/check'))body={ai:true,scanned:false,sampledFrames:2,note:'AI picture review used 2 labelled frames.',issues:state.replacementCalls.length?[]:[{id:'ai-replace',severity:'warn',kind:'ai-replace-visual',title:'Use a locally grounded scene',detail:'The current visual does not support the location in the brief.',atS:0,source:'ai',replacement:{label:'Find a better visual',query:'Nigerian community mentor helping entrepreneur',clipId:'c'}}]};
+    else if(path.endsWith('/director/choose-visual')){state.replacementCalls.push(req.postDataJSON());state.revision++;state.withImportedPhoto=true;const changed=timeline(2);changed.tracks[0].clips[0].assetId='stock-photo';body={revision:{revision:state.revision,timeline:changed},asset:{id:'stock-photo',kind:'image',metadata:{filename:'Nigerian community support.jpg'}},choice:{confidence:.88,reason:'The visible helping action best supports the narration.',compared:8,provider:'pexels',kind:'photo'}};status=201;}
     else if(path.endsWith('/director/replace-visual')){state.replacementCalls.push(req.postDataJSON());state.revision++;state.withImportedPhoto=true;const changed=timeline(2);changed.tracks[0].clips[0].assetId='stock-photo';body={revision:{revision:state.revision,timeline:changed},asset:{id:'stock-photo',kind:'image',metadata:{filename:'Nigerian community support.jpg'}}};status=201;}
     else if(/\/revisions\/\d+\/restore$/.test(path)) {
       const expected=req.postDataJSON().expectedRevision;
@@ -177,16 +178,17 @@ test('applying a Director plan without music loads the approved photo into the p
   await expect(page.locator('video.live-broll')).toHaveCount(0);
 });
 
-test('an AI review finding scouts stock and replaces only the approved scene',async({page})=>{
+test('the Director ranks visual suggestions and replaces the scene in one bounded choice',async({page})=>{
   const state=await editor(page,'check');state.reviewReplacement=true;
   await page.goto('/');
   await page.getByRole('button',{name:'Check my edit',exact:true}).click();
   await expect(page.getByText('Use a locally grounded scene',{exact:true})).toBeVisible();
   await expect(page.getByText('AI search brief:',{exact:false})).toContainText('Nigerian community mentor helping entrepreneur');
-  await page.getByRole('button',{name:'Add Community support from Pexels',exact:true}).click();
+  await page.getByRole('button',{name:'Let Director choose',exact:true}).click();
   await expect.poll(()=>state.replacementCalls.length).toBe(1);
-  expect(state.replacementCalls[0]).toMatchObject({revision:2,clipId:'c',assetId:'stock-photo'});
+  expect(state.replacementCalls[0]).toMatchObject({revision:2,clipId:'c',query:'Nigerian community mentor helping entrepreneur'});
   await expect(page.getByText('Nothing to fix. Ready to export.',{exact:true})).toBeVisible();
+  await expect(page.getByText(/compared 8 candidates.*88% confidence/i)).toBeVisible();
 });
 
 

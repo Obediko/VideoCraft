@@ -91,6 +91,21 @@ test("OpenAI director falls back to rules, and says why, on errors or unusable a
   } finally { await empty.close(); }
 });
 
+test("OpenAI visual ranking sends every candidate image and validates the winner", async () => {
+  const mock = await mockOpenAi(() => [200, { output_text: JSON.stringify({ index: 1, confidence: 0.84, reason: "Visible guidance and a locally grounded setting support the line." }) }]);
+  try {
+    const director = new OpenAiDirector({ apiKey: "sk-test", model: "m", endpoint: mock.endpoint });
+    const result = await director.rankVisuals({ brief: "A sincere community film", scene: { query: "mentor helping entrepreneur nigeria", narration: "Someone willing to help", orientation: "portrait", durationS: 4 }, candidates: [
+      { provider: "pexels", id: "1", kind: "video", width: 1920, height: 1080, durationS: 7, thumbUrl: "https://images.pexels.com/one.jpg", title: "office" },
+      { provider: "pixabay", id: "2", kind: "photo", width: 1200, height: 1800, thumbUrl: "https://cdn.pixabay.com/two.jpg", title: "mentor" },
+    ] });
+    assert.deepEqual(result, { index: 1, confidence: 0.84, reason: "Visible guidance and a locally grounded setting support the line." });
+    const content = mock.requests[0].body.input[0].content;
+    assert.deepEqual(content.filter(item => item.type === "input_image").map(item => item.image_url), ["https://images.pexels.com/one.jpg", "https://cdn.pixabay.com/two.jpg"]);
+    assert.equal(mock.requests[0].body.text.format.name, "visual_ranking");
+  } finally { await mock.close(); }
+});
+
 test("applying a plan: words are not clipped, captions are rebuilt once, graphics land inside kept footage", async () => {
   const base = { durationUs: Math.round(durationS * 1e6), tracks: [{ id: "v", kind: "video", clips: [{ id: "src", assetId: "talk", sourceStartUs: 0, sourceEndUs: Math.round(durationS * 1e6), timelineStartUs: 0, timelineEndUs: Math.round(durationS * 1e6) }] }, { id: "c", kind: "caption", clips: [{ id: "old-cue", assetId: "talk", sourceStartUs: 600_000, sourceEndUs: 1_500_000, timelineStartUs: 600_000, timelineEndUs: 1_500_000, transform: { text: "old", sourceBound: true } }] }] };
   const plan = sanitizePlan({ summary: "s", profile: {}, suggestions: [

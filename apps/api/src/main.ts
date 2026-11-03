@@ -20,7 +20,7 @@ import { createProxy, isStillImage, probeMedia } from "@videocraft/analysis";
 import { StorageSilenceDetector } from "./media-analysis.js";
 import { registerRenderRoutes } from "./render-routes.js";
 import { registerMediaRoutes } from "./media-routes.js";
-import { findStock, importStock, previewStock, registerStockRoutes } from "./stock.js";
+import { findStock, importStock, previewStock, registerStockRoutes, visualCandidates } from "./stock.js";
 import { registerVoiceoverRoutes, speak, voiceFetcher } from "./voiceover.js";
 import { registerEffectRoutes } from "./effects.js";
 import { registerPreferenceRoutes } from "./learning.js";
@@ -204,6 +204,7 @@ registerDirectorRoutes(server, { effects, projects, assets, revisions, storage, 
   findStock: (projectId: string, query: string, kind: "video" | "photo" | "gif", orientation?: "portrait" | "landscape" | "square") => findStock(stockDependencies, projectId, query, kind, orientation),
   previewStock: (query: string, kind: "video" | "photo" | "gif", orientation?: "portrait" | "landscape" | "square") => previewStock(stockDependencies, query, kind, orientation),
   importStock: async (projectId: string, provider: "pexels" | "pixabay" | "giphy", kind: "video" | "photo" | "gif", id: string) => (await importStock(stockDependencies, (url, init) => fetch(url, init) as never, projectId, provider, kind, id)).asset,
+  visualCandidates: (query: string, orientation: "portrait" | "landscape" | "square", minimumDurationS: number) => visualCandidates(stockDependencies, query, orientation, minimumDurationS),
 } : {}), ...(voiceDependencies.apiKey ? { speak: (projectId: string, text: string) => speak(voiceDependencies, voiceFetcher(voiceDependencies), projectId, text, "marin") } : {}), saveRevision: (input) => timelineService.saveRevision(input), authenticate: (request) => authenticator.authenticate(request), authorize: authorizer, clock: () => new Date().toISOString(), ...(secretEnvironment.FFMPEG_BIN ? { ffmpeg: secretEnvironment.FFMPEG_BIN } : {}) });
 registerCreationRoutes(server, {
   projects, assets, revisions, storage, transcripts, ...(secretEnvironment.FFMPEG_BIN ? { ffmpeg: secretEnvironment.FFMPEG_BIN } : {}),

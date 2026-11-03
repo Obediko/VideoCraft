@@ -1,5 +1,5 @@
 import { buildCues, cueOperations } from "@videocraft/captions";
-import type { Timeline, TimelineClip, TimelineOperation, TranscriptWord } from "@videocraft/domain";
+import type { Timeline, TimelineClip, TimelineOperation, TranscriptWord, Transition } from "@videocraft/domain";
 
 /**
  * Edit check: looks over a finished edit the way an editor would before export and proposes a concrete fix for
@@ -37,6 +37,8 @@ export interface CheckInput {
   media?: MediaSignals;
   /** Check every visual piece when a storyboard contains several source assets. */
   allVisuals?: boolean;
+  /** Project media facts used for treatment checks (for example, GIF restraint). */
+  assetInfo?: Record<string, { kind: string; stockKind?: string }>;
 }
 
 const ENDS_SENTENCE = /[.!?…]["')\]]?$/;
@@ -158,6 +160,35 @@ export function checkEdit(input: CheckInput): CheckIssue[] {
       const short = text.slice(0, limit + 1).replace(/\s+\S*$/, "").replace(/[,;:–-]+$/, "");
       add({ severity: short.length >= 8 ? "fix" : "warn", kind: "title-long", title: "Title is long for " + (input.platform === "tiktok" ? "a vertical video" : "the frame"), detail: text.length + " characters; titles land best under " + limit + ".", atS: s(g.timelineStartUs), ...(short.length >= 8 && g.transform?.anchorAssetId ? { fix: { label: "Shorten to “" + short + "”", operations: [{ type: "update-graphic" as const, clipId: g.id, text: short }] } } : {}) });
     }
+  });
+
+  // A premium edit has a transition grammar: mostly invisible cuts, with an occasional motivated blend.
+  const decorated = video.map((clip, index) => ({ clip, index })).filter(({ clip, index }) => index > 0 && ![undefined, "", "cut"].includes(clip.transform?.transitionIn as string | undefined));
+  const allowedDecorated = Math.max(1, Math.floor((video.length - 1) / 3));
+  if (decorated.length > allowedDecorated) {
+    add({ severity: "warn", kind: "transition-overuse", title: "Too many visible transitions", detail: decorated.length + " of " + Math.max(0, video.length - 1) + " scene changes use an effect. Clean cuts make the deliberate transitions feel meaningful; keep only those marking a real story turn." });
+  }
+  for (const { clip } of decorated) {
+    const seconds = Number(clip.transform?.transitionSeconds ?? 0.5); const durationS = (clip.timelineEndUs - clip.timelineStartUs) / 1e6;
+    const maximum = Math.max(0.15, Math.min(0.75, durationS * 0.2));
+    const transition = String(clip.transform?.transitionIn); const safeTransition = (["cut", "dissolve", "dip-black", "dip-white", "flash", "push", "slide-up", "wipe", "circle", "blur"] as Transition[]).includes(transition as Transition) ? transition as Transition : "dissolve";
+    if (seconds > maximum + 0.05) add({ severity: "fix", kind: "transition-long", title: "Transition lingers at " + s(clip.timelineStartUs) + " s", detail: seconds.toFixed(2) + " s is heavy for a " + durationS.toFixed(1) + " s scene.", atS: s(clip.timelineStartUs), fix: { label: "Tighten it to " + maximum.toFixed(2) + " s", operations: [{ type: "set-clip-effects", clipId: clip.id, transitionIn: safeTransition, transitionSeconds: Math.round(maximum * 20) / 20 }] } });
+  }
+
+  // GIFs are punctuation, not wallpaper. Long or repeated reaction loops quickly make sincere work feel templated.
+  const gifClips = [...video, ...overlays].filter(clip => input.assetInfo?.[clip.assetId]?.stockKind === "gif");
+  gifClips.forEach((clip, index) => {
+    const durationUs = clip.timelineEndUs - clip.timelineStartUs;
+    if (durationUs > 3_000_000 || index >= 2) add({ severity: "warn", kind: "gif-restraint", title: index >= 2 ? "Several GIFs compete for attention" : "GIF runs too long", detail: "Use reaction GIFs only for a brief, intentional beat; documentary or sincere scenes are usually stronger with real footage.", atS: s(clip.timelineStartUs) });
+  });
+
+  // Caption density and collisions are visible quality faults even when the words are correct.
+  captions.forEach((caption, index) => {
+    const wordsInCue = String(caption.transform?.text ?? "").trim().split(/\s+/).filter(Boolean).length;
+    const shownS = (caption.timelineEndUs - caption.timelineStartUs) / 1e6;
+    if (wordsInCue > 10 || (wordsInCue >= 5 && shownS < wordsInCue / 4.5)) add({ severity: "warn", kind: "caption-density", title: "Caption is difficult to read at " + s(caption.timelineStartUs) + " s", detail: wordsInCue + " words appear for " + shownS.toFixed(1) + " s. Break it at a phrase boundary and keep the spoken rhythm.", atS: s(caption.timelineStartUs) });
+    const previous = captions[index - 1];
+    if (previous && previous.timelineEndUs > caption.timelineStartUs + 40_000) add({ severity: "warn", kind: "caption-overlap", title: "Captions overlap at " + s(caption.timelineStartUs) + " s", detail: "Two speech cues compete on screen. Rebuild captions from the narration timing.", atS: s(caption.timelineStartUs) });
   });
 
   // Music balance.

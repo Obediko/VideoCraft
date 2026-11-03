@@ -8,6 +8,7 @@ export const EFFECT_PRESETS = [
   { id: "focus", name: "Quiet focus", tags: ["motion", "reflective", "cinematic"], description: "A slow push-in across the selected clip for a reflective point.", text: "Focus", kind: "callout", color: "#395B75", durationS: 3 },
   { id: "impact", name: "Impact beat", tags: ["motion", "sound", "emphasis"], description: "A tighter framing on the selected clip and a quiet hit at the chosen moment.", text: "Impact", kind: "callout", color: "#395B75", durationS: 2 },
   { id: "smooth-reveal", name: "Smooth reveal", tags: ["transition", "cinematic", "calm"], description: "A gentle dissolve into the selected clip.", text: "Reveal", kind: "callout", color: "#395B75", durationS: 2 },
+  { id: "time-passage", name: "Passage dissolve", tags: ["transition", "time", "portrait", "cinematic"], description: "A restrained dissolve and slow push for aligned then-and-now images. It suggests growth or elapsed time without synthesising a face.", text: "Then and now", kind: "callout", color: "#395B75", durationS: 3 },
   { id: "chapter", name: "Chapter reveal", tags: ["typography", "story", "structure"], description: "An animated title to introduce the next part of the story.", text: "A new chapter", kind: "title", color: "#637A52", durationS: 3 },
   { id: "question", name: "Question beat", tags: ["typography", "curiosity", "explanation"], description: "A short question on screen to invite the viewer to think.", text: "What happens next?", kind: "callout", color: "#395B75", durationS: 3 },
 ] as const;
@@ -38,7 +39,7 @@ export function parseEffectRecipe(value: unknown): EffectRecipe {
     stock = { provider: s.provider, id: s.id, kind: s.kind, mode: s.mode };
   }
   const sound = r.sound ?? (preset.id === "realization" ? "pop" : preset.id === "impact" ? "hit" : "none");
-  const zoom = r.zoom ?? (preset.id === "focus" ? "push" : preset.id === "impact" ? "punch" : "none");
+  const zoom = r.zoom ?? (preset.id === "focus" || preset.id === "time-passage" ? "push" : preset.id === "impact" ? "punch" : "none");
   if (sound !== "none" && !SOUND_EFFECTS.includes(sound as SoundEffect)) throw new Error("Unknown treatment sound");
   if (!CLIP_ZOOMS.includes(zoom as ClipZoom)) throw new Error("Unknown treatment motion");
   return { ...(stock ? { stock } : {}), sound: sound as SoundEffect | "none", zoom: zoom as ClipZoom, presetId: preset.id, text: text.trim(), color: color.toUpperCase(), durationS: Math.round(durationS * 100) / 100 };
@@ -46,15 +47,15 @@ export function parseEffectRecipe(value: unknown): EffectRecipe {
 export function effectRecipeOperations(recipe: EffectRecipe, anchor: { anchorAssetId: string; anchorClipId?: string; anchorSourceUs: number; importedAssetId?: string }): TimelineOperation[] {
   const r = parseEffectRecipe(recipe), preset = EFFECT_PRESETS.find(p => p.id === r.presetId)!;
   const operations: TimelineOperation[] = [];
-  if (r.zoom !== "none" || r.presetId === "smooth-reveal") {
+  if (r.zoom !== "none" || r.presetId === "smooth-reveal" || r.presetId === "time-passage") {
     if (!anchor.anchorClipId) throw new Error("Select a clip for this treatment");
     if (r.zoom && r.zoom !== "none") operations.push({ type: "set-clip-effects", clipId: anchor.anchorClipId, zoom: r.zoom });
-    if (r.presetId === "smooth-reveal") operations.push({ type: "set-clip-effects", clipId: anchor.anchorClipId, transitionIn: "dissolve", transitionSeconds: 0.5 });
+    if (r.presetId === "smooth-reveal" || r.presetId === "time-passage") operations.push({ type: "set-clip-effects", clipId: anchor.anchorClipId, transitionIn: "dissolve", transitionSeconds: r.presetId === "time-passage" ? 0.65 : 0.5 });
   }
   if (r.stock) {
     if (!anchor.importedAssetId) throw new Error("Import the stock item into this project first");
     operations.push({ type: "add-broll", assetId: anchor.importedAssetId, anchorAssetId: anchor.anchorAssetId, ...(anchor.anchorClipId ? { anchorClipId: anchor.anchorClipId } : {}), anchorSourceUs: anchor.anchorSourceUs, durationUs: Math.round(r.durationS * 1e6), mode: r.stock.mode });
-  } else if (!["focus", "impact", "smooth-reveal"].includes(r.presetId)) operations.push({ type: "add-graphic", kind: preset!.kind, text: r.text, color: r.color, durationUs: Math.round(r.durationS * 1e6), position: "top", ...anchor });
+  } else if (!["focus", "impact", "smooth-reveal", "time-passage"].includes(r.presetId)) operations.push({ type: "add-graphic", kind: preset!.kind, text: r.text, color: r.color, durationUs: Math.round(r.durationS * 1e6), position: "top", ...anchor });
   if (r.sound && r.sound !== "none") operations.push({ type: "add-sfx", kind: r.sound, volumeDb: -24, ...anchor });
   return operations;
 }

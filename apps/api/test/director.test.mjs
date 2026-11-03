@@ -342,6 +342,30 @@ test("storyboard check gives the mixed-media cut a real AI picture review", asyn
   } finally { close(); }
 });
 
+test("Director compares a bounded slate and applies one confident visual without a choice loop", async () => {
+  let ranked; let state;
+  const rules = new RuleDirector();
+  const director = { plan: input => rules.plan(input), rankVisuals: async input => { ranked = input; return { index: 1, confidence: 0.86, reason: "The helping action directly supports the narration." }; } };
+  state = await setup(director, { extra: {
+    visualCandidates: async () => [
+      { provider: "pexels", id: "101", kind: "video", thumbUrl: "https://images.pexels.com/101.jpg", width: 1920, height: 1080, durationS: 8, title: "generic office" },
+      { provider: "pixabay", id: "202", kind: "photo", thumbUrl: "https://pixabay.com/202.jpg", width: 1200, height: 1800, title: "mentor helping entrepreneur" },
+    ],
+    importStock: async (projectId, provider, kind, id) => { const asset = { id: "winner", projectId, kind: kind === "photo" ? "image" : "video", storageKey: "stock/winner", checksumSha256: "d".repeat(64), metadata: { filename: "Director choice.jpg", stockProvider: provider, stockKind: kind, stockId: id }, createdAt: new Date().toISOString() }; await state.assets.save(asset); return asset; },
+  } });
+  try {
+    const timeline = { durationUs: 3e6, tracks: [{ id: "video", kind: "video", clips: [{ id: "scene", assetId: "pic", sourceStartUs: 0, sourceEndUs: 3e6, timelineStartUs: 0, timelineEndUs: 3e6, transform: { transitionIn: "dissolve", transitionSeconds: 0.35, look: "warm" } }] }, { id: "captions", kind: "caption", clips: [{ id: "words", assetId: "generated:caption", sourceStartUs: 0, sourceEndUs: 3e6, timelineStartUs: 0, timelineEndUs: 3e6, transform: { text: "A mentor offers practical help" } }] }] };
+    const saved = await state.server.inject({ method: "POST", url: "/v1/projects/" + state.projectId + "/revisions", payload: { timeline, tailoring: { intent: "A sincere Nigerian community story", audience: "supporters", channel: "tiktok", targetDurationUs: 3e6, constraints: ["creation:story"] } } });
+    assert.equal(saved.statusCode, 201, saved.body);
+    const chosen = await state.server.inject({ method: "POST", url: "/v1/projects/" + state.projectId + "/director/choose-visual", payload: { revision: 2, clipId: "scene", query: "Nigerian mentor helping entrepreneur" } });
+    assert.equal(chosen.statusCode, 201, chosen.body);
+    assert.equal(ranked.candidates.length, 2); assert.match(ranked.scene.narration, /mentor offers/);
+    assert.equal(chosen.json().choice.compared, 2); assert.equal(chosen.json().choice.confidence, 0.86);
+    const scene = chosen.json().revision.timeline.tracks.find(t => t.kind === "video").clips[0];
+    assert.equal(scene.assetId, "winner"); assert.deepEqual(scene.transform, { transitionIn: "dissolve", transitionSeconds: 0.35, look: "warm" });
+  } finally { await state.server.close(); state.close(); }
+});
+
 test('accepting a creative Director suggestion saves a reusable recipe after the edit succeeds',async()=>{
   const saved=[];const library={list:async()=>[],save:async(userId,e)=>saved.push({userId,...e}),remove:async()=>{}};
   const state=await setup(new RuleDirector(),{extra:{effects:library}});
