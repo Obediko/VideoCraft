@@ -112,7 +112,7 @@ test("an idea with no uploads requires an approved visual; stock and generated i
   await page.getByRole("button", { name: "Develop the first cut" }).click();
   await page.getByRole("button", { name: "Build the first cut" }).click();
   await expect(page.getByRole("alert")).toContainText("Choose a visual for scene 1");
-  await page.getByRole("button", { name: "Find visuals for scene 1" }).click();
+  await expect(page.getByLabel("Search stock")).toBeVisible();
   await page.getByLabel("Search stock").fill("sunrise");
   await page.getByRole("button", { name: "Search", exact: true }).click();
   await page.getByRole("button", { name: "Add Sunrise from Pexels" }).click();
