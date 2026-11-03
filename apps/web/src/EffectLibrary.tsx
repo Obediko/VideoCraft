@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { SOUND_EFFECTS, CLIP_ZOOMS, EFFECT_PRESETS, parseEffectRecipe, type EffectRecipe, type SavedEffect } from "@videocraft/domain";
+import { SOUND_EFFECTS, CLIP_ZOOMS, EFFECT_PRESETS, MOTION_CATALOGUE, parseEffectRecipe, type EffectRecipe, type SavedEffect } from "@videocraft/domain";
 
 type Props = {
   projectId: string;
@@ -72,7 +72,7 @@ export function EffectLibrary({ request, disabled, onUse, refreshKey, projectId,
       <label>Treatment length (seconds)<input type="number" min={1} max={6} step={0.25} value={recipe.durationS} disabled={locked} onChange={e => setRecipe(r => ({ ...r, durationS: Number(e.target.value) }))} /></label>
     </>}
     <label>Companion sound<select value={recipe.sound ?? "none"} disabled={locked} onChange={e => setRecipe(r => ({ ...r, sound: e.target.value as NonNullable<EffectRecipe["sound"]> }))}><option value="none">None</option>{SOUND_EFFECTS.map(s => <option key={s} value={s}>{s}</option>)}</select></label>
-    <label>Clip motion<select value={recipe.zoom ?? "none"} disabled={locked} onChange={e => setRecipe(r => ({ ...r, zoom: e.target.value as NonNullable<EffectRecipe["zoom"]> }))}>{CLIP_ZOOMS.map(s => <option key={s} value={s}>{s === "none" ? "Keep current motion" : s === "push" ? "Slow push-in" : "Tighter framing"}</option>)}</select></label>
+    <label>Clip motion<select value={recipe.zoom ?? "none"} disabled={locked} onChange={e => setRecipe(r => ({ ...r, zoom: e.target.value as NonNullable<EffectRecipe["zoom"]> }))}>{CLIP_ZOOMS.map(s => <option key={s} value={s}>{s === "none" ? "Keep current motion" : MOTION_CATALOGUE[s].label + (MOTION_CATALOGUE[s].premium ? " · Premium" : "")}</option>)}</select></label>
     <label className="checkbox"><input type="checkbox" checked={remember} disabled={locked} onChange={e => setRemember(e.target.checked)} /> Save this treatment for future projects</label>
     <button type="button" className="btn" disabled={locked || !recipe.text.trim()} onClick={() => void useEffectRecipe()}>Add treatment at this moment</button>
     <button type="button" className="btn" disabled={locked || !recipe.text.trim()} onClick={() => { setWorking(true); void save().then(() => setMessage("Treatment saved.")).catch(() => setMessage("Could not save treatment. Try again.")).finally(() => setWorking(false)); }}>Save treatment</button>

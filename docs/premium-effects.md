@@ -19,6 +19,15 @@ These techniques overlap adjacent pictures without moving the edit. Transition d
 
 FFmpeg is already part of the render worker and is governed by its deployed build and licence. The names above use FFmpeg's documented `xfade` implementations; no third-party shader source is executed.
 
+## Motion and colour layer
+
+The second compatibility layer adds premium motion and colour without a new runtime:
+
+- motion: `gentle-push`, `pull-back`, `drift-left`, `drift-right`;
+- colour: `golden-hour`, `editorial`, `heritage`, `noir`.
+
+Motion uses bounded FFmpeg scale/crop expressions and matching browser transforms. Colour uses YUV-safe FFmpeg filters chosen for the ARM render worker, with matching CSS previews. Both catalogues carry an editorial use instead of presenting anonymous presets.
+
 ## External catalogue evaluation
 
 [GL Transitions](https://github.com/gl-transitions/gl-transitions) is the leading candidate for the larger Advanced library. Its catalogue contains more than 100 parameterised transitions with per-transition licence metadata and automated multi-target render comparisons. Enabling its shaders in production requires a dedicated, sandboxed shader renderer, deterministic CPU/GPU fallback, preview/export parity, per-transition allowlisting and container benchmarks. Merely listing a shader that the export worker cannot reproduce is not acceptable.

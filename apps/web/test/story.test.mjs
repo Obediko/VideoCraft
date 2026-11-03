@@ -61,8 +61,8 @@ test("cutting and then bringing words back heals the clip instead of leaving fra
   assert.equal(video(t).length, 1, "one clip again: " + JSON.stringify(video(t).map((c) => [c.sourceStartUs, c.sourceEndUs])));
 });
 
-test("live preview: transition veils and zooms match the export's rules", async () => {
-  const { veilAt, zoomAt } = await import("../test-dist/preview.js");
+test("live preview: transition veils and motions match the export's rules", async () => {
+  const { motionOffsetAt, veilAt, zoomAt } = await import("../test-dist/preview.js");
   const clips = [
     { id: "a", assetId: A, sourceStartUs: 0, sourceEndUs: 2_000_000, timelineStartUs: 0, timelineEndUs: 2_000_000, transform: { transitionIn: "dip-black" } },
     { id: "b", assetId: A, sourceStartUs: 5_000_000, sourceEndUs: 7_000_000, timelineStartUs: 2_000_000, timelineEndUs: 4_000_000, transform: { transitionIn: "flash", zoom: "push" } },
@@ -77,4 +77,9 @@ test("live preview: transition veils and zooms match the export's rules", async 
   assert.equal(zoomAt(clips[2], 5_000_000), 1.12);
   assert.ok(Math.abs(zoomAt(clips[1], 3_000_000) - 1.04) < 1e-6, "push-in is halfway at mid-clip");
   assert.equal(zoomAt(clips[0], 1_000_000), 1);
+  const premium = { ...clips[0], timelineStartUs: 0, timelineEndUs: 4_000_000, transform: { zoom: "pull-back" } };
+  assert.equal(zoomAt(premium, 0), 1.08);
+  assert.equal(zoomAt(premium, 4_000_000), 1);
+  const drift = { ...premium, transform: { zoom: "drift-left" } };
+  assert.ok(motionOffsetAt(drift, 0) > 3 && motionOffsetAt(drift, 4_000_000) < -3);
 });

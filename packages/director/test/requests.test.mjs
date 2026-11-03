@@ -108,3 +108,10 @@ test('the director can invoke colour, dialogue finishing and a named camera', as
   assert.ok(ops.some(op => op.type === 'set-dialogue-finish'));
   assert.ok(ops.some(op => op.type === 'switch-camera' && op.assetId === 'wide'));
 });
+
+test("the director understands restrained premium motion", async () => {
+  const plan = await new RuleDirector().ask({ ...input, instruction: "use a gentle restrained push on the images" });
+  assert.equal(plan.suggestions.find(s => s.kind === "zooms").style, "gentle-push");
+  const drift = await new RuleDirector().ask({ ...input, instruction: "drift left slowly" });
+  assert.equal(drift.suggestions.find(s => s.kind === "zooms").style, "drift-left");
+});

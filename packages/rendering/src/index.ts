@@ -35,6 +35,10 @@ export const LOOK_FILTERS: Record<string, string> = {
   vivid: "eq=saturation=1.3:contrast=1.08",
   soft: "eq=contrast=0.93:saturation=0.94:brightness=0.025",
   mono: "hue=s=0,eq=contrast=1.12",
+  "golden-hour": "lutyuv=u='val-8':v='val+8',eq=saturation=1.1:contrast=1.04:brightness=0.015",
+  editorial: "eq=contrast=1.08:saturation=0.96:brightness=0.005,unsharp=5:5:0.22",
+  heritage: "eq=contrast=1.04:saturation=0.72:brightness=0.01,lutyuv=u='val-3':v='val+4',vignette=PI/7",
+  noir: "hue=s=0,eq=contrast=1.28:brightness=-0.015,vignette=PI/6",
 };
 
 export interface PlatformPreset { id: string; label: string; settings: RenderSettings; }
@@ -516,6 +520,9 @@ export function clipZoom(clip: TimelineClip, width: number, height: number, leng
   // Zooms keep faces in frame: the crop sits a little above centre.
   if (t.zoom === "punch") return ",scale=" + even(Math.round(width * 1.12)) + ":-2,crop=" + width + ":" + height + ":(iw-ow)/2:(ih-oh)*0.4";
   if (t.zoom === "push") return ",scale=w='2*trunc(" + width + "*(1+0.08*t/" + Math.max(0.1, lengthS).toFixed(3) + ")/2)':h=-2:eval=frame,crop=" + width + ":" + height + ":(iw-ow)/2:(ih-oh)*0.4";
+  if (t.zoom === "gentle-push") return ",scale=w='2*trunc(" + width + "*(1+0.04*t/" + Math.max(0.1, lengthS).toFixed(3) + ")/2)':h=-2:eval=frame,crop=" + width + ":" + height + ":(iw-ow)/2:(ih-oh)*0.4";
+  if (t.zoom === "pull-back") return ",scale=w='2*trunc(" + width + "*(1.08-0.08*t/" + Math.max(0.1, lengthS).toFixed(3) + ")/2)':h=-2:eval=frame,crop=" + width + ":" + height + ":(iw-ow)/2:(ih-oh)*0.4";
+  if (t.zoom === "drift-left" || t.zoom === "drift-right") { const p = "min(1,t/" + Math.max(0.1, lengthS).toFixed(3) + ")"; const x = t.zoom === "drift-left" ? "(iw-ow)*(1-" + p + ")" : "(iw-ow)*" + p; return ",scale=" + even(Math.round(width * 1.08)) + ":-2,crop=" + width + ":" + height + ":x='" + x + "':y='(ih-oh)*0.4'"; }
   return "";
 }
 

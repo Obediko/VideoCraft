@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { TRANSITION_CATALOGUE } from "@videocraft/domain";
+import { LOOK_CATALOGUE, MOTION_CATALOGUE, TRANSITION_CATALOGUE } from "@videocraft/domain";
 import { StockSearch } from "./StockSearch.js";
 import { VoiceOver } from "./VoiceOver.js";
 
@@ -9,8 +9,8 @@ type Scene = { assetId: string; startS: number; durationS: number; text: string;
 type StockItem = { provider: string; id: string; kind: "video" | "photo" | "gif"; thumbUrl: string; durationS?: number; credit?: string };
 const CAMERA = new Set("a an the and or of to in on at with into onto over under from by for as is are be then while their his her its our your this that these those same shot close-up closeup close up wide medium tracking lateral smooth slow push pull pan tilt zoom frame framing angle eye level depth field shallow cut match-cut match cinematic camera lens focus light lighting daylight sunlight warm soft natural gentle gently vignette opening scene continue continues end ends hold brief briefly authentic realistic modest beautiful quiet sunlit morning residential shaded filled moving background pausing pauses beside near through school-age".split(" "));
 const TRANSITIONS: Record<string, string> = Object.fromEntries(Object.entries(TRANSITION_CATALOGUE).map(([id, item]) => [id, item.label + (item.premium ? " · Premium" : "")]));
-const LOOKS: Record<string, string> = { none: "Natural", warm: "Warm", clean: "Clean & crisp", cinematic: "Cinematic", vivid: "Vivid", soft: "Soft", mono: "Black & white" };
-const ZOOMS: Record<string, string> = { none: "Static", push: "Slow push-in", punch: "Punch-in" };
+const LOOKS: Record<string, string> = Object.fromEntries(Object.entries(LOOK_CATALOGUE).map(([id, item]) => [id, item.label + (item.premium ? " · Premium" : "")]));
+const ZOOMS: Record<string, string> = Object.fromEntries(Object.entries(MOTION_CATALOGUE).map(([id, item]) => [id, item.label + (item.premium ? " · Premium" : "")]));
 /** Plain search words for a scene (the storyboard gives them; older drafts are worked out from the description). */
 const searchOf = (s: Scene) => s.search?.trim() || s.visual.toLowerCase().replace(/[^a-z0-9\s'-]/g, " ").split(/\s+/).map((w) => w.replace(/'s$/, "")).filter((w) => w.length > 2 && !CAMERA.has(w) && !/ly$/.test(w)).filter((w, i, all) => all.indexOf(w) === i).slice(0, 5).join(" ");
 type Plan = { summary: string; script: string; scenes: Scene[]; source: "ai" | "rules"; note?: string; selectedApproach?: string; critique?: string };
