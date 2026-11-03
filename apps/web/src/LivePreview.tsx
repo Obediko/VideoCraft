@@ -253,6 +253,12 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
     if (blend.kind === "wipe") return { ...base, clipPath: "inset(0 " + (p * 100).toFixed(2) + "% 0 0)" };
     if (blend.kind === "circle") { const mask = "radial-gradient(circle at 50% 50%, transparent " + (p * 75).toFixed(1) + "%, #000 " + (p * 75 + 1).toFixed(1) + "%)"; return { ...base, maskImage: mask, WebkitMaskImage: mask }; }
     if (blend.kind === "blur") return { ...base, opacity: 1 - p, filter: (finishFilter ? finishFilter + " " : "") + "blur(" + (p * 16).toFixed(1) + "px)" };
+    if (blend.kind === "soft-pan") return { ...base, opacity: 1 - p * 0.45, transform: "translateX(" + (-p * 100).toFixed(2) + "%)" };
+    if (blend.kind === "soft-rise") return { ...base, opacity: 1 - p * 0.45, transform: "translateY(" + (-p * 100).toFixed(2) + "%)" };
+    if (blend.kind === "match-push") return { ...base, opacity: 1 - p, transform: "scale(" + (1 + p * 0.18).toFixed(4) + ")" };
+    if (blend.kind === "film-fade") { const eased = p * p * (3 - 2 * p); return { ...base, opacity: 1 - eased }; }
+    if (blend.kind === "silver-fade") return { ...base, opacity: 1 - p, filter: (finishFilter ? finishFilter + " " : "") + "grayscale(" + Math.sin(p * Math.PI).toFixed(3) + ")" };
+    if (blend.kind === "editorial-cover") return { ...base, transform: "translateX(" + (-p * 100).toFixed(2) + "%)" };
     return undefined;
   })();
   const cue = cues.find((c) => tUs >= c.timelineStartUs && tUs < c.timelineEndUs);

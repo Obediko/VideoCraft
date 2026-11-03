@@ -228,6 +228,16 @@ test("blend transitions take a length; endings stay colour fades", async () => {
   assert.equal(t.tracks[0].clips[1].transform, undefined, "a cut drops the length too");
 });
 
+test("the premium transition catalogue is complete and renderable", async () => {
+  const { TRANSITIONS, TRANSITION_CATALOGUE, XFADE_NAMES, isBlend } = await import("../dist/index.js");
+  assert.deepEqual(Object.keys(TRANSITION_CATALOGUE).sort(), [...TRANSITIONS].sort());
+  for (const kind of ["soft-pan", "soft-rise", "match-push", "film-fade", "silver-fade", "editorial-cover"]) {
+    assert.equal(TRANSITION_CATALOGUE[kind].premium, true, kind);
+    assert.equal(isBlend(kind), true, kind);
+    assert.ok(XFADE_NAMES[kind], kind + " has an FFmpeg implementation");
+  }
+});
+
 test("professional finishing operations preserve the edit while changing its finish", async () => {
   const { applyTimelineOperations: apply, parseTimelineOperations: parse } = await import("../dist/index.js");
   let t = apply({ durationUs: 0, tracks: [] }, [{ type: "insert-clip", assetId: "camera-a", sourceStartUs: 2_000_000, sourceEndUs: 6_000_000, reason: "take" }]);

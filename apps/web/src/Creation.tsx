@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { TRANSITION_CATALOGUE } from "@videocraft/domain";
 import { StockSearch } from "./StockSearch.js";
 import { VoiceOver } from "./VoiceOver.js";
 
@@ -7,7 +8,7 @@ type Asset = { id: string; kind: string; durationUs?: number; metadata: Record<s
 type Scene = { assetId: string; startS: number; durationS: number; text: string; visual: string; search?: string; thumb?: string; transition?: string; transitionSeconds?: number; look?: string; zoom?: string };
 type StockItem = { provider: string; id: string; kind: "video" | "photo" | "gif"; thumbUrl: string; durationS?: number; credit?: string };
 const CAMERA = new Set("a an the and or of to in on at with into onto over under from by for as is are be then while their his her its our your this that these those same shot close-up closeup close up wide medium tracking lateral smooth slow push pull pan tilt zoom frame framing angle eye level depth field shallow cut match-cut match cinematic camera lens focus light lighting daylight sunlight warm soft natural gentle gently vignette opening scene continue continues end ends hold brief briefly authentic realistic modest beautiful quiet sunlit morning residential shaded filled moving background pausing pauses beside near through school-age".split(" "));
-const TRANSITIONS: Record<string, string> = { cut: "Cut", dissolve: "Dissolve", push: "Push", "slide-up": "Slide up", wipe: "Wipe", circle: "Circle reveal", blur: "Blur", "dip-black": "Dip to black", "dip-white": "Dip to white", flash: "Flash" };
+const TRANSITIONS: Record<string, string> = Object.fromEntries(Object.entries(TRANSITION_CATALOGUE).map(([id, item]) => [id, item.label + (item.premium ? " · Premium" : "")]));
 const LOOKS: Record<string, string> = { none: "Natural", warm: "Warm", clean: "Clean & crisp", cinematic: "Cinematic", vivid: "Vivid", soft: "Soft", mono: "Black & white" };
 const ZOOMS: Record<string, string> = { none: "Static", push: "Slow push-in", punch: "Punch-in" };
 /** Plain search words for a scene (the storyboard gives them; older drafts are worked out from the description). */
