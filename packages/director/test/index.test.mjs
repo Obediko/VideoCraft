@@ -24,6 +24,8 @@ test("plans are sanitised: foreign assets, bad times, overlaps and unknown kinds
   const plan = sanitizePlan({ summary: "x", profile: { intent: "i", audience: "a", channel: "short-form", tone: "", targetSeconds: 20 }, suggestions: [
     { id: "cut", kind: "cut", title: "Cut", reason: "r", segments: [{ startS: 0.5, endS: 4.9 }, { startS: 4, endS: 8 }, { startS: 30, endS: 34 }, { startS: 999, endS: 1000 }] },
     { id: "t", kind: "title", title: "T", reason: "r", text: "Your next job", atS: 1, durationS: 2.5, position: "top" },
+    { id: "ch", kind: "chapter", title: "Chapter", reason: "A real story turn", text: "The turning point", subtitle: "Part two", atS: 9, durationS: 2.5, position: "center" },
+    { id: "q", kind: "quote", title: "Quote", reason: "Exact supplied words", text: "Start building today", subtitle: "Ada", atS: 18, durationS: 3, position: "center" },
     { id: "bad", kind: "title", title: "T", reason: "r", text: "Late", atS: 5000, durationS: 2 },
     { id: "b1", kind: "broll", title: "B", reason: "r", assetId: "img-1", atS: 12, durationS: 2, mode: "pip" },
     { id: "b2", kind: "broll", title: "B", reason: "r", assetId: "not-mine", atS: 12, durationS: 2, mode: "full" },
@@ -31,7 +33,7 @@ test("plans are sanitised: foreign assets, bad times, overlaps and unknown kinds
     { id: "x", kind: "explode", title: "?", reason: "r" },
   ] }, input, "ai");
   const kinds = plan.suggestions.map((s) => s.id);
-  assert.deepEqual(kinds, ["cut", "t", "b1"]);
+  assert.deepEqual(kinds, ["cut", "t", "ch", "q", "b1"]);
   assert.deepEqual(plan.suggestions[0].segments.map((s) => [s.startS, s.endS]), [[0.5, 4.9]], "overlapping and out-of-range segments dropped");
 });
 

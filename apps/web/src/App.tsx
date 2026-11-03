@@ -49,7 +49,8 @@ const LOOK_LABEL: Record<string, string> = Object.fromEntries(Object.entries(LOO
 const ZOOM_LABEL: Record<string, string> = Object.fromEntries(Object.entries(MOTION_CATALOGUE).map(([id, item]) => [id, item.label + (item.premium ? " · Premium" : "")]));
 const TRANSITION_LABEL: Record<string, string> = Object.fromEntries(Object.entries(TRANSITION_CATALOGUE).map(([id, item]) => [id, item.label + (item.premium ? " · Premium" : "")]));
 const ENDING_LABEL: Record<string, string> = { cut: "Cut", "dip-black": "Fade to black", "dip-white": "Fade to white", flash: "Flash" };
-const SFX_LABEL: Record<string, string> = { whoosh: "Whoosh", pop: "Pop", hit: "Boom", riser: "Riser" };
+const SFX_LABEL: Record<string, string> = { whoosh: "Whoosh", pop: "Pop", hit: "Boom", riser: "Riser", "soft-whoosh": "Soft whoosh · Premium", shimmer: "Shimmer · Premium", "low-pulse": "Low pulse · Premium" };
+const CAPTION_LABEL: Record<string, string> = { "bold-pop": "Bold pop", clean: "Clean", minimal: "Minimal", editorial: "Editorial · Premium", documentary: "Documentary · Premium" };
 const MODES = [
   { id: "story", label: "Story" }, { id: "captions", label: "Captions" }, { id: "visuals", label: "Visuals" },
   { id: "audio", label: "Audio" }, { id: "brand", label: "Brand" }, { id: "review", label: "Review" },
@@ -122,6 +123,7 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [selectedClipId, setSelectedClipId] = useState("");
   const [platform, setPlatform] = useState("tiktok");
+  const [captionStyle, setCaptionStyle] = useState("bold-pop");
   const [captionDrafts, setCaptionDrafts] = useState<Record<string, string>>({});
   const [previewMode, setPreviewMode] = useState<"edit" | "source" | "render">("edit");
   const liveRef = useRef<LivePreviewHandle | null>(null);
@@ -182,7 +184,7 @@ export function App() {
   const [bgEdge, setBgEdge] = useState(0);
   const [bgFeather, setBgFeather] = useState(2);
   const brollAssets = assets.filter((asset) => asset.kind === "image" || (asset.kind === "video" && !videoClips.some((clip) => clip.assetId === asset.id)));
-  const [gfxKind, setGfxKind] = useState<"title" | "callout" | "lower-third">("title");
+  const [gfxKind, setGfxKind] = useState<"title" | "callout" | "lower-third" | "chapter" | "quote">("title");
   const [gfxText, setGfxText] = useState("");
   const [gfxSubtitle, setGfxSubtitle] = useState("");
   const [gfxSeconds, setGfxSeconds] = useState(3);
@@ -381,7 +383,8 @@ export function App() {
     const anchor = anchorPoint();
     if (!anchor) { setStatus("Add a video clip first"); return; }
     if (!text.trim()) { setStatus("Enter the text first"); return; }
-    void applyEdit([{ type: "add-graphic", kind, text: text.trim(), ...(gfxSubtitle.trim() && kind !== "callout" ? { subtitle: gfxSubtitle.trim() } : {}), anchorAssetId: anchor.anchorAssetId, ...(anchor.anchorClipId ? { anchorClipId: anchor.anchorClipId } : {}), anchorSourceUs: anchor.anchorSourceUs, durationUs: Math.round(gfxSeconds * 1_000_000), position: kind === "lower-third" ? "bottom" : gfxPosition, color: gfxColor }], (kind === "title" ? "Title" : kind === "callout" ? "Callout" : "Name caption") + " added " + anchor.where).then((ok) => { if (ok) { setGfxText(""); setGfxSubtitle(""); } });
+    const label = kind === "title" ? "Title" : kind === "chapter" ? "Chapter" : kind === "quote" ? "Quote" : kind === "callout" ? "Callout" : "Name caption";
+    void applyEdit([{ type: "add-graphic", kind, text: text.trim(), ...(gfxSubtitle.trim() && kind !== "callout" ? { subtitle: gfxSubtitle.trim() } : {}), anchorAssetId: anchor.anchorAssetId, ...(anchor.anchorClipId ? { anchorClipId: anchor.anchorClipId } : {}), anchorSourceUs: anchor.anchorSourceUs, durationUs: Math.round(gfxSeconds * 1_000_000), position: kind === "lower-third" ? "bottom" : gfxPosition, color: gfxColor }], label + " added " + anchor.where).then((ok) => { if (ok) { setGfxText(""); setGfxSubtitle(""); } });
   }
   /** Composes an instrumental for the saved cut (its length, lifting at its cuts) and lays it under the video. */
   async function generateMusicBed() {
@@ -972,7 +975,7 @@ export function App() {
       remember(attemptStorageKey, idempotencyKey);
       const result = await request("/v1/projects/" + projectId + "/renders", {
         method: "POST",
-        body: JSON.stringify({ revision, idempotencyKey, settings: { format: "mp4", videoCodec: "libx264", audioCodec: "aac", width: preset.width, height: preset.height, frameRate: 30, fit: preset.fit, captionStyle: preset.captionStyle } }),
+        body: JSON.stringify({ revision, idempotencyKey, settings: { format: "mp4", videoCodec: "libx264", audioCodec: "aac", width: preset.width, height: preset.height, frameRate: 30, fit: preset.fit, captionStyle } }),
       });
       remember(attemptStorageKey, "");
       remember(renderKey(projectId), JSON.stringify({ id: result.job.id, revision, platform }));
@@ -1083,7 +1086,7 @@ export function App() {
 
   const player = <div className="player">
     <div className="preview-tabs" role="tablist"><button role="tab" aria-selected={previewMode === "edit"} className={previewMode === "edit" ? "on" : ""} onClick={() => setPreviewMode("edit")} disabled={videoClips.length === 0}>Edit</button><button role="tab" aria-selected={previewMode === "source"} className={previewMode === "source" ? "on" : ""} onClick={() => setPreviewMode("source")}>Original</button><button role="tab" aria-selected={previewMode === "render"} className={previewMode === "render" ? "on" : ""} onClick={() => setPreviewMode("render")}>Export</button></div>
-    {previewMode === "edit" && videoClips.length > 0 ? <LivePreview ref={liveRef} tracks={timeline.tracks} durationUs={timeline.durationUs} urls={sourceUrls} shape={(PLATFORMS[platform]?.width ?? 9) < (PLATFORMS[platform]?.height ?? 16) ? "tall" : PLATFORMS[platform]?.width === PLATFORMS[platform]?.height ? "square" : "wide"} fit={PLATFORMS[platform]?.fit ?? "cover"} output={{ width: PLATFORMS[platform]?.width ?? 1080, height: PLATFORMS[platform]?.height ?? 1920 }} captionStyle={PLATFORMS[platform]?.captionStyle ?? "bold-pop"} faces={faceTracks} sizes={assetSizes} mattes={matteUrls} stills={stillAssets} mediaErrors={sourceErrors} onRetryMedia={() => { setSourceErrors({}); setSourceUrls({}); setSourceRetry((n) => n + 1); }} onRetryMatte={() => { setMatteUrls({}); setMatteRetry((n) => n + 1); }} onTime={onLiveTime} />
+    {previewMode === "edit" && videoClips.length > 0 ? <LivePreview ref={liveRef} tracks={timeline.tracks} durationUs={timeline.durationUs} urls={sourceUrls} shape={(PLATFORMS[platform]?.width ?? 9) < (PLATFORMS[platform]?.height ?? 16) ? "tall" : PLATFORMS[platform]?.width === PLATFORMS[platform]?.height ? "square" : "wide"} fit={PLATFORMS[platform]?.fit ?? "cover"} output={{ width: PLATFORMS[platform]?.width ?? 1080, height: PLATFORMS[platform]?.height ?? 1920 }} captionStyle={captionStyle} faces={faceTracks} sizes={assetSizes} mattes={matteUrls} stills={stillAssets} mediaErrors={sourceErrors} onRetryMedia={() => { setSourceErrors({}); setSourceUrls({}); setSourceRetry((n) => n + 1); }} onRetryMatte={() => { setMatteUrls({}); setMatteRetry((n) => n + 1); }} onTime={onLiveTime} />
     : <div className={"preview-screen " + ((PLATFORMS[platform]?.width ?? 9) < (PLATFORMS[platform]?.height ?? 16) ? "tall" : "wide")}>{previewMode === "render" ? (renderUrl ? <video ref={exportPlayer} controls playsInline onLoadedMetadata={(event) => {
       const player = event.currentTarget, saved = exportPosition.current;
       if (saved.time > 0 && saved.time < player.duration) player.currentTime = saved.time;
@@ -1274,7 +1277,7 @@ export function App() {
       <div className="pane-head"><h2>Captions &amp; text</h2></div>
       <div className="pad stack graphics-panel">
         <h3>Add text on screen</h3>
-        <label>Type<select value={gfxKind} onChange={(event) => setGfxKind(event.target.value as "title" | "callout" | "lower-third")}><option value="title">Title</option><option value="callout">Callout</option><option value="lower-third">Name caption (name + role)</option></select></label>
+        <label>Type<select value={gfxKind} onChange={(event) => setGfxKind(event.target.value as typeof gfxKind)}><option value="title">Title</option><option value="chapter">Chapter · Premium</option><option value="quote">Quote · Premium</option><option value="callout">Callout</option><option value="lower-third">Name caption (name + role)</option></select></label>
         <label>{gfxKind === "lower-third" ? "Name" : "Text"}<input value={gfxText} maxLength={120} onChange={(event) => setGfxText(event.target.value)} /></label>
         {gfxKind !== "callout" && <label>{gfxKind === "lower-third" ? "Role" : "Second line"} (optional)<input value={gfxSubtitle} maxLength={120} onChange={(event) => setGfxSubtitle(event.target.value)} /></label>}
         {gfxKind !== "lower-third" && <label>Position<select value={gfxPosition} onChange={(event) => setGfxPosition(event.target.value as "top" | "center" | "bottom")}><option value="top">Top</option><option value="center">Centre</option><option value="bottom">Bottom</option></select></label>}
@@ -1283,6 +1286,7 @@ export function App() {
         {graphicsClips.length > 0 && <ul className="item-list graphics-list">{graphicsClips.map((clip) => { const original = String(clip.transform?.text ?? ""); const draft = gfxDrafts[clip.id] ?? original; return <li key={clip.id}><span className="mono small">{formatSeconds(clip.timelineStartUs)}</span><input aria-label={"Text at " + formatSeconds(clip.timelineStartUs)} value={draft} maxLength={120} onChange={(event) => setGfxDrafts((current) => ({ ...current, [clip.id]: event.target.value }))} /><button className="btn" onClick={() => void applyEdit([{ type: "update-graphic", clipId: clip.id, text: draft.trim() }], "Text updated").then((ok) => { if (ok) setGfxDrafts((current) => { const { [clip.id]: _done, ...rest } = current; return rest; }); })} disabled={busy || !draft.trim() || draft.trim() === original}>Save</button><button className="btn" onClick={() => void applyEdit([{ type: "remove-clip", clipId: clip.id, reason: "Text removed" }], "Text removed")} disabled={busy}>Remove</button></li>; })}</ul>}
         <label className="checkbox"><input type="checkbox" checked={Boolean(progressClip)} disabled={busy || revision === 0} onChange={(event) => void applyEdit([{ type: "set-progress-bar", enabled: event.target.checked, color: gfxColor }], event.target.checked ? "Progress bar on" : "Progress bar off")} /> Progress bar across the top</label>
         <h3>Captions</h3>
+        <label>Caption system<select value={captionStyle} onChange={(event) => setCaptionStyle(event.target.value)}>{Object.entries(CAPTION_LABEL).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
         {captionCues.length === 0 ? <p className="muted small">No captions yet. Cutting with the director or bringing words back adds them; the check offers them for short videos.</p> : <ul className="item-list cue-list captions-panel">{captionCues.map((cue) => { const original = String(cue.transform?.text ?? ""); const draft = captionDrafts[cue.id] ?? original; return <li key={cue.id}><span className="mono small">{formatSeconds(cue.timelineStartUs)}</span><input aria-label={"Caption at " + formatSeconds(cue.timelineStartUs)} value={draft} onChange={(event) => setCaptionDrafts((current) => ({ ...current, [cue.id]: event.target.value }))} /><button className="btn" onClick={() => saveCaption(cue)} disabled={busy || revision === 0 || draft.trim() === original}>Save</button></li>; })}</ul>}
         {captionCues.length === 0 && words.length > 0 && segmentsFor && <button className="btn" onClick={() => void applyEdit(cueOps(words.filter((_, i) => kept[i]), segmentsFor), "Captions added")} disabled={busy || revision === 0}>Add captions for the cut</button>}
       </div>

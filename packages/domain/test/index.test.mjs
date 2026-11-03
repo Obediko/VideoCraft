@@ -185,6 +185,12 @@ test("graphics anchor like b-roll, can be edited, and the progress bar spans the
   assert.throws(() => parse2([{ type: "set-progress-bar", enabled: true, color: "red" }]), /RRGGBB/);
 });
 
+test("premium chapter and quote graphics are validated like other on-screen text", () => {
+  const base = { anchorAssetId: "talk", anchorSourceUs: 1_000_000, durationUs: 2_000_000 };
+  assert.equal(parse2([{ type: "add-graphic", kind: "chapter", text: "Part two", ...base }])[0].kind, "chapter");
+  assert.equal(parse2([{ type: "add-graphic", kind: "quote", text: "Exact supplied words", subtitle: "Speaker", ...base }])[0].kind, "quote");
+});
+
 test("set-background changes one clip or all, and assetsUsedBy includes background media", async () => {
   const { applyTimelineOperations: apply, assetsUsedBy } = await import("../dist/index.js");
   let t = apply({ durationUs: 0, tracks: [] }, [{ type: "insert-clip", assetId: "a", sourceStartUs: 0, sourceEndUs: 1_000_000, reason: "r" }, { type: "insert-clip", assetId: "a", sourceStartUs: 2_000_000, sourceEndUs: 3_000_000, reason: "r" }]);

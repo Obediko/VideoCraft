@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { generateSoundEffect } from "../dist/index.js";
 
-for (const kind of ["whoosh", "pop", "hit", "riser"]) {
+for (const kind of ["whoosh", "pop", "hit", "riser", "soft-whoosh", "shimmer", "low-pulse"]) {
   test("sound effect " + kind + " is audible, bounded and click-free", () => {
     const { left, right, sampleRate } = generateSoundEffect(kind);
     assert.equal(sampleRate, 48_000);

@@ -35,7 +35,7 @@ export interface DirectorInput {
 export type Suggestion =
   | { id: string; kind: "effect"; title: string; reason: string; recipe: EffectRecipe; atS: number }
   | { id: string; kind: "cut"; title: string; reason: string; segments: Array<{ startS: number; endS: number }> }
-  | { id: string; kind: "title" | "callout" | "lower-third"; title: string; reason: string; text: string; subtitle?: string; atS: number; durationS: number; position?: "top" | "center" | "bottom" }
+  | { id: string; kind: "title" | "callout" | "lower-third" | "chapter" | "quote"; title: string; reason: string; text: string; subtitle?: string; atS: number; durationS: number; position?: "top" | "center" | "bottom" }
   | { id: string; kind: "music"; title: string; reason: string; mood: (typeof MOODS)[number] }
   | { id: string; kind: "broll"; title: string; reason: string; assetId: string; atS: number; durationS: number; mode: "full" | "pip" | "behind" }
   | { id: string; kind: "progress"; title: string; reason: string }
@@ -155,7 +155,7 @@ export function sanitizePlan(raw: unknown, input: DirectorInput, source: Directo
       let total = 0;
       for (const seg of segments) { const length = seg.endS - seg.startS; if (kept.length > 0 && total + length > targetSeconds * 1.15) continue; kept.push(seg); total += length; }
       suggestions.push({ ...base(s, index), kind: "cut", segments: kept.slice(0, 12) });
-    } else if (kind === "title" || kind === "callout" || kind === "lower-third") {
+    } else if (kind === "title" || kind === "callout" || kind === "lower-third" || kind === "chapter" || kind === "quote") {
       const t = text(s.text, 120); const atS = num(s.atS); const durationS = clamp(num(s.durationS) || 3, 0.5, 15);
       if (!t || !(atS >= 0 && atS < input.durationS)) return;
       const position = s.position === "top" || s.position === "center" || s.position === "bottom" ? s.position : undefined;
@@ -355,8 +355,8 @@ const SYSTEM = `You are an award-winning video editor and creative director. You
 Propose a complete edit as a list of suggestions the creator can accept or reject one by one. Be specific and tasteful, like a professional editor: a strong hook, tight pacing, text only where it adds meaning, music that fits the feeling.
 Rules:
 - "cut": choose the moments to keep, as segments (startS/endS in source seconds) taken from the candidates or exact sentence boundaries in the transcript. Respect the length the creator asks for; otherwise 20-45 s for short-form, 60-180 s for YouTube.
-- "title", "callout", "lower-third": text on screen at a source time (atS) INSIDE a kept segment. Titles max ~6 words. Lower thirds name a person (text) and role (subtitle) only if the transcript or brief makes them clear.
-- "effect": optional reusable creative treatment. presetId is one of thinking, realization, key-point, focus, impact, smooth-reveal, chapter, question. Use at most 3, separated by at least 4 source seconds. Supply atS inside a kept segment, durationS 1-6, text (at most 80 characters), color (#RRGGBB). Choose from meaning and tone, cite the exact evidence, and omit when it adds no value. Thinking is only for a clearly puzzled/playful moment. Focus is a slow push across that clip, impact tightens that clip plus a quiet hit, smooth-reveal dissolves into that clip; others are short graphics. Never put playful reactions over serious or sensitive statements unless requested. Saved creator treatments are available below; reuse appropriate ones before inventing variations. You may invent a treatment by varying the recipe text, color, duration, optional effectSound (none, whoosh, pop, hit, riser) and style (punch or push for clip motion). A motion style affects the entire host clip, not just the overlay duration. Use subtle sound; do not add one to every moment. All recipes are original procedural graphics, not downloaded memes.
+- "title", "callout", "lower-third", "chapter", "quote": text on screen at a source time (atS) INSIDE a kept segment. Titles and chapters max ~6 words. Chapter is a restrained section marker; quote is for exact supplied words with optional attribution in subtitle. Lower thirds name a person (text) and role (subtitle) only if the transcript or brief makes them clear.
+- "effect": optional reusable creative treatment. presetId is one of thinking, realization, key-point, focus, impact, smooth-reveal, chapter, question. Use at most 3, separated by at least 4 source seconds. Supply atS inside a kept segment, durationS 1-6, text (at most 80 characters), color (#RRGGBB). Choose from meaning and tone, cite the exact evidence, and omit when it adds no value. Thinking is only for a clearly puzzled/playful moment. Focus is a slow push across that clip, impact tightens that clip plus a quiet hit, smooth-reveal dissolves into that clip; others are short graphics. Never put playful reactions over serious or sensitive statements unless requested. Saved creator treatments are available below; reuse appropriate ones before inventing variations. You may invent a treatment by varying the recipe text, color, duration, optional effectSound (none, whoosh, pop, hit, riser, soft-whoosh, shimmer, low-pulse) and style (punch or push for clip motion). A motion style affects the entire host clip, not just the overlay duration. Use subtle sound; do not add one to every moment. All recipes are original procedural graphics, not downloaded memes.
 - "music": one mood from: upbeat, calm, inspiring, serious, playful.
 - "broll": only with assetId values from the project media list; place at a source time inside a kept segment where the words describe it.
 - "stock": up to 3 free stock cutaways where the words describe something concrete and visual that the footage does not show (a place, an object, an activity), and no project media fits: query is 2-5 plain English words a stock library would match (e.g. "students studying library", "city skyline night"), assetKind "video" (or "photo"; "gif" only for playful reactions), atS inside a kept segment, durationS 2-4, mode "full" (or "behind" to put it behind the person). Not over the hook, not over a face-to-camera key point.
@@ -389,9 +389,9 @@ const SCHEMA = {
     suggestions: { type: "array", items: { type: "object", additionalProperties: false,
       required: ["id", "kind", "title", "reason", "segments", "text", "subtitle", "atS", "durationS", "position", "mood", "assetId", "mode", "platform", "look", "style", "transition", "background", "color", "target", "changeDb", "query", "assetKind", "afterVideo", "presetId", "effectSound", "exposure", "contrast", "saturation", "temperature", "denoise", "voiceEnhance", "deEss"],
       properties: {
-        effectSound: { type: "string", enum: ["none", "whoosh", "pop", "hit", "riser", ""] },
+        effectSound: { type: "string", enum: ["none", "whoosh", "pop", "hit", "riser", "soft-whoosh", "shimmer", "low-pulse", ""] },
         presetId: { type: "string", enum: [...EFFECT_PRESETS.map(p => p.id), ""] },
-        id: { type: "string" }, kind: { type: "string", enum: ["effect", "cut", "title", "callout", "lower-third", "music", "broll", "progress", "platform", "look", "zooms", "transitions", "sfx", "background", "volume", "remove", "captions", "color", "stock", "voiceover", "grade", "dialogue", "camera", "advice"] },
+        id: { type: "string" }, kind: { type: "string", enum: ["effect", "cut", "title", "callout", "lower-third", "chapter", "quote", "music", "broll", "progress", "platform", "look", "zooms", "transitions", "sfx", "background", "volume", "remove", "captions", "color", "stock", "voiceover", "grade", "dialogue", "camera", "advice"] },
         title: { type: "string" }, reason: { type: "string" },
         segments: { type: "array", items: { type: "object", additionalProperties: false, required: ["startS", "endS"], properties: { startS: { type: "number" }, endS: { type: "number" } } } },
         text: { type: "string" }, subtitle: { type: "string" }, atS: { type: "number" }, durationS: { type: "number" },
@@ -705,7 +705,7 @@ export function planOperations(plan: DirectorPlan, accepted: Set<string>, ctx: A
     return nearest ? nearest.startUs + 100_000 : at;
   };
   for (const s of chosen) {
-    if (s.kind === "title" || s.kind === "callout" || s.kind === "lower-third") {
+    if (s.kind === "title" || s.kind === "callout" || s.kind === "lower-third" || s.kind === "chapter" || s.kind === "quote") {
       ops.push({ type: "add-graphic", kind: s.kind, text: s.text, ...(s.subtitle ? { subtitle: s.subtitle } : {}), anchorAssetId: ctx.assetId, anchorSourceUs: anchor(s.atS), durationUs: Math.round(s.durationS * 1e6), ...(s.position ? { position: s.position } : {}) });
     } else if (s.kind === "broll") {
       ops.push({ type: "add-broll", assetId: s.assetId, anchorAssetId: ctx.assetId, anchorSourceUs: anchor(s.atS), durationUs: Math.round(s.durationS * 1e6), mode: s.mode });

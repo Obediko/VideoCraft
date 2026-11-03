@@ -275,6 +275,13 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 /* Clean and minimal captions are sentence case, like the export. */
 .live-caption.clean, .live-caption.minimal { text-transform: none; font-weight: 700; font-size: 5.2cqw; }
 .live-caption.minimal { font-weight: 500; font-size: 4.6cqw; }
+.live-caption.editorial { font-family: Georgia, "Times New Roman", serif; font-weight: 500; font-size: 5cqw; color: #fff8ec; letter-spacing: .01em; text-transform: none; }
+.live-caption.documentary { font-weight: 700; font-size: 4.8cqw; color: #fff; text-transform: none; }
+.live-caption.documentary .on { color: #b8d8c0; }
+.live-title.chapter { background: transparent; box-shadow: none; letter-spacing: .14em; text-transform: uppercase; }
+.live-title.chapter::after { content: ""; display: block; width: 42%; height: 2px; margin: .45em auto 0; background: currentColor; opacity: .75; }
+.live-title.quote { background: rgba(12,12,12,.58); font-family: Georgia, "Times New Roman", serif; font-style: italic; max-width: 78%; }
+.live-title.quote span { font-family: var(--font-sans); font-style: normal; letter-spacing: .04em; }
 /* Stock search */
 .stock-form { display: flex; gap: 8px; } .stock-form input { flex: 1; min-width: 0; }
 .stock-grid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 6px; max-height: 320px; overflow-y: auto; }
