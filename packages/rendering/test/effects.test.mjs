@@ -81,5 +81,23 @@ test("every look renders and changes the picture in its own direction", async ()
     const spread = (c) => Math.max(...c) - Math.min(...c);
     assert.ok(spread(out.vivid) > spread(base), "vivid is more saturated: " + out.vivid);
     assert.ok(spread(out.soft) < spread(base) + 1, "soft is not more saturated: " + out.soft);
+    assert.ok(out["golden-hour"][0] - out["golden-hour"][2] > base[0] - base[2] + 10, "golden hour is warm: " + out["golden-hour"]);
+    assert.ok(Math.abs(out.noir[0] - out.noir[2]) < 4, "noir is monochrome: " + out.noir);
+    assert.ok(spread(out.heritage) < spread(base), "heritage is restrained: " + out.heritage);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("real ffmpeg: every premium motion renders a decodable clip without changing duration", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vc-motion-"));
+  try {
+    const src = join(dir, "src.mp4");
+    execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=640x360:r=25:d=10", "-pix_fmt", "yuv420p", src]);
+    const motions = ["gentle-push", "pull-back", "drift-left", "drift-right"];
+    const clips = at(motions.map((zoom, i) => ({ id: "m" + i, assetId: "src", sourceStartUs: i * 2_000_000, sourceEndUs: i * 2_000_000 + 2_000_000, transform: { zoom } })));
+    const out = join(dir, "out.mp4");
+    await new FfmpegProcess().run(await new FfmpegCommandPlanner({ resolve: async () => src }).plan(revision(clips), settings, out));
+    execFileSync("ffmpeg", ["-v", "error", "-i", out, "-f", "null", "-"]);
+    const duration = Number(execFileSync("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", out]).toString());
+    assert.ok(Math.abs(duration - 8) < 0.1, "motion does not alter timing: " + duration);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

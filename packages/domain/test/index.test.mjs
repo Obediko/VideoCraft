@@ -238,6 +238,14 @@ test("the premium transition catalogue is complete and renderable", async () => 
   }
 });
 
+test("premium motion and look catalogues cover every validated value", async () => {
+  const { CLIP_ZOOMS, COLOUR_LOOKS, LOOK_CATALOGUE, MOTION_CATALOGUE } = await import("../dist/index.js");
+  assert.deepEqual(Object.keys(MOTION_CATALOGUE).sort(), [...CLIP_ZOOMS].sort());
+  assert.deepEqual(Object.keys(LOOK_CATALOGUE).sort(), [...COLOUR_LOOKS].sort());
+  for (const id of ["gentle-push", "pull-back", "drift-left", "drift-right"]) assert.equal(MOTION_CATALOGUE[id].premium, true);
+  for (const id of ["golden-hour", "editorial", "heritage", "noir"]) assert.equal(LOOK_CATALOGUE[id].premium, true);
+});
+
 test("professional finishing operations preserve the edit while changing its finish", async () => {
   const { applyTimelineOperations: apply, parseTimelineOperations: parse } = await import("../dist/index.js");
   let t = apply({ durationUs: 0, tracks: [] }, [{ type: "insert-clip", assetId: "camera-a", sourceStartUs: 2_000_000, sourceEndUs: 6_000_000, reason: "take" }]);

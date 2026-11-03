@@ -13,7 +13,8 @@ import { ruleRequests } from "./requests.js";
 
 export const MOODS = ["upbeat", "calm", "inspiring", "serious", "playful"] as const;
 export const PLATFORMS = ["tiktok", "youtube", "square"] as const;
-export const LOOKS = ["warm", "clean", "cinematic", "vivid", "soft", "mono"] as const;
+export const LOOKS = ["warm", "clean", "cinematic", "vivid", "soft", "mono", "golden-hour", "editorial", "heritage", "noir"] as const;
+export const DIRECTOR_MOTIONS = ["punch", "push", "gentle-push", "pull-back", "drift-left", "drift-right"] as const;
 /** What a "remove" suggestion can take out of the edit. */
 export const DIRECTOR_TRANSITIONS = ["dip-black", "dip-white", "flash", "dissolve", "push", "slide-up", "wipe", "circle", "blur", "soft-pan", "soft-rise", "match-push", "film-fade", "silver-fade", "editorial-cover"] as const;
 export const REMOVABLE = ["music", "sfx", "progress", "graphics", "cutaways", "voiceovers", "captions", "background", "look", "zooms", "transitions"] as const;
@@ -41,8 +42,8 @@ export type Suggestion =
   | { id: string; kind: "platform"; title: string; reason: string; platform: (typeof PLATFORMS)[number] }
   | { id: string; kind: "advice"; title: string; reason: string }
   | { id: string; kind: "look"; title: string; reason: string; look: Exclude<ColourLook, "none"> }
-  /** "punch" = alternate tighter framings between pieces (jump-cut energy); "push" = a slow push-in on every piece. */
-  | { id: string; kind: "zooms"; title: string; reason: string; style: "punch" | "push" }
+  /** One consistent, bounded camera-motion treatment for the selected pieces. */
+  | { id: string; kind: "zooms"; title: string; reason: string; style: (typeof DIRECTOR_MOTIONS)[number] }
   /** Fade in from and out to black, plus this transition where the edit jumps to a new part of the talk. */
   | { id: string; kind: "transitions"; title: string; reason: string; transition: (typeof DIRECTOR_TRANSITIONS)[number] }
   /** A whoosh on transitions and a pop when on-screen text appears. */
@@ -220,7 +221,7 @@ export function sanitizePlan(raw: unknown, input: DirectorInput, source: Directo
       const assetId = text(s.assetId, 80); const atS = num(s.atS);
       if (assetIds.has(assetId) && atS >= 0 && atS < input.durationS) suggestions.push({ ...base(s, index), kind: "camera", assetId, atS });
     } else if (kind === "zooms") {
-      if ((s.style === "punch" || s.style === "push") && !suggestions.some((e) => e.kind === "zooms")) suggestions.push({ ...base(s, index), kind: "zooms", style: s.style });
+      if (DIRECTOR_MOTIONS.includes(s.style as never) && !suggestions.some((e) => e.kind === "zooms")) suggestions.push({ ...base(s, index), kind: "zooms", style: s.style as (typeof DIRECTOR_MOTIONS)[number] });
     } else if (kind === "transitions") {
       const transition = DIRECTOR_TRANSITIONS.includes(s.transition as never) ? (s.transition as (typeof DIRECTOR_TRANSITIONS)[number]) : "dip-black";
       if (!suggestions.some((e) => e.kind === "transitions")) suggestions.push({ ...base(s, index), kind: "transitions", transition });
@@ -267,8 +268,8 @@ export class RuleDirector implements Director {
     const requestedEffect = /thinking equation|confused math|floating equation/.test(t) ? "thinking" : /realization pop|aha effect/.test(t) ? "realization" : /quiet focus|slow push.in/.test(t) ? "focus" : /impact beat/.test(t) ? "impact" : /smooth reveal/.test(t) ? "smooth-reveal" : /chapter reveal/.test(t) ? "chapter" : /question beat/.test(t) ? "question" : /key.point (effect|callout)/.test(t) ? "key-point" : undefined;
     if (requestedEffect && !/\b(remove|delete|without|no)\b/.test(t)) raw.push({ id: "effect", kind: "effect", title: EFFECT_PRESETS.find(p => p.id === requestedEffect)!.name, reason: "The treatment you requested, anchored to this moment.", presetId: requestedEffect, atS: input.playheadS ?? input.current.pieces[0]?.startS ?? 0 });
     const removing = /\b(remove|delete|take (?:out|off|away)|get rid of|drop|no more|without|turn off|hide|clear)\b/.test(t);
-    const look = removing ? undefined : LOOKS.find((l) => t.includes(l)) ?? (/black and white|b&w|monochrome|grey/.test(t) ? "mono" : /warm/.test(t) ? "warm" : /colou?rful|punchy|bright/.test(t) ? "vivid" : /film|moody/.test(t) ? "cinematic" : undefined);
-    if (look) raw.push({ id: "look", kind: "look", title: (look === "mono" ? "Black and white" : look[0]!.toUpperCase() + look.slice(1)) + " look", reason: "As you asked.", look });
+    const look = removing ? undefined : /golden[ -]hour/.test(t) ? "golden-hour" : /heritage|historic(al)? look/.test(t) ? "heritage" : /editorial look|documentary colour/.test(t) ? "editorial" : /\bnoir\b/.test(t) ? "noir" : LOOKS.find((l) => t.includes(l)) ?? (/black and white|b&w|monochrome|grey/.test(t) ? "mono" : /warm/.test(t) ? "warm" : /colou?rful|punchy|bright/.test(t) ? "vivid" : /film|moody/.test(t) ? "cinematic" : undefined);
+    if (look) raw.push({ id: "look", kind: "look", title: (look === "mono" ? "Black and white" : look.split("-").map(w => w[0]!.toUpperCase() + w.slice(1)).join(" ")) + " look", reason: "As you asked.", look });
     if (!removing && !hints.mood && /\b(add|put|some|with|want|need|use)\b.{0,20}\b(music|song|soundtrack|backing track)\b/.test(t) && !/(loud|quiet|volume|softer|lower|louder)/.test(t)) raw.push({ id: "music", kind: "music", title: "Background music", reason: "Matched to your description; it dips while you speak.", mood: briefHints(input.brief).mood ?? "upbeat" });
     if (!removing && hints.mood && /music|song|sound|track|mood|vibe/.test(t)) raw.push({ id: "music", kind: "music", title: hints.mood[0]!.toUpperCase() + hints.mood.slice(1) + " music", reason: "As you asked.", mood: hints.mood });
     // Loudness: "the music is too loud", "background volume is higher than the main", "quieter sound effects".
@@ -283,7 +284,7 @@ export class RuleDirector implements Director {
     const soundy = /background (music|track|sound|noise|volume|audio)/.test(t) || (soundTarget === "music" && (quieter || louder));
     if (/background|backdrop|green ?screen/.test(t) && !soundy && !removing && /blur|soft|out of focus|bokeh/.test(t)) raw.push({ id: "background", kind: "background", title: "Blur the background", reason: "As you asked: you stay sharp, what is behind you is blurred.", background: "blur" });
     else if (!soundy && !/background (change|blur|effect|replacement)|original background/.test(t) && /(remove|replace|change|plain|clean|get rid of).{0,20}(background|backdrop)|green ?screen/.test(t)) raw.push({ id: "background", kind: "background", title: "Plain background", reason: "As you asked: you are cut out and placed on a plain colour. Pick a photo or clip in Visuals → Background to use that instead.", background: "color", color: "#1F2A24" });
-    if (!removing && /zoom|punch/.test(t)) raw.push({ id: "zooms", kind: "zooms", title: /slow|push|gentle/.test(t) ? "Slow push-ins" : "Punch in on alternate parts", reason: "As you asked.", style: /slow|push|gentle/.test(t) ? "push" : "punch" });
+    if (!removing && !/(push|zoom) transitions?|match push|then.?and.?now|before.?and.?after/.test(t) && /zoom|punch|push|pull back|drift (left|right)/.test(t)) { const style = /drift left/.test(t) ? "drift-left" : /drift right/.test(t) ? "drift-right" : /pull back/.test(t) ? "pull-back" : /gentle|subtle|restrained/.test(t) ? "gentle-push" : /slow|push/.test(t) ? "push" : "punch"; raw.push({ id: "zooms", kind: "zooms", title: style.split("-").map(w => w[0]!.toUpperCase() + w.slice(1)).join(" "), reason: "As you asked.", style }); }
     const blendWanted = /match (push|transition)|then.?and.?now|before.?and.?after/.test(t) ? "match-push" : /film fade|slow fade/.test(t) ? "film-fade" : /silver|archive|memory fade/.test(t) ? "silver-fade" : /soft pan|smooth pan/.test(t) ? "soft-pan" : /soft rise|smooth rise/.test(t) ? "soft-rise" : /editorial cover|cover transition/.test(t) ? "editorial-cover" : /cross-?fade|dissolve|smooth (transition|cut)|blend/.test(t) ? "dissolve" : /\bpush\b|\bslide (left|across|sideways)/.test(t) ? "push" : /slide ?up/.test(t) ? "slide-up" : /\bwipe/.test(t) ? "wipe" : /circle|iris/.test(t) ? "circle" : /blur (transition|between)|blurry transition/.test(t) ? "blur" : undefined;
     if (!removing && blendWanted) raw.push({ id: "transitions", kind: "transitions", title: blendWanted.split("-").map(w => w[0]!.toUpperCase() + w.slice(1)).join(" ") + " between parts, fade at the ends", reason: "As you asked.", transition: blendWanted });
     else if (!removing && /transition|fade|dip|flash/.test(t)) raw.push({ id: "transitions", kind: "transitions", title: /flash/.test(t) ? "Flash between topics" : /white/.test(t) ? "Dip to white between topics" : "Fade in and out, dip to black between topics", reason: "As you asked.", transition: /flash/.test(t) ? "flash" : /white/.test(t) ? "dip-white" : "dip-black" });
@@ -361,8 +362,8 @@ Rules:
 - "stock": up to 3 free stock cutaways where the words describe something concrete and visual that the footage does not show (a place, an object, an activity), and no project media fits: query is 2-5 plain English words a stock library would match (e.g. "students studying library", "city skyline night"), assetKind "video" (or "photo"; "gif" only for playful reactions), atS inside a kept segment, durationS 2-4, mode "full" (or "behind" to put it behind the person). Not over the hook, not over a face-to-camera key point.
 - "progress": a progress bar (good for short-form).
 - "platform": tiktok (9:16), youtube (16:9) or square (1:1).
-- "look": one colour look for the whole video: warm, clean, cinematic, vivid, soft or mono (field look). Choose from the mood and what the frames look like.
-- "zooms": style "punch" (alternate tighter framings at cuts; energetic short-form) or "push" (slow push-in; calm or long-form).
+- "look": one colour look for the whole video: warm, clean, cinematic, vivid, soft, mono, golden-hour (hopeful human warmth), editorial (polished neutral documentary), heritage (reflective history) or noir (dramatic high-contrast monochrome). Choose from the story and supplied frames, never novelty.
+- "zooms": style "punch" (brief emphasis), "push" (sustained attention), "gentle-push" (subtle documentary attention), "pull-back" (reveal context), or "drift-left"/"drift-right" (restrained still-image movement). Use one motion language consistently and avoid motion on every shot.
 - "transitions": fades at the start and end plus one transition where the edit jumps to a new part. Default to "dissolve" (calm) or a clean cut. Premium choices are "soft-pan"/"soft-rise" (restrained movement), "match-push" (aligned then-and-now or detail match), "film-fade" (passage of time), "silver-fade" (archival memory), and "editorial-cover" (confident chapter change). Use "push", "slide-up", "wipe", "circle", "blur", "dip-black", "dip-white" or "flash" only when the tone specifically calls for them. Never decorate every cut or place a transition inside a continuous thought.
 - "remove": take a whole kind out, target one of music, sfx, progress, graphics (all on-screen text), cutaways, voiceovers, captions, background (back to the original), look, zooms, transitions.
 - "captions": captions for every spoken word (when the creator asks for captions or subtitles).
@@ -396,7 +397,7 @@ const SCHEMA = {
         text: { type: "string" }, subtitle: { type: "string" }, atS: { type: "number" }, durationS: { type: "number" },
         position: { type: "string", enum: ["top", "center", "bottom", ""] }, mood: { type: "string", enum: [...MOODS, ""] }, assetId: { type: "string" },
         mode: { type: "string", enum: ["full", "pip", "behind", ""] }, platform: { type: "string", enum: [...PLATFORMS, ""] },
-        look: { type: "string", enum: [...LOOKS, ""] }, style: { type: "string", enum: ["punch", "push", ""] }, transition: { type: "string", enum: [...DIRECTOR_TRANSITIONS, ""] },
+        look: { type: "string", enum: [...LOOKS, ""] }, style: { type: "string", enum: [...DIRECTOR_MOTIONS, ""] }, transition: { type: "string", enum: [...DIRECTOR_TRANSITIONS, ""] },
         background: { type: "string", enum: ["blur", "color", ""] }, color: { type: "string" },
         target: { type: "string", enum: ["music", "sfx", "voiceover", ...REMOVABLE, ""] }, changeDb: { type: "number" },
         afterVideo: { type: "boolean" }, query: { type: "string" }, assetKind: { type: "string", enum: ["video", "photo", "gif", ""] },
@@ -633,8 +634,8 @@ export function effectOperations(plan: DirectorPlan, accepted: Set<string>, time
     const effect: Extract<TimelineOperation, { type: "set-clip-effects" }> = { type: "set-clip-effects", clipId: piece.id };
     if (zooms) {
       const length = piece.sourceEndUs - piece.sourceStartUs;
-      if (zooms.style === "push" && length >= 2_500_000) effect.zoom = "push";
-      else if (zooms.style === "punch") effect.zoom = i % 2 === 1 ? "punch" : "none";
+      if (zooms.style === "punch") effect.zoom = i % 2 === 1 ? "punch" : "none";
+      else if (length >= 2_500_000) effect.zoom = zooms.style;
     }
     if (transitions) {
       if (i === 0) effect.transitionIn = "dip-black";

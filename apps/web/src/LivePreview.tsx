@@ -4,7 +4,7 @@ import type React from "react";
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { generateSoundEffect, type SoundEffectKind } from "../../../packages/music/src/index.js";
 import { BackgroundLayer, type BackgroundSpec } from "./BackgroundLayer.js";
-import { LOOK_CSS, blendAt, captionBottomFor, faceDuring, faceInFrame, focusDuring, veilAt, zoomAt, type FaceTrack, type FrameBox, type PreviewClip as Clip } from "./preview.js";
+import { LOOK_CSS, blendAt, captionBottomFor, faceDuring, faceInFrame, focusDuring, motionOffsetAt, veilAt, zoomAt, type FaceTrack, type FrameBox, type PreviewClip as Clip } from "./preview.js";
 
 /**
  * Live preview of the edit in the browser: plays the cut clip by clip and draws captions, titles, cutaways,
@@ -241,6 +241,7 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
   ].filter(Boolean).join(" ") : "";
   const finishFilter = [look, correction].filter(Boolean).join(" ") || undefined;
   const zoom = zoomAt(current, tUs);
+  const motionX = motionOffsetAt(current, tUs);
   const veil = veilAt(clips, tUs, durationUs);
   const blend = blendAt(clips, tUs);
   const blendStyle = ((): React.CSSProperties | undefined => {
@@ -321,8 +322,8 @@ export const LivePreview = forwardRef<LivePreviewHandle, Props>(function LivePre
         setPlaying(false); music.current?.pause();
         const code = el.error.code;
         setPlaybackError(mediaFailure(code));
-      }} muted={false} playsInline preload="auto" style={{ ...(stills?.[current?.assetId ?? ""] ? { visibility: "hidden" } : {}), objectFit: fit, ...(currentFocus ? { objectPosition: (currentFocus.x * 100).toFixed(1) + "% " + (currentFocus.y * 100).toFixed(1) + "%" } : {}), transform: zoom !== 1 ? "scale(" + zoom.toFixed(4) + ")" : undefined, transformOrigin: "50% 40%", filter: finishFilter, ...(compositing ? { opacity: 0 } : {}) }} />
-      {current && stills?.[current.assetId] && urls[current.assetId] && <img ref={photo} key={urls[current.assetId] + ":" + mediaAttempt} className="live-video live-photo" src={urls[current.assetId]} alt="Storyboard photo" onLoad={() => setPlaybackError("")} onError={() => { setPlaying(false); music.current?.pause(); setPlaybackError("The photo could not be loaded. Reload footage to retry."); }} style={{ objectFit: fit, filter: finishFilter, transform: zoom !== 1 ? "scale(" + zoom.toFixed(4) + ")" : undefined }} />}
+      }} muted={false} playsInline preload="auto" style={{ ...(stills?.[current?.assetId ?? ""] ? { visibility: "hidden" } : {}), objectFit: fit, ...(currentFocus ? { objectPosition: (currentFocus.x * 100).toFixed(1) + "% " + (currentFocus.y * 100).toFixed(1) + "%" } : {}), transform: zoom !== 1 || motionX ? "translateX(" + motionX.toFixed(2) + "%) scale(" + zoom.toFixed(4) + ")" : undefined, transformOrigin: "50% 40%", filter: finishFilter, ...(compositing ? { opacity: 0 } : {}) }} />
+      {current && stills?.[current.assetId] && urls[current.assetId] && <img ref={photo} key={urls[current.assetId] + ":" + mediaAttempt} className="live-video live-photo" src={urls[current.assetId]} alt="Storyboard photo" onLoad={() => setPlaybackError("")} onError={() => { setPlaying(false); music.current?.pause(); setPlaybackError("The photo could not be loaded. Reload footage to retry."); }} style={{ objectFit: fit, filter: finishFilter, transform: zoom !== 1 || motionX ? "translateX(" + motionX.toFixed(2) + "%) scale(" + zoom.toFixed(4) + ")" : undefined }} />}
       {compositing && <BackgroundLayer video={videoEl} matteUrl={matteUrl!} spec={background!} fit={fit} focus={currentFocus} zoom={zoom} filter={finishFilter} onError={() => setCutoutFailed(true)} />}
       <canvas ref={snapRef} className="live-snap" aria-hidden="true" style={blendStyle ?? { display: "none" }} />
       {background && (!matteUrl || cutoutFailed) && <span className="live-note">{cutoutExpired || cutoutFailed ? <>Cutout preview unavailable. Showing the original footage. <button type="button" onClick={() => { setCutoutFailed(false); setCutoutExpired(false); setCutoutAttempt((n) => n + 1); onRetryMatte?.(); }}>Retry cutout</button></> : "Cutting you out for the preview…"}</span>}

@@ -81,10 +81,28 @@ export function assetsUsedBy(timeline: Timeline): Set<UUID> {
   }
   return used;
 }
-export const CLIP_ZOOMS = ["none", "punch", "push"] as const;
+export const CLIP_ZOOMS = ["none", "punch", "push", "gentle-push", "pull-back", "drift-left", "drift-right"] as const;
 export type ClipZoom = (typeof CLIP_ZOOMS)[number];
-export const COLOUR_LOOKS = ["none", "warm", "clean", "cinematic", "vivid", "soft", "mono"] as const;
+export const COLOUR_LOOKS = ["none", "warm", "clean", "cinematic", "vivid", "soft", "mono", "golden-hour", "editorial", "heritage", "noir"] as const;
 export type ColourLook = (typeof COLOUR_LOOKS)[number];
+export const MOTION_CATALOGUE: Record<ClipZoom, { label: string; premium?: boolean; use: string }> = {
+  none: { label: "Static", use: "Let an already strong frame breathe." },
+  punch: { label: "Punch in", use: "A short emphatic beat." },
+  push: { label: "Slow push-in", use: "Sustained focus or growing emotional attention." },
+  "gentle-push": { label: "Gentle push", premium: true, use: "Quiet documentary attention without obvious motion." },
+  "pull-back": { label: "Pull back", premium: true, use: "Reveal context or create a reflective release." },
+  "drift-left": { label: "Drift left", premium: true, use: "A restrained still-image move toward subject matter on the right." },
+  "drift-right": { label: "Drift right", premium: true, use: "A restrained still-image move toward subject matter on the left." },
+};
+export const LOOK_CATALOGUE: Record<ColourLook, { label: string; premium?: boolean; use: string }> = {
+  none: { label: "Natural", use: "Preserve the source colour." }, warm: { label: "Warm", use: "Friendly human stories." },
+  clean: { label: "Clean & crisp", use: "Clear modern explainers." }, cinematic: { label: "Cinematic", use: "Controlled contrast and subdued colour." },
+  vivid: { label: "Vivid", use: "Energetic colour." }, soft: { label: "Soft", use: "Gentle portraits." }, mono: { label: "Black & white", use: "Graphic monochrome." },
+  "golden-hour": { label: "Golden hour", premium: true, use: "Warm hopeful people and place." },
+  editorial: { label: "Editorial", premium: true, use: "Polished neutral documentary colour." },
+  heritage: { label: "Heritage", premium: true, use: "Reflective history with restrained saturation." },
+  noir: { label: "Noir", premium: true, use: "High-contrast monochrome for serious dramatic material." },
+};
 /**
  * How a clip comes in. Dips and the flash fade through a colour; the others blend the two clips over each other
  * (including the standard and premium catalogue), using a little footage past the cut so the timing never shifts.

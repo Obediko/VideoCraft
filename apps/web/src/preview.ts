@@ -11,6 +11,10 @@ export const LOOK_CSS: Record<string, string> = {
   vivid: "saturate(1.3) contrast(1.08)",
   soft: "contrast(0.93) saturate(0.94) brightness(1.03)",
   mono: "grayscale(1) contrast(1.12)",
+  "golden-hour": "sepia(0.24) saturate(1.12) contrast(1.04) brightness(1.015)",
+  editorial: "contrast(1.08) saturate(0.96) brightness(1.005)",
+  heritage: "sepia(0.18) saturate(0.72) contrast(1.04) brightness(1.01)",
+  noir: "grayscale(1) contrast(1.28) brightness(0.985)",
 };
 
 /**
@@ -48,7 +52,16 @@ export function zoomAt(clip: Clip | undefined, tUs: number): number {
   if (!clip) return 1;
   if (clip.transform?.zoom === "punch") return 1.12;
   if (clip.transform?.zoom === "push") { const len = Math.max(1, clip.timelineEndUs - clip.timelineStartUs); return 1 + 0.08 * Math.min(1, Math.max(0, (tUs - clip.timelineStartUs) / len)); }
+  if (clip.transform?.zoom === "gentle-push") { const len = Math.max(1, clip.timelineEndUs - clip.timelineStartUs); return 1 + 0.04 * Math.min(1, Math.max(0, (tUs - clip.timelineStartUs) / len)); }
+  if (clip.transform?.zoom === "pull-back") { const len = Math.max(1, clip.timelineEndUs - clip.timelineStartUs); return 1.08 - 0.08 * Math.min(1, Math.max(0, (tUs - clip.timelineStartUs) / len)); }
+  if (clip.transform?.zoom === "drift-left" || clip.transform?.zoom === "drift-right") return 1.08;
   return 1;
+}
+
+export function motionOffsetAt(clip: Clip | undefined, tUs: number): number {
+  if (clip?.transform?.zoom !== "drift-left" && clip?.transform?.zoom !== "drift-right") return 0;
+  const len = Math.max(1, clip.timelineEndUs - clip.timelineStartUs); const p = Math.min(1, Math.max(0, (tUs - clip.timelineStartUs) / len));
+  return (clip.transform.zoom === "drift-left" ? 1 - 2 * p : -1 + 2 * p) * 3.7;
 }
 
 

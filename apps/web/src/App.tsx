@@ -1,7 +1,7 @@
 import { flushSync } from "react-dom";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { EffectLibrary } from "./EffectLibrary.js";
-import { effectRecipeOperations, TRANSITION_CATALOGUE, type EffectRecipe } from "@videocraft/domain";
+import { effectRecipeOperations, LOOK_CATALOGUE, MOTION_CATALOGUE, TRANSITION_CATALOGUE, type EffectRecipe } from "@videocraft/domain";
 import { Creation, type CreationMode } from "./Creation.js";
 import { LivePreview, type LivePreviewHandle } from "./LivePreview.js";
 import { StockSearch } from "./StockSearch.js";
@@ -45,8 +45,8 @@ const PLAN_GROUPS: Array<{ name: string; kinds: string[] }> = [
   { name: "Format", kinds: ["platform"] },
   { name: "Tips from the director", kinds: ["advice"] },
 ];
-const LOOK_LABEL: Record<string, string> = { none: "Natural (no look)", warm: "Warm", clean: "Clean & crisp", cinematic: "Cinematic", vivid: "Vivid", soft: "Soft", mono: "Black & white" };
-const ZOOM_LABEL: Record<string, string> = { none: "No zoom", punch: "Punch in (tighter framing)", push: "Slow push-in" };
+const LOOK_LABEL: Record<string, string> = Object.fromEntries(Object.entries(LOOK_CATALOGUE).map(([id, item]) => [id, item.label + (item.premium ? " · Premium" : "")]));
+const ZOOM_LABEL: Record<string, string> = Object.fromEntries(Object.entries(MOTION_CATALOGUE).map(([id, item]) => [id, item.label + (item.premium ? " · Premium" : "")]));
 const TRANSITION_LABEL: Record<string, string> = Object.fromEntries(Object.entries(TRANSITION_CATALOGUE).map(([id, item]) => [id, item.label + (item.premium ? " · Premium" : "")]));
 const ENDING_LABEL: Record<string, string> = { cut: "Cut", "dip-black": "Fade to black", "dip-white": "Fade to white", flash: "Flash" };
 const SFX_LABEL: Record<string, string> = { whoosh: "Whoosh", pop: "Pop", hit: "Boom", riser: "Riser" };
