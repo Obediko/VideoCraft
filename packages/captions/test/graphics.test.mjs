@@ -36,3 +36,15 @@ test("graphics stay out of the caption band", async () => {
   const free = renderGraphicsAss([{ kind: "lower-third", text: "Ada", startUs: 0, endUs: 2_000_000 }], undefined, { width: 1080, height: 1920 });
   assert.ok(Math.max(...[...free.matchAll(/\\move\(-?\d+,(\d+),\d+,(\d+)/g)].map((m) => Number(m[2]))) > band.topY, "without captions it keeps its usual lower position");
 });
+
+test("premium chapter and quote treatments have their own restrained typography", () => {
+  const ass = renderGraphicsAss([
+    { kind: "chapter", text: "A new beginning", subtitle: "Chapter two", startUs: 0, endUs: 2_000_000, color: "#A8C49A" },
+    { kind: "quote", text: "Someone believed in me", subtitle: "Ada", startUs: 2_000_000, endUs: 5_000_000, color: "#F5A524" },
+  ], undefined, { width: 1920, height: 1080 });
+  assert.match(ass, /,Chapter,/);
+  assert.match(ass, /\\fscx0\\t\(80,520,\\fscx100\)/, "chapter rule draws on");
+  assert.match(ass, /,Quote,/);
+  assert.match(ass, /“Someone believed in me”/);
+  assert.match(ass, /— Ada/);
+});

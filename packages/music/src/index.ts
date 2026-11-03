@@ -225,11 +225,11 @@ export function encodeWav(left: Float32Array, right: Float32Array, sampleRate: n
   return buffer;
 }
 
-export type SoundEffectKind = "whoosh" | "pop" | "hit" | "riser";
+export type SoundEffectKind = "whoosh" | "pop" | "hit" | "riser" | "soft-whoosh" | "shimmer" | "low-pulse";
 
 /** Short synthesised sound effects for cuts, graphics and reveals (48 kHz stereo, peak about -3 dBFS). */
 export function generateSoundEffect(kind: SoundEffectKind, sampleRate = 48_000, seed = 7): { left: Float32Array; right: Float32Array; sampleRate: number } {
-  const seconds = { whoosh: 0.7, pop: 0.25, hit: 1.2, riser: 1.8 }[kind];
+  const seconds = { whoosh: 0.7, pop: 0.25, hit: 1.2, riser: 1.8, "soft-whoosh": 0.9, shimmer: 1.6, "low-pulse": 1.4 }[kind];
   const n = Math.round(seconds * sampleRate);
   const left = new Float32Array(n); const right = new Float32Array(n);
   const rand = prng(seed);
@@ -238,20 +238,25 @@ export function generateSoundEffect(kind: SoundEffectKind, sampleRate = 48_000, 
   for (let i = 0; i < n; i += 1) {
     const t = i / sampleRate; const x = t / seconds; const noise = rand() * 2 - 1;
     let sample = 0; let pan = 0.5;
-    if (kind === "whoosh") {
+    if (kind === "whoosh" || kind === "soft-whoosh") {
       const env = x < 0.6 ? Math.pow(x / 0.6, 2) : Math.pow(1 - (x - 0.6) / 0.4, 1.5);
-      const centre = 300 + 2600 * Math.sin(Math.PI * Math.min(1, x * 1.1));
+      const gentle = kind === "soft-whoosh"; const centre = (gentle ? 180 : 300) + (gentle ? 1200 : 2600) * Math.sin(Math.PI * Math.min(1, x * 1.1));
       const f = 2 * Math.sin((Math.PI * centre) / sampleRate); const q = 0.35;
       low += f * band; const high = noise - low - q * band; band += f * high;
-      sample = band * env * 1.6; pan = 0.15 + 0.7 * x;
+      sample = band * env * (gentle ? 0.9 : 1.6); pan = gentle ? 0.38 + 0.24 * x : 0.15 + 0.7 * x;
     } else if (kind === "pop") {
       const freq = 300 + 700 * Math.exp(-t * 40); phase += freq / sampleRate;
       sample = Math.sin(2 * Math.PI * phase) * Math.exp(-t * 22) + noise * Math.exp(-t * 400) * 0.4;
-    } else if (kind === "hit") {
+    } else if (kind === "hit" || kind === "low-pulse") {
       const freq = 45 + 70 * Math.exp(-t * 18); phase += freq / sampleRate;
       const f = 2 * Math.sin((Math.PI * 1800) / sampleRate);
       low2 += f * band2; const high = noise - low2 - 0.8 * band2; band2 += f * high;
-      sample = Math.tanh(1.6 * Math.sin(2 * Math.PI * phase)) * Math.exp(-t * 3.2) + low2 * Math.exp(-t * 14) * 0.6;
+      sample = Math.tanh((kind === "low-pulse" ? 0.8 : 1.6) * Math.sin(2 * Math.PI * phase)) * Math.exp(-t * (kind === "low-pulse" ? 2.4 : 3.2)) + low2 * Math.exp(-t * 14) * (kind === "low-pulse" ? 0.25 : 0.6);
+    } else if (kind === "shimmer") {
+      const base = 520 + 260 * x; phase += base / sampleRate;
+      const env = Math.sin(Math.PI * x) * Math.exp(-x * 0.7);
+      sample = (Math.sin(2 * Math.PI * phase) * 0.42 + Math.sin(2 * Math.PI * phase * 1.5) * 0.24 + Math.sin(2 * Math.PI * phase * 2.02) * 0.13) * env;
+      pan = 0.5 + 0.18 * Math.sin(x * Math.PI * 2);
     } else {
       const freq = 180 * Math.pow(7, x); phase += freq / sampleRate;
       const centre = 400 + 5000 * x * x; const f = 2 * Math.sin((Math.PI * Math.min(centre, sampleRate / 6)) / sampleRate);

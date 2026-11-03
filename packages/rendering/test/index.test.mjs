@@ -226,13 +226,17 @@ test("real ffmpeg: a title card pops in only during its window, a lower third sl
     const talk = join(dir, "talk.mp4");
     execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=0x303030:s=640x360:d=8:r=25", "-pix_fmt", "yuv420p", talk]);
     const overlay = { id: "o", kind: "overlay", clips: [
+      { id: "g0", assetId: "generated:graphic", sourceStartUs: 0, sourceEndUs: 900_000, timelineStartUs: 0, timelineEndUs: 900_000, transform: { role: "graphic", kind: "chapter", text: "PART ONE", subtitle: "A beginning", position: "center", color: "#5CA8E5" } },
       { id: "g1", assetId: "generated:graphic", sourceStartUs: 0, sourceEndUs: 2_000_000, timelineStartUs: 1_000_000, timelineEndUs: 3_000_000, transform: { role: "graphic", kind: "title", text: "ONBOARDING", position: "center", color: "#FFA000" } },
+      { id: "gq", assetId: "generated:graphic", sourceStartUs: 0, sourceEndUs: 900_000, timelineStartUs: 3_300_000, timelineEndUs: 4_200_000, transform: { role: "graphic", kind: "quote", text: "A human truth", subtitle: "Ada Obi", position: "center", color: "#F4EFE4" } },
       { id: "g2", assetId: "generated:graphic", sourceStartUs: 0, sourceEndUs: 2_500_000, timelineStartUs: 4_500_000, timelineEndUs: 7_000_000, transform: { role: "graphic", kind: "lower-third", text: "Ada Obi", subtitle: "Founder", position: "bottom", color: "#FF00FF" } },
       { id: "progress", assetId: "generated:progress", sourceStartUs: 0, sourceEndUs: 8_000_000, timelineStartUs: 0, timelineEndUs: 8_000_000, transform: { role: "progress", color: "#00FF00" } },
     ] };
     const out = join(dir, "out.mp4");
     const plan = await new FfmpegCommandPlanner({ resolve: async () => talk }).plan(revision([clip("c", 0, 8_000_000, 0)], [overlay]), { ...settings, width: 640, height: 360, captionStyle: undefined }, out);
     await new FfmpegProcess().run(plan);
+    assert.match(plan.files.find((file) => file.path.endsWith(".graphics.ass")).content, /Style: Chapter/);
+    assert.match(plan.files.find((file) => file.path.endsWith(".graphics.ass")).content, /Style: Quote/);
     // Fraction of pixels in a region matching a colour test.
     const share = (t, crop, match) => {
       const [w, h] = crop.split(":").map(Number);

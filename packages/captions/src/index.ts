@@ -106,6 +106,8 @@ export const CAPTION_STYLES: Record<string, CaptionStyle> = {
   "bold-pop": { id: "bold-pop", fontName: "DejaVu Sans", sizeRatio: 0.052, bold: true, uppercase: true, textColor: "FFFFFF", activeColor: "00D7FF", outlineColor: "000000", outlineRatio: 0.0075, shadow: 2, boxed: false, bottomRatio: 0.3, popActiveWord: true },
   clean: { id: "clean", fontName: "DejaVu Sans", sizeRatio: 0.042, bold: true, uppercase: false, textColor: "FFFFFF", outlineColor: "000000", outlineRatio: 0.012, shadow: 0, boxed: true, bottomRatio: 0.12, popActiveWord: false },
   minimal: { id: "minimal", fontName: "DejaVu Sans", sizeRatio: 0.036, bold: false, uppercase: false, textColor: "F2F2F2", outlineColor: "000000", outlineRatio: 0.006, shadow: 1, boxed: false, bottomRatio: 0.09, popActiveWord: false },
+  editorial: { id: "editorial", fontName: "DejaVu Serif", sizeRatio: 0.04, bold: false, uppercase: false, textColor: "FFF8EC", outlineColor: "181818", outlineRatio: 0.0045, shadow: 1, boxed: false, bottomRatio: 0.11, popActiveWord: false },
+  documentary: { id: "documentary", fontName: "DejaVu Sans", sizeRatio: 0.038, bold: true, uppercase: false, textColor: "FFFFFF", activeColor: "B8D8C0", outlineColor: "101010", outlineRatio: 0.007, shadow: 1, boxed: false, bottomRatio: 0.1, popActiveWord: false },
 };
 
 export function resolveCaptionStyle(id: string | undefined): CaptionStyle | undefined {

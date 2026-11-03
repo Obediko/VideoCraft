@@ -28,6 +28,16 @@ The second compatibility layer adds premium motion and colour without a new runt
 
 Motion uses bounded FFmpeg scale/crop expressions and matching browser transforms. Colour uses YUV-safe FFmpeg filters chosen for the ARM render worker, with matching CSS previews. Both catalogues carry an editorial use instead of presenting anonymous presets.
 
+## Typography and sound layer
+
+The third compatibility layer gives the Director a restrained editorial language rather than a template dump:
+
+- `editorial` and `documentary` caption systems, each editable and reproduced through ASS in export;
+- `chapter` and `quote` graphics, with matching live-preview placement and export animation;
+- `soft-whoosh`, `shimmer` and `low-pulse` audio cues for motivated reveals, discoveries and chapter turns.
+
+The audio cues are synthesized deterministically by VideoCraft, so they require no downloaded sample pack or unclear third-party licence. The Director may suggest these treatments, but the final Check still tests readability, collisions and transition restraint.
+
 ## External catalogue evaluation
 
 [GL Transitions](https://github.com/gl-transitions/gl-transitions) is the leading candidate for the larger Advanced library. Its catalogue contains more than 100 parameterised transitions with per-transition licence metadata and automated multi-target render comparisons. Enabling its shaders in production requires a dedicated, sandboxed shader renderer, deterministic CPU/GPU fallback, preview/export parity, per-transition allowlisting and container benchmarks. Merely listing a shader that the export worker cannot reproduce is not acceptable.

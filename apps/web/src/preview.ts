@@ -73,7 +73,7 @@ export type FaceBox = [number, number, number, number];
 export type FaceTrack = { step: number; boxes: Array<FaceBox | null> };
 export type FrameBox = { x0: number; y0: number; x1: number; y1: number };
 /** Caption placement per style, as in the export: distance from the bottom and text size, as fractions of the height. */
-export const CAPTION_LAYOUT: Record<string, { bottom: number; size: number }> = { "bold-pop": { bottom: 0.3, size: 0.052 }, clean: { bottom: 0.12, size: 0.042 }, minimal: { bottom: 0.09, size: 0.036 } };
+export const CAPTION_LAYOUT: Record<string, { bottom: number; size: number }> = { "bold-pop": { bottom: 0.3, size: 0.052 }, clean: { bottom: 0.12, size: 0.042 }, minimal: { bottom: 0.09, size: 0.036 }, editorial: { bottom: 0.11, size: 0.04 }, documentary: { bottom: 0.1, size: 0.038 } };
 
 export function faceDuring(track: FaceTrack | undefined, startUs: number, endUs: number): FaceBox | undefined {
   if (!track || !(track.step > 0) || endUs <= startUs) return undefined;

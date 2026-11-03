@@ -1,7 +1,7 @@
 import { THINKING_EQUATIONS } from "@videocraft/domain";
 import { assTime, escapeAss } from "./index.js";
 
-export interface GraphicItem { kind: "title" | "callout" | "lower-third" | "thinking"; text: string; subtitle?: string; startUs: number; endUs: number; position?: "top" | "center" | "bottom"; color?: string;
+export interface GraphicItem { kind: "title" | "callout" | "lower-third" | "thinking" | "chapter" | "quote"; text: string; subtitle?: string; startUs: number; endUs: number; position?: "top" | "center" | "bottom"; color?: string;
   /** The speaker's face during this graphic (output pixels): the graphic moves so it does not cover it. */
   face?: { x0: number; y0: number; x1: number; y1: number };
   /** The caption band during this graphic, when it differs from the default `avoid` band. */
@@ -21,7 +21,8 @@ export function graphicPlacement(item: GraphicItem, frame: { width: number; heig
   const vertical = H > W, base = Math.min(W, H);
   const titleSize = Math.round(base * (vertical ? 0.085 : 0.075));
   const calloutSize = Math.round(titleSize * 0.7), pad = Math.round(base * 0.025);
-  const half = Math.round((item.kind === "title" ? titleSize * (item.subtitle ? 1.9 : 1.2) : calloutSize * 1.2) / 2) + pad;
+  const titleLike = item.kind === "title" || item.kind === "chapter" || item.kind === "quote";
+  const half = Math.round((titleLike ? titleSize * (item.subtitle ? 1.9 : 1.2) : calloutSize * 1.2) / 2) + pad;
   const avoid = item.avoid ?? avoidBand;
   const slots = { top: Math.round(H * 0.18), center: Math.round(H * 0.42), bottom: Math.round(H * (vertical ? 0.64 : 0.74)) };
   const wanted = item.position ?? "center";
@@ -33,7 +34,7 @@ export function graphicPlacement(item: GraphicItem, frame: { width: number; heig
   let y = clear ?? slots[wanted];
   // Keep text graphics out of the caption band: move above it when they would overlap.
   if (clear === undefined && avoid && inBand(y)) y = Math.max(half, avoid.topY - half);
-  return { y, fontSize: item.kind === "title" ? titleSize : calloutSize, pad: item.kind === "title" ? pad : Math.round(pad * 0.8) };
+  return { y, fontSize: titleLike ? titleSize : calloutSize, pad: titleLike ? pad : Math.round(pad * 0.8) };
 }
 
 /**
@@ -59,6 +60,8 @@ export function renderGraphicsAss(items: GraphicItem[], progress: ProgressBar | 
     "Style: Callout,DejaVu Sans," + calloutSize + ",&H00FFFFFF,&H00FFFFFF,&H00" + assColour(undefined) + ",&H00000000,-1,0,0,0,100,100,0,0,3," + Math.round(pad * 0.8) + ",0,5,0,0,0,1",
     "Style: Name,DejaVu Sans," + nameSize + ",&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1," + Math.max(2, Math.round(nameSize * 0.06)) + ",1,1,0,0,0,1",
     "Style: Role,DejaVu Sans," + roleSize + ",&H00F0F0F0,&H00F0F0F0,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1," + Math.max(2, Math.round(roleSize * 0.06)) + ",1,1,0,0,0,1",
+    "Style: Chapter,DejaVu Sans," + Math.round(titleSize * 0.82) + ",&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,5,0,1,1,1,5,0,0,0,1",
+    "Style: Quote,DejaVu Serif," + Math.round(titleSize * 0.72) + ",&H00FFF8EC,&H00FFF8EC,&H00181818,&H64000000,0,-1,0,0,100,100,0,0,1,2,1,5,0,0,0,1",
     "Style: Shape,DejaVu Sans,10,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1",
     "", "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
   ];
@@ -113,6 +116,16 @@ export function renderGraphicsAss(items: GraphicItem[], progress: ProgressBar | 
       continue;
     }
     const { y } = graphicPlacement(item, frame, options.avoid);
+    if (item.kind === "chapter") {
+      const lineY = y + Math.round(titleSize * 0.72), lineW = Math.round(W * 0.18);
+      lines.push(event(1, item.startUs, item.endUs, "Shape", "{\\an7\\pos(" + Math.round((W - lineW) / 2) + "," + lineY + ")\\bord0\\shad0\\1c&H" + accent + "&\\fscx0\\t(80,520,\\fscx100)\\fad(120," + fadeOut + ")\\p1}m 0 0 l " + lineW + " 0 " + lineW + " 3 0 3{\\p0}"));
+      lines.push(event(2, item.startUs, item.endUs, "Chapter", "{\\an5\\pos(" + Math.round(W / 2) + "," + y + ")\\fad(180," + fadeOut + ")}" + escapeAss(item.text.trim()) + (item.subtitle?.trim() ? "\\N{\\fs" + Math.round(titleSize * 0.42) + "\\b0\\fsp1}" + escapeAss(item.subtitle.trim()) : "")));
+      continue;
+    }
+    if (item.kind === "quote") {
+      lines.push(event(2, item.startUs, item.endUs, "Quote", "{\\an5\\pos(" + Math.round(W / 2) + "," + y + ")\\1c&HFFF8EC&\\fad(240," + fadeOut + ")}“" + escapeAss(item.text.trim()) + "”" + (item.subtitle?.trim() ? "\\N{\\fs" + Math.round(titleSize * 0.38) + "\\i0\\1c&H" + accent + "&}— " + escapeAss(item.subtitle.trim()) : "")));
+      continue;
+    }
     const style = item.kind === "title" ? "Title" : "Callout";
     // Pop: scale up from 70% with a quick fade in, then fade out at the end.
     const pop = "\\fscx70\\fscy70\\t(0,220,\\fscx100\\fscy100)\\fad(160," + fadeOut + ")";

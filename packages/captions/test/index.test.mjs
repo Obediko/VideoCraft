@@ -41,3 +41,12 @@ test("static captions for cues without word timings", () => {
   const ass = renderAss([{ startUs: 0, endUs: 1_000_000, text: "Hello world" }], CAPTION_STYLES.clean, { width: 1280, height: 720 });
   assert.equal(ass.split("\n").filter((l) => l.startsWith("Dialogue:")).length, 1);
 });
+
+test("premium caption systems render distinct, readable ASS styles", () => {
+  const editorial = renderAss([{ startUs: 0, endUs: 1_000_000, text: "A human story" }], CAPTION_STYLES.editorial, { width: 1920, height: 1080 });
+  const documentary = renderAss([{ startUs: 0, endUs: 1_000_000, text: "Practical help", wordDurationsCs: [50, 50] }], CAPTION_STYLES.documentary, { width: 1080, height: 1920 });
+  assert.match(editorial, /Style: Default,DejaVu Serif/);
+  assert.match(editorial, /A human story/);
+  assert.match(documentary, /Style: Default,DejaVu Sans/);
+  assert.equal(documentary.split("\n").filter(line => line.startsWith("Dialogue:")).length, 2, "documentary can softly highlight timed words");
+});

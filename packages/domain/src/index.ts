@@ -25,7 +25,7 @@ export type TimelineOperation =
    * so it moves with that moment through cuts and reorders. "full" covers the frame, "pip" is a corner inset.
    */
   /** Animated text graphics anchored to a moment like b-roll: a title card, a callout, or a lower third (name + role). */
-  | { type: "add-graphic"; kind: "title" | "callout" | "lower-third" | "thinking"; text: string; subtitle?: string; anchorAssetId: UUID; anchorClipId?: UUID; anchorSourceUs: Microseconds; durationUs: Microseconds; position?: "top" | "center" | "bottom"; color?: string }
+  | { type: "add-graphic"; kind: "title" | "callout" | "lower-third" | "thinking" | "chapter" | "quote"; text: string; subtitle?: string; anchorAssetId: UUID; anchorClipId?: UUID; anchorSourceUs: Microseconds; durationUs: Microseconds; position?: "top" | "center" | "bottom"; color?: string }
   | { type: "update-graphic"; clipId: string; text?: string; subtitle?: string; color?: string }
   /** A bar filling across the top of the frame over the whole cut. */
   | { type: "set-progress-bar"; enabled: boolean; color?: string }
@@ -129,7 +129,7 @@ export const TRANSITION_CATALOGUE: Record<Transition, { label: string; family: "
   "silver-fade": { label: "Silver fade", family: "blend", premium: true, use: "A reflective archival or memory beat." },
   "editorial-cover": { label: "Editorial cover", family: "blend", premium: true, use: "A confident chapter change with matched movement." },
 };
-export const SOUND_EFFECTS = ["whoosh", "pop", "hit", "riser"] as const;
+export const SOUND_EFFECTS = ["whoosh", "pop", "hit", "riser", "soft-whoosh", "shimmer", "low-pulse"] as const;
 export type SoundEffect = (typeof SOUND_EFFECTS)[number];
 export interface TimelineSignals { silences?: Array<{ startUs: Microseconds; endUs: Microseconds }>; scenes?: Array<{ startUs: Microseconds; endUs: Microseconds }>; }
 export interface EditingProposal { id: UUID; projectId: UUID; baseRevision: number; strategyId: string; strategyVersion: string; rationale: string; confidence: number; evidence: Evidence[]; operations: TimelineOperation[]; status: "proposed" | "accepted" | "rejected" | "superseded"; }
