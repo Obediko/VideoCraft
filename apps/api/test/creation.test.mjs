@@ -35,7 +35,7 @@ test("storyboard plans without speech or uploads, marks unresolved visuals, and 
   try {
     const response = await s.server.inject({ method: "POST", url: "/v1/projects/p/creation/plan", payload: { brief: "Tell a story about a mentoring programme", seconds: 30, assetIds: [] } });
     assert.equal(response.statusCode, 200, response.body);
-    const { plan } = response.json(); assert.equal(plan.source, "rules"); assert.match(plan.note, /unavailable/); assert.equal(plan.scenes[0].assetId, ""); assert.equal(plan.script, "");
+    const { plan } = response.json(); assert.equal(plan.source, "rules"); assert.match(plan.note, /reviewable draft/); assert.equal(plan.scenes[0].assetId, ""); assert.equal(plan.script, "Tell a story about a mentoring programme");
     const unresolved = await s.server.inject({ method: "POST", url: "/v1/projects/p/creation/apply", payload: { revision: 0, scenes: plan.scenes } });
     assert.equal(unresolved.statusCode, 400);
   } finally { await s.close(); }

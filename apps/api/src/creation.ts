@@ -133,7 +133,10 @@ export function registerCreationRoutes(server: FastifyInstance, d: CreationDepen
     const selected = b.assetIds.map(id => c.assets.find(a => a.id === id && ["image", "video"].includes(a.kind)));
     if (selected.some(a => !a)) return reply.code(400).send({ error: { message: "Media must belong to this project" } });
     const assets = selected as Asset[];
-    const fallback: StoryPlan = { source: "rules", summary: "A storyboard in your chosen media order. Review the visuals and write your narration before assembling.", script: "", scenes: assets.length ? assets.map(a => ({ assetId: a.id, startS: 0, durationS: Math.max(0.5, Math.min(60, seconds / assets.length, a.kind === "video" ? (a.durationUs ?? 0) / 1e6 : 60)), text: "", visual: String(a.metadata.filename ?? a.kind) })) : [{ assetId: "", startS: 0, durationS: Math.min(60, seconds), text: "", visual: brief.slice(0, 300) }] };
+    // The provider fallback must remain buildable in idea mode. Keeping the creator's own
+    // description as an explicit, editable narration draft is safer than silently inventing
+    // claims, and avoids leaving the final action permanently disabled after an AI timeout.
+    const fallback: StoryPlan = { source: "rules", summary: "A storyboard in your chosen media order. Review the visuals and narration draft before assembling.", script: brief, scenes: assets.length ? assets.map(a => ({ assetId: a.id, startS: 0, durationS: Math.max(0.5, Math.min(60, seconds / assets.length, a.kind === "video" ? (a.durationUs ?? 0) / 1e6 : 60)), text: "", visual: String(a.metadata.filename ?? a.kind) })) : [{ assetId: "", startS: 0, durationS: Math.min(60, seconds), text: "", visual: brief.slice(0, 300) }] };
     let plan = fallback;
     if (d.plan) try {
       const [frames, media] = await Promise.all([sampleStoryFrames(d, assets), Promise.all(assets.map(async a => ({ id: a.id, kind: a.kind, name: String(a.metadata.filename ?? a.kind), seconds: a.kind === "image" ? 60 : (a.durationUs ?? 0) / 1e6, transcript: (await d.transcripts.listForAsset(a.id)).map(s => s.text).join(" ").slice(0, 3000) })))]);
@@ -142,7 +145,7 @@ export function registerCreationRoutes(server: FastifyInstance, d: CreationDepen
       plan = { source: "ai", summary: typeof raw.summary === "string" ? raw.summary.slice(0, 1000) : "Review your storyboard", script: typeof raw.script === "string" ? raw.script.slice(0, 3000) : "", scenes: storyScenes(raw.scenes, assets, true), ...(typeof raw.selectedApproach === "string" ? { selectedApproach: raw.selectedApproach.slice(0, 120) } : {}), ...(typeof raw.critique === "string" ? { critique: raw.critique.slice(0, 1000) } : {}) };
       if (assets.length) plan.note = frames.length + " temporal samples across " + new Set(frames.map(f => f.assetId)).size + " of " + assets.length + " selected media items informed this plan. Large uploads, missing size metadata, and items beyond the sampling limit use filenames and existing transcripts. Review every scene before assembling.";
       request.log.info({ requestId: request.id, projectId: c.projectId, stage: "storyboard_plan", source: plan.source, selectedAssets: assets.length, sampledAssets: new Set(frames.map(frame => frame.assetId)).size, sampledFrames: frames.length, scenes: plan.scenes.length }, "Storyboard plan completed");
-    } catch (err) { request.log.warn({ err, projectId: c.projectId }, "Storyboard planning failed"); plan = { ...fallback, note: "AI planning was unavailable. Your media is kept in its selected order; you can edit the storyboard below." }; }
+    } catch (err) { request.log.warn({ err, projectId: c.projectId }, "Storyboard planning failed"); plan = { ...fallback, note: "AI planning was unavailable. Your media is kept in its selected order and your description is in the narration editor as a reviewable draft." }; }
     return { plan };
   });
   server.post("/v1/projects/:projectId/creation/apply", async (request, reply) => {
