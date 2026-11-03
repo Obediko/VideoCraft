@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 35496)
-Total output lines: 1509
-
 import { flushSync } from "react-dom";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { EffectLibrary } from "./EffectLibrary.js";
@@ -860,7 +857,239 @@ export function App() {
     if (!projectId || !askPlan) return;
     setBusy(true);
     try {
-      const accepted = askPlan.suggestions.filter((item) => askPicked[item.id] …5496 tokens truncated…Preparing the preview…"}</span>)}</div>}
+      const accepted = askPlan.suggestions.filter((item) => askPicked[item.id] && item.kind !== "advice").map((item) => item.id);
+      const result = await request("/v1/projects/" + projectId + "/director/apply", { method: "POST", body: JSON.stringify({ revision, plan: askPlan, accepted, keepTailoring: true }) });
+      setRevision(result.revision.revision); setTimeline(result.revision.timeline);
+      setRenderUrl(""); setRenderJobId(""); setRenderJobStatus("");
+      if (result.platform && PLATFORMS[result.platform]) setPlatform(result.platform);
+      // Music, stock and voice-overs made on the server are new assets.
+      const listed = await request("/v1/projects/" + projectId + "/assets").catch(() => null); if (listed) setAssets(listed.assets);
+      setAskPlan(null); setAskText(""); setCheck(null);
+      setStatus("Changed (revision " + result.revision.revision + ")" + (result.music ? ". Music: " + result.music.description : "") + (Array.isArray(result.notes) && result.notes.length ? ". " + result.notes.join(" ") : ""));
+    } catch (error) { setStatus(errorMessage(error)); }
+    finally { setBusy(false); }
+  }
+
+  async function runCheck(atRevision = revision) {
+    if (!projectId || !atRevision) return;
+    setBusy(true);
+    setStatus("Checking your edit: cuts, pauses, picture, text and sound…");
+    try {
+      const result = await request("/v1/projects/" + projectId + "/director/check", { method: "POST", body: JSON.stringify({ revision: atRevision, platform, ...(brief.trim() ? { brief } : {}) }) });
+      setCheck({ ...result, revision: atRevision });
+      setFixPicked(Object.fromEntries(result.issues.filter((issue: CheckIssue) => issue.fix).map((issue: CheckIssue) => [issue.id, issue.severity === "fix"])));
+      const fixable = result.issues.filter((issue: CheckIssue) => issue.fix).length;
+      setStatus("Check done: " + (result.issues.length === 0 ? "nothing to fix" : result.issues.length + " finding" + (result.issues.length === 1 ? "" : "s") + (fixable ? ", " + fixable + " with a fix" : "")));
+    } catch (error) { setStatus(errorMessage(error)); }
+    finally { setBusy(false); }
+  }
+  async function applyFixes() {
+    if (!projectId || !check) return;
+    const fixes = check.issues.filter((issue) => issue.fix && fixPicked[issue.id]).map((issue) => ({ title: issue.title, ...(typeof issue.atS === "number" ? { atS: issue.atS } : {}), operations: issue.fix!.operations }));
+    if (!fixes.length) return;
+    setBusy(true);
+    try {
+      const result = await request("/v1/projects/" + projectId + "/director/fix", { method: "POST", body: JSON.stringify({ revision: check.revision, fixes }) });
+      setRevision(result.revision.revision); setTimeline(result.revision.timeline);
+      setRenderUrl(""); setRenderJobId(""); setRenderJobStatus("");
+      setStatus("Fixed " + result.applied.length + (result.skipped.length ? " (" + result.skipped.length + " no longer applied)" : "") + "; checking again…");
+      setBusy(false);
+      await runCheck(result.revision.revision);
+    } catch (error) { setStatus(errorMessage(error)); setBusy(false); }
+  }
+  async function replaceReviewedVisual(issue: CheckIssue, asset: Asset) {
+    if (!projectId || !check || !issue.replacement) return;
+    setBusy(true);
+    try {
+      const result = await request("/v1/projects/" + projectId + "/director/replace-visual", { method: "POST", body: JSON.stringify({ revision: check.revision, clipId: issue.replacement.clipId, assetId: asset.id }) });
+      setRevision(result.revision.revision); setTimeline(result.revision.timeline);
+      setAssets((current) => [...current.filter((item) => item.id !== asset.id), asset]);
+      setRenderUrl(""); setRenderJobId(""); setRenderJobStatus(""); setCheck(null);
+      setStatus("Scene replaced without changing its timing or treatments; checking the new cut…");
+      setBusy(false);
+      await runCheck(result.revision.revision);
+    } catch (error) { setStatus(errorMessage(error)); setBusy(false); }
+  }
+  async function letDirectorChooseVisual(issue: CheckIssue) {
+    if (!projectId || !check || !issue.replacement) return;
+    setBusy(true); setStatus("Director is comparing the strongest matching videos and photos…");
+    try {
+      const result = await request("/v1/projects/" + projectId + "/director/choose-visual", { method: "POST", body: JSON.stringify({ revision: check.revision, clipId: issue.replacement.clipId, query: issue.replacement.query }) });
+      setRevision(result.revision.revision); setTimeline(result.revision.timeline);
+      const listed = await request("/v1/projects/" + projectId + "/assets").catch(() => null); if (listed) setAssets(listed.assets);
+      setRenderUrl(""); setRenderJobId(""); setRenderJobStatus(""); setCheck(null); setBusy(false);
+      await runCheck(result.revision.revision);
+      setStatus("Director compared " + result.choice.compared + " candidates and chose the strongest match (" + Math.round(result.choice.confidence * 100) + "% confidence). " + result.choice.reason);
+    } catch (error) { setStatus(errorMessage(error)); setBusy(false); }
+  }
+  function showIssue(issue: CheckIssue) {
+    if (typeof issue.atS !== "number") return;
+    setPreviewMode("edit");
+    setTimeout(() => liveRef.current?.seek(Math.round(issue.atS! * 1e6)), 0);
+  }
+
+  async function createHighlights() {
+    const video = mainVideo;
+    if (!projectId || !video) { setStatus("Upload a video first"); return; }
+    setBusy(true); setProposal(null); setPlan(null);
+    try {
+      const workingRevision = await prepareSource(video, 3);
+      setStatus("Step 3 of 3: choosing the best moments for your goal…");
+      const target = secondsFromBrief(brief) ?? (platform === "youtube" ? 90 : 30);
+      const found = await request("/v1/projects/" + projectId + "/proposals", {
+        method: "POST",
+        body: JSON.stringify({ revision: workingRevision, strategyId: "highlight-reel", profile: { intent: brief.trim() || "The strongest, clearest moments", audience: "", channel: platform === "youtube" ? "youtube" : "short-form", targetDurationUs: target * 1_000_000, constraints: [] } }),
+      });
+      setProposal(found.proposal);
+      setScreen("plan");
+      const picks = groupHighlights(found.proposal.operations).length;
+      setStatus(picks ? "Highlights ready: review the " + picks + " suggested highlight" + (picks === 1 ? "" : "s") + ", then Accept" : found.proposal.rationale);
+    } catch (error) { setStatus(errorMessage(error)); }
+    finally { setBusy(false); }
+  }
+  async function decideProposal(decision: "accepted" | "rejected") {
+    if (!projectId || !proposal) return;
+    setBusy(true);
+    try {
+      const result = await request("/v1/projects/" + projectId + "/proposals/" + proposal.id + "/decision", { method: "POST", body: JSON.stringify({ decision }) });
+      if (result.revision) { setRevision(result.revision.revision); setTimeline(result.revision.timeline); }
+      setProposal({ ...proposal, status: decision });
+      if (decision === "accepted") { setCheck(null); setScreen("edit"); }
+      setStatus("Proposal " + decision);
+    } catch (error) { setStatus(errorMessage(error)); }
+    finally { setBusy(false); }
+  }
+
+  async function submitRender() {
+    if (!projectId || !revision) { setStatus("Make a cut before exporting"); return; }
+    setBusy(true);
+    try {
+      const preset = PLATFORMS[platform]!;
+      const attemptStorageKey = "videocraft.renderAttempt.v1." + projectId + ":" + revision + ":" + platform;
+      // A terminal job requires a fresh attempt. A lost POST response reuses the
+      // saved attempt key, so retrying a connection failure cannot create duplicates.
+      const idempotencyKey = recall(attemptStorageKey) || projectId + ":" + revision + ":" + platform + ":" + crypto.randomUUID();
+      remember(attemptStorageKey, idempotencyKey);
+      const result = await request("/v1/projects/" + projectId + "/renders", {
+        method: "POST",
+        body: JSON.stringify({ revision, idempotencyKey, settings: { format: "mp4", videoCodec: "libx264", audioCodec: "aac", width: preset.width, height: preset.height, frameRate: 30, fit: preset.fit, captionStyle: preset.captionStyle } }),
+      });
+      remember(attemptStorageKey, "");
+      remember(renderKey(projectId), JSON.stringify({ id: result.job.id, revision, platform }));
+      setRenderJobId(result.job.id); setRenderUrl(""); setRenderJobStatus("queued 0%"); setStatus("Export started (" + preset.label + ")…"); void pollRender(result.job.id);
+    } catch (error) { setStatus(errorMessage(error)); }
+    finally { setBusy(false); }
+  }
+
+  useEffect(() => {
+    if (!projectId || revision === 0) return;
+    setProjects((current) => current.map((project) => project.id === projectId && project.revision !== revision ? { ...project, revision, updatedAt: new Date().toISOString() } : project));
+  }, [revision, projectId]);
+  const assetName = (id: string) => { const asset = assets.find((item) => item.id === id); return asset ? String(asset.metadata.filename ?? asset.kind) : id.startsWith("generated:") ? "Generated" : "Media"; };
+  const clipLabel = (kind: string, clip: TimelineClip) => kind === "caption" ? String(clip.transform?.text ?? "Caption")
+    : kind === "overlay" ? (clip.transform?.role === "graphic" ? String(clip.transform?.text ?? "Text") : clip.transform?.role === "progress" ? "Progress bar" : "Cutaway · " + assetName(clip.assetId))
+    : kind === "audio" ? (clip.transform?.role === "sfx" ? "Sound · " + (SFX_LABEL[String(clip.transform?.kind)] ?? "effect") : clip.transform?.role === "voiceover" ? "Voice-over · " + assetName(clip.assetId) : "Music · " + assetName(clip.assetId))
+    : assetName(clip.assetId) + [clip.transform?.zoom ? " · " + (clip.transform.zoom === "punch" ? "punch-in" : "push-in") : "", clip.transform?.transitionIn ? " · " + (TRANSITION_LABEL[String(clip.transform.transitionIn)] ?? "") + " in" : ""].join("");
+  // Semantic tracks: the story, what is shown over it, text, and sound.
+  const lanes = [
+    { name: "Story", kind: "video", clips: videoClips },
+    { name: "Visuals", kind: "overlay", clips: brolls },
+    { name: "Text", kind: "overlay", clips: [...graphicsClips, ...(progressClip ? [progressClip] : [])] },
+    { name: "Captions", kind: "caption", clips: captionCues },
+    { name: "Sound", kind: "audio", clips: timeline.tracks.filter((track) => track.kind === "audio").flatMap((track) => track.clips) },
+  ].filter((lane) => lane.clips.length > 0 || lane.name === "Story");
+  const steps: Array<{ label: string; screen: Screen; enabled: boolean; done: boolean }> = [
+    { label: creationMode === "footage" ? "Upload" : "Storyboard", screen: "describe", enabled: true, done: hasVideo || edited },
+    ...(creationMode === "footage" ? [{ label: "Describe", screen: "describe" as Screen, enabled: hasVideo, done: edited }] : []),
+    { label: "Edit", screen: "edit", enabled: edited, done: edited && Boolean(check) },
+    { label: "Check", screen: "check", enabled: edited, done: Boolean(check) && check?.revision === revision },
+    { label: "Export", screen: "export", enabled: edited, done: Boolean(renderUrl) },
+  ];
+  const stepBar = <nav aria-label="Workflow" className="steps">{steps.map((step, index) => {
+    const isCurrent = creationMode === "footage" ? step.screen === screen && (step.label !== "Upload" || !hasVideo) && (step.label !== "Describe" || hasVideo) || (step.label === "Describe" && screen === "plan") : step.screen === "describe" ? screen === "create" : step.screen === screen;
+    return <button key={step.label} type="button" className={"step" + (isCurrent ? " current" : "") + (step.done && !isCurrent ? " done" : "")} aria-current={isCurrent ? "step" : undefined} disabled={!step.enabled || busy} onClick={() => setScreen(creationMode !== "footage" && step.screen === "describe" ? "create" : step.screen)}><span className="num" aria-hidden="true">{step.done && !isCurrent ? "✓" : index + 1}</span><span className="step-label">{step.label}</span></button>;
+  })}</nav>;
+
+  const statusPill = <div className="status-pill" role="status" aria-live="polite" title={status}><span className={"status-dot" + (busy ? " busy" : "")} />{status}</div>;
+
+  // ── Sign in ────────────────────────────────────────────────────────────────────────────────
+  if (!userEmail) {
+    return <div className="app-shell" data-release={import.meta.env.VITE_RELEASE_SHA ?? "development"}>
+      <header className="topbar"><span className="brand">VideoCraft</span><div className="spacer" />{statusPill}</header>
+
+    <main className="center-page">
+        <section className="card auth-card" aria-label="Sign in">
+          <h1>{authMode === "login" ? "Sign in" : "Create your account"}</h1>
+          <p className="muted">Describe your video in your own words; VideoCraft makes the first cut and you approve every part.</p>
+          <div className="segmented" role="tablist"><button role="tab" aria-selected={authMode === "login"} className={authMode === "login" ? "on" : ""} onClick={() => setAuthMode("login")}>Sign in</button><button role="tab" aria-selected={authMode === "register"} className={authMode === "register" ? "on" : ""} onClick={() => setAuthMode("register")}>Create account</button></div>
+          <label>Email<input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label>
+          <label>Password<input type="password" autoComplete={authMode === "login" ? "current-password" : "new-password"} value={password} onChange={(event) => setPassword(event.target.value)} minLength={10} /></label>
+          <button className="primary" onClick={authenticate} disabled={busy || !email || password.length < 10}>{authMode === "login" ? "Sign in" : "Create account"}</button>
+          {!sessionChecked && <p className="muted">Checking for an existing session…</p>}
+        </section>
+      </main>
+    </div>;
+  }
+
+  if (screen === "choose") return <div className="app-shell" data-release={import.meta.env.VITE_RELEASE_SHA ?? "development"}>
+    <header className="topbar"><button className="btn" onClick={() => setScreen("projects")} disabled={busy}>Back to your videos</button><span className="brand">VideoCraft</span><div className="spacer" />{statusPill}</header>
+    <main className="page choose-page"><span className="eyebrow">New video</span><h1>Where should we begin?</h1><p className="muted lead">Three ways in. One Director and one editing experience from the first thought to the finished film.</p>
+      <div className="creation-choices">{([
+        ["footage", "I have footage", "Find the story already inside a talk, interview, vlog, or recording."],
+        ["story", "I have media", "Shape selected videos and photos around one clear message."],
+        ["idea", "I have an idea", "Develop the words, scenes and visual choices from a simple brief."],
+      ] as const).map(([id, title, description], index) => <button type="button" className="card creation-choice" key={id} aria-label={title} disabled={busy} onClick={() => void createProject(id)}><span className="choice-number" aria-hidden="true">0{index + 1}</span><strong>{title}</strong><span className="muted">{description}</span><span className="choice-arrow" aria-hidden="true">→</span></button>)}</div>
+    </main></div>;
+
+  // ── Videos (projects) ─────────────────────────────────────────────────────────────────────
+  if (screen === "projects" || !projectId) {
+    const sorted = [...projects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    return <div className="app-shell" data-release={import.meta.env.VITE_RELEASE_SHA ?? "development"}>
+      <header className="topbar"><span className="brand">VideoCraft</span><div className="spacer" />{statusPill}<details className="menu"><summary className="btn">{userEmail}</summary><div className="menu-body"><button className="btn" onClick={signOut} disabled={busy}>Sign out</button></div></details></header>
+      <main className="page">
+        <div className="page-head">
+          <div><h1>Your videos</h1><p className="muted">Pick up where you left off, or start a new one.</p></div>
+          <form className="new-video" onSubmit={(event) => { event.preventDefault(); setScreen("choose"); }}>
+            <label className="sr-only" htmlFor="new-name">Name for the new video</label>
+            <input id="new-name" placeholder="Name (optional)" value={newName} maxLength={120} onChange={(event) => setNewName(event.target.value)} />
+            <button type="submit" className="primary" disabled={busy}>New video</button>
+          </form>
+        </div>
+        {!projectsLoaded && <p className="muted">Loading your videos…</p>}
+        {projectsLoaded && sorted.length === 0 && <div className="card empty"><h2>No videos yet</h2><p className="muted">Start with New video: upload a talk, interview or vlog and describe what you want.</p></div>}
+        <div className="project-grid">{sorted.map((project) => <button key={project.id} type="button" className="card project-card" onClick={() => void openProject(project)} disabled={busy}>
+          <span className="thumb" aria-hidden="true" />
+          <span className="project-meta"><strong>{project.name}</strong><span className={"tag " + (project.revision > 0 ? "ok" : "")}>{project.revision > 0 ? "Edited" : "Not edited yet"}</span><span className="muted small">Edited {new Date(project.updatedAt).toLocaleDateString(undefined, { day: "numeric", month: "short" })}</span></span>
+        </button>)}</div>
+      </main>
+    </div>;
+  }
+
+  const projectHeader = <header className="topbar">
+    <button className="btn icon" aria-label="Back to your videos" onClick={() => setScreen("projects")} disabled={busy}>‹</button>
+    <div className="title-block"><span className="project-title">{currentProject?.name ?? projectName}</span><span className="muted small">{revision > 0 ? "Saved · revision " + revision : "Not edited yet"}</span></div>
+    {stepBar}
+    {projectId && revision > 0 && <div className="edit-history" aria-label="Edit history"><button className="btn" onClick={() => void restoreEdit("undo")} disabled={busy || undoHistory.length === 0}>Undo</button><button className="btn" onClick={() => void restoreEdit("redo")} disabled={busy || redoHistory.length === 0}>Redo</button></div>}
+    {statusPill}
+    <details className="menu" onToggle={() => setDeleteConfirm("")}><summary className="btn" aria-label="Project menu">⋯</summary><div className="menu-body danger-zone">
+      <p className="small">Signed in as {userEmail}</p>
+      <button className="btn" onClick={signOut} disabled={busy}>Sign out</button>
+      <hr />
+      <p className="small muted">Delete “{currentProject?.name}”, its uploads, edits and exports for good. This cannot be undone.</p>
+      <label>Type the project name to confirm<input value={deleteConfirm} onChange={(event) => setDeleteConfirm(event.target.value)} placeholder={currentProject?.name} autoComplete="off" /></label>
+      <button className="danger" onClick={deleteProject} disabled={busy || !currentProject || deleteConfirm.trim().toLowerCase() !== currentProject.name.trim().toLowerCase()}>Delete project</button>
+    </div></details>
+  </header>;
+
+  const player = <div className="player">
+    <div className="preview-tabs" role="tablist"><button role="tab" aria-selected={previewMode === "edit"} className={previewMode === "edit" ? "on" : ""} onClick={() => setPreviewMode("edit")} disabled={videoClips.length === 0}>Edit</button><button role="tab" aria-selected={previewMode === "source"} className={previewMode === "source" ? "on" : ""} onClick={() => setPreviewMode("source")}>Original</button><button role="tab" aria-selected={previewMode === "render"} className={previewMode === "render" ? "on" : ""} onClick={() => setPreviewMode("render")}>Export</button></div>
+    {previewMode === "edit" && videoClips.length > 0 ? <LivePreview ref={liveRef} tracks={timeline.tracks} durationUs={timeline.durationUs} urls={sourceUrls} shape={(PLATFORMS[platform]?.width ?? 9) < (PLATFORMS[platform]?.height ?? 16) ? "tall" : PLATFORMS[platform]?.width === PLATFORMS[platform]?.height ? "square" : "wide"} fit={PLATFORMS[platform]?.fit ?? "cover"} output={{ width: PLATFORMS[platform]?.width ?? 1080, height: PLATFORMS[platform]?.height ?? 1920 }} captionStyle={PLATFORMS[platform]?.captionStyle ?? "bold-pop"} faces={faceTracks} sizes={assetSizes} mattes={matteUrls} stills={stillAssets} mediaErrors={sourceErrors} onRetryMedia={() => { setSourceErrors({}); setSourceUrls({}); setSourceRetry((n) => n + 1); }} onRetryMatte={() => { setMatteUrls({}); setMatteRetry((n) => n + 1); }} onTime={onLiveTime} />
+    : <div className={"preview-screen " + ((PLATFORMS[platform]?.width ?? 9) < (PLATFORMS[platform]?.height ?? 16) ? "tall" : "wide")}>{previewMode === "render" ? (renderUrl ? <video ref={exportPlayer} controls playsInline onLoadedMetadata={(event) => {
+      const player = event.currentTarget, saved = exportPosition.current;
+      if (saved.time > 0 && saved.time < player.duration) player.currentTime = saved.time;
+      if (saved.playing) void player.play().catch(() => setStatus("Tap Play to resume the refreshed export."));
+      exportPosition.current = { time: 0, playing: false };
+    }} src={renderUrl} onError={() => { setStatus("Export playback failed. Refresh the export link or download the file to try your device player."); }} /> : <span>{renderJobId ? "Exporting " + renderJobStatus : "Your exported video will play here"}</span>) : (sourceUrl ? (stillAssets[sourceAssetId] ? <img className="creation-preview" src={sourceUrl} alt="Original photo" /> : <video ref={playerRef} controls playsInline src={sourceUrl} onTimeUpdate={stopAtClipEnd} />) : <span>{sourceNote || "Preparing the preview…"}</span>)}</div>}
     {previewMode === "source" && sourceNote && sourceUrl && <p className="muted small">{sourceNote}</p>}
   </div>;
 
