@@ -1,0 +1,127 @@
+{
+  "schema": "videocraft.editorial-brief.v1",
+  "title": "The Power to Become",
+  "organization": "Emancipation Development Initiative",
+  "type": "nonprofit institutional introduction",
+  "status": "editorial-brief-only-not-ingested-or-rendered",
+  "durationSeconds": 155,
+  "format": {
+    "aspectRatio": "16:9",
+    "fps": 24,
+    "resolution": "3840x2160"
+  },
+  "narration": {
+    "language": "en-NG",
+    "delivery": "composed, documentary, warm, natural Nigerian English"
+  },
+  "style": {
+    "camera": "observational documentary; natural light; restrained tracking shots and close-ups",
+    "music": "original piano and ambient score gradually building into warm percussion and strings",
+    "editing": "clean cuts, subtle match cuts; no gratuitous effects",
+    "typography": "approved EDI brand colors and authentic logo"
+  },
+  "ethics": [
+    "Use licensed and consented authentic programme media where available",
+    "Do not label synthetic shots as archival or documentary evidence",
+    "Verify impact numbers and partner names before overlays",
+    "Do not fabricate beneficiaries, testimonials, outcomes or research findings"
+  ],
+  "scenes": [
+    {
+      "id": "scene-01",
+      "startSeconds": 0,
+      "endSeconds": 15,
+      "title": "Every possibility begins somewhere",
+      "voiceover": "Every community holds extraordinary potential. In its classrooms, its homes, its young people, and in the ambitions of those who dare to imagine a different future.",
+      "visualPrompt": "Morning Nigerian street, a learner preparing for school, a young woman opening a notebook, close-up of keyboard; restrained documentary camera.",
+      "audioDirection": "Ambient piano, soft morning sounds"
+    },
+    {
+      "id": "scene-02",
+      "startSeconds": 15,
+      "endSeconds": 30,
+      "title": "The opportunity gap",
+      "voiceover": "But talent alone does not guarantee opportunity. For too many people, the distance between what they can become and what they can achieve is shaped by barriers they did not create.",
+      "visualPrompt": "Shared classroom resources, a learner working with limited equipment, young adults searching for opportunities. Respectful portrayal without stereotypes.",
+      "audioDirection": "Reflective music with room ambience"
+    },
+    {
+      "id": "scene-03",
+      "startSeconds": 30,
+      "endSeconds": 45,
+      "title": "Introducing EDI",
+      "voiceover": "At Emancipation Development Initiative, we believe meaningful change begins when people gain the skills, confidence, connections, and opportunities to shape their own futures.",
+      "visualPrompt": "Active training workshop, group collaboration, facilitator with learners, then authentic official EDI logo.",
+      "audioDirection": "Music gathers momentum"
+    },
+    {
+      "id": "scene-04",
+      "startSeconds": 45,
+      "endSeconds": 60,
+      "title": "Inclusive Education & Digital Skills",
+      "voiceover": "We work to make learning more inclusive and practical. From digital literacy to accessible education, we help create spaces where more people can participate, develop their abilities, and pursue new possibilities.",
+      "visualPrompt": "Accessible ICT training, computers, communication access and active participation. Use authentic archive when available.",
+      "audioDirection": "Keyboard and classroom ambience"
+    },
+    {
+      "id": "scene-05",
+      "startSeconds": 60,
+      "endSeconds": 75,
+      "title": "Girls’ Education & Economic Empowerment",
+      "voiceover": "For girls and young women, we connect education with practical skills, mentorship, and pathways towards economic independence. Because opportunity should open doors, not reinforce the barriers that already exist.",
+      "visualPrompt": "Girls and young women in practical training, collaborative learning, project presentations.",
+      "audioDirection": "Optimistic, restrained music"
+    },
+    {
+      "id": "scene-06",
+      "startSeconds": 75,
+      "endSeconds": 90,
+      "title": "Youth Leadership & Mentorship",
+      "voiceover": "We nurture young changemakers through leadership development, career guidance, mentorship, and practical training. Helping them move beyond learning, to applying what they know and taking purposeful action.",
+      "visualPrompt": "Career guidance, one-to-one mentoring, youth group presenting ideas and planning practical activities.",
+      "audioDirection": "Rhythmic progression"
+    },
+    {
+      "id": "scene-07",
+      "startSeconds": 90,
+      "endSeconds": 105,
+      "title": "School & Community Development Partnerships",
+      "voiceover": "We collaborate with schools, communities, volunteers, and partners to understand local needs and develop practical responses. Not solutions imposed from outside, but progress shaped with the people it is meant to serve.",
+      "visualPrompt": "Community-led meetings, school leaders and local volunteers collaborating, classroom learning.",
+      "audioDirection": "Natural conversation and score"
+    },
+    {
+      "id": "scene-08",
+      "startSeconds": 105,
+      "endSeconds": 120,
+      "title": "Research, Learning & Accountability",
+      "voiceover": "And we are building a stronger evidence-informed approach, drawing on research into learning, behaviour, inclusion, and wellbeing to understand what works, improve our programmes, and pursue lasting outcomes.",
+      "visualPrompt": "Community listening, research notes, survey design and programme reflection. Do not fabricate laboratory projects.",
+      "audioDirection": "Thoughtful instrumental lift"
+    },
+    {
+      "id": "scene-09",
+      "startSeconds": 120,
+      "endSeconds": 140,
+      "title": "A growing legacy of action",
+      "voiceover": "Our journey has taken us from community-based skills initiatives to inclusive digital learning, girls’ livelihood development, career mentorship, and structured training. Each experience has shaped our commitment to building opportunities that endure beyond a single programme.",
+      "visualPrompt": "EDI archive-led montage showing documented educational and community work. No synthetic footage labelled as historical.",
+      "audioDirection": "Warm crescendo"
+    },
+    {
+      "id": "scene-10",
+      "startSeconds": 140,
+      "endSeconds": 155,
+      "title": "The future we build together",
+      "voiceover": "Our vision is a future where people are equipped to create meaningful change where they live. Where ability meets opportunity, and progress is built together. Emancipation Development Initiative. Developing community-rooted changemakers.",
+      "visualPrompt": "Return to earlier protagonists learning, working and collaborating, end with authentic EDI logo and official website.",
+      "audioDirection": "Music resolves"
+    }
+  ],
+  "endCard": {
+    "organization": "EMANCIPATION DEVELOPMENT INITIATIVE",
+    "tagline": "Developing community-rooted changemakers",
+    "website": "https://emancipationdevelopment.org"
+  },
+  "importNote": "This is a content/editorial data package. VideoCraft's current editor requires authenticated project setup and source media; this is not an API ingestion payload or rendered video."
+}
